@@ -34,7 +34,30 @@ def get_provider_model_ids(provider_id: str) -> set[str]:
     if provider is None:
         return set()
 
-    return {model["id"] for model in provider.available_models}
+    model_ids: set[str] = set()
+
+    for model in provider.available_models:
+        model_id = model.get("id")
+        if isinstance(model_id, str):
+            model_ids.add(model_id)
+
+    return model_ids
+
+
+def get_provider_model_limit(provider_id: str, model_id: str) -> int | None:
+    provider = _PROVIDERS.get(provider_id)
+    if provider is None:
+        return None
+
+    for model in provider.available_models:
+        if model.get("id") != model_id:
+            continue
+
+        token_limit = model.get("token_limit")
+        if isinstance(token_limit, int) and token_limit > 0:
+            return token_limit
+
+    return None
 
 
 def get_provider(provider_id: str) -> LLMProvider | None:

@@ -265,6 +265,24 @@ button:disabled {
   height: 100%;
 }
 
+.chat-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  align-items: flex-start;
+}
+
+.chat-meta .subtitle {
+  margin: 0;
+}
+
+.token-counter {
+  margin: 0;
+  font-size: 0.76rem;
+  color: #6d7b91;
+  white-space: nowrap;
+}
+
 .chat-thread {
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -419,5 +437,13 @@ button:disabled {
 
   .chat-panel {
     padding: 0.8rem;
+  }
+
+  .chat-meta {
+    flex-direction: column;
+  }
+
+  .token-counter {
+    white-space: normal;
   }
 }

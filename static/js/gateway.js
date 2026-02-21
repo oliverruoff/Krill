@@ -3,11 +3,18 @@ const chatInput = document.getElementById("chat-input");
 const sendButton = document.getElementById("send-btn");
 const chatThread = document.getElementById("chat-thread");
 const modelIndicator = document.getElementById("model-indicator");
+const tokenCounterNode = document.getElementById("token-counter");
 const statusNode = document.getElementById("status");
 
 const state = {
+  providers: [],
+  activeProviderId: "",
+  activeModelId: "",
   providerLabel: "",
   modelLabel: "",
+  modelTokenLimit: 0,
+  usedTokens: 0,
+  history: [],
 };
 
 function setStatus(message, isError = false) {
@@ -223,6 +230,21 @@ function updateModelIndicator() {
   modelIndicator.textContent = `Chatting with ${state.providerLabel} - ${state.modelLabel}`;
 }
 
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString("de-DE");
+}
+
+function updateTokenCounter(usedTokens = state.usedTokens, tokenLimit = state.modelTokenLimit) {
+  const safeUsed = Math.max(0, Number(usedTokens || 0));
+  const safeLimit = Math.max(0, Number(tokenLimit || 0));
+
+  state.usedTokens = safeUsed;
+  state.modelTokenLimit = safeLimit;
+
+  const percent = safeLimit > 0 ? ((safeUsed / safeLimit) * 100).toFixed(2) : "0.00";
+  tokenCounterNode.textContent = `${formatNumber(safeUsed)} / ${formatNumber(safeLimit)} tokens (${percent}% used)`;
+}
+
 async function loadGatewayMeta() {
   try {
     const [providersResponse, settingsResponse] = await Promise.all([
@@ -240,13 +262,20 @@ async function loadGatewayMeta() {
     const activeProvider = providers.find((provider) => provider.id === settings.active_provider_id);
     const activeConfig = settings.provider_configs?.[settings.active_provider_id];
 
+    state.providers = providers;
+    state.activeProviderId = settings.active_provider_id ?? "";
+    state.activeModelId = activeConfig?.model ?? "";
+
     state.providerLabel = activeProvider?.label ?? settings.active_provider_id ?? "";
     state.modelLabel = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.label ?? activeConfig?.model ?? "";
+    state.modelTokenLimit = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.token_limit ?? 0;
 
     updateModelIndicator();
+    updateTokenCounter(0, state.modelTokenLimit);
     setStatus("Gateway ready.");
   } catch (error) {
     updateModelIndicator();
+    updateTokenCounter(0, 0);
     setStatus(error.message, true);
   }
 }
@@ -292,6 +321,11 @@ function processSseBlock(block, assistantBubble) {
     return { done: false, hasError: false };
   }
 
+  if (eventName === "meta") {
+    updateTokenCounter(payload.used_tokens ?? 0, payload.token_limit ?? state.modelTokenLimit);
+    return { done: false, hasError: false };
+  }
+
   if (eventName === "done") {
     return { done: true, hasError: false };
   }
@@ -328,7 +362,7 @@ async function sendMessage(event) {
     const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, history: state.history }),
     });
 
     if (!response.ok || !response.body) {
@@ -366,6 +400,8 @@ async function sendMessage(event) {
         }
 
         if (result.done) {
+          state.history.push({ role: "user", content: message });
+          state.history.push({ role: "assistant", content: assistantBubble.dataset.rawText ?? "" });
           setStatus("Response complete.");
           setSendingState(false);
           return;
@@ -373,6 +409,8 @@ async function sendMessage(event) {
       }
     }
 
+    state.history.push({ role: "user", content: message });
+    state.history.push({ role: "assistant", content: assistantBubble.dataset.rawText ?? "" });
     setStatus("Response complete.");
   } catch (error) {
     if (!assistantBubble.dataset.rawText) {

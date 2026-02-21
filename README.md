@@ -93,6 +93,7 @@ Notes:
 - `POST /api/reset` -> resets all settings to defaults
 - `POST /api/braindump/import` -> imports and replaces full state from a braindump payload
 - `GET /api/braindump/download` -> downloads the full `braindump.json`
+- `POST /api/chat/stream` -> streams chat response events (`meta`, `token`, `done`, `error`)
 
 ## Provider Architecture (LLM-Agnostic)
 
@@ -112,6 +113,8 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 - Gateway now focuses on a central chat window with streamed responses
 - Top-right Settings button in gateway navigates to `/setup`
 - Gateway includes a Braindump button to download current state
+- Chat requests are continuous within the current page session (history is sent each turn)
+- Token usage is shown in the top-right of chat based on selected model token limits
 - Provider/model management remains in setup for now
 - Chat thread auto-scrolls to newest messages and renders Markdown
 - Press `Enter` to send and `Shift+Enter` for a new line

@@ -5,11 +5,21 @@ class DummyProvider(LLMProvider):
     provider_id = "dummy"
     display_name = "Dummy Provider"
     available_models = [
-        {"id": "dummy-basic", "label": "Dummy Basic"},
+        {"id": "dummy-basic", "label": "Dummy Basic", "token_limit": 1000000},
     ]
 
-    async def generate(self, prompt: str, system_prompt: str, model: str, api_key: str) -> str:
-        return f"[dummy:{model}] {prompt}"
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str,
+        model: str,
+        api_key: str,
+        history: list[dict[str, str]],
+    ) -> tuple[str, int | None]:
+        context_count = len(history)
+        text = f"[dummy:{model}] ({context_count} prior messages) {prompt}"
+        estimated_tokens = max(1, len((system_prompt + prompt).split()))
+        return text, estimated_tokens
 
     async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
         if model != "dummy-basic":

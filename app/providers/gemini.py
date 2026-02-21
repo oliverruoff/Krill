@@ -9,15 +9,22 @@ class GeminiProvider(LLMProvider):
     provider_id = "gemini"
     display_name = "Google Gemini"
     available_models = [
-        {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview"},
-        {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
-        {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
-        {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
-        {"id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
-        {"id": "gemini-1.5-flash", "label": "Gemini 1.5 Flash"},
+        {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview", "token_limit": 1000000},
+        {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview", "token_limit": 1000000},
+        {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "token_limit": 1000000},
+        {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "token_limit": 1000000},
+        {"id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash", "token_limit": 1000000},
+        {"id": "gemini-1.5-flash", "label": "Gemini 1.5 Flash", "token_limit": 1000000},
     ]
 
-    async def generate(self, prompt: str, system_prompt: str, model: str, api_key: str) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str,
+        model: str,
+        api_key: str,
+        history: list[dict[str, str]],
+    ) -> tuple[str, int | None]:
         supported_models = {item["id"] for item in self.available_models}
         if model not in supported_models:
             raise RuntimeError("Unsupported Gemini model.")
@@ -25,10 +32,8 @@ class GeminiProvider(LLMProvider):
         if not api_key.strip():
             raise RuntimeError("API key is required.")
 
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "system_instruction": {"parts": [{"text": system_prompt}]},
-        }
+        contents = _build_contents(history, prompt)
+        payload = {"contents": contents, "system_instruction": {"parts": [{"text": system_prompt}]}}
 
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
@@ -46,7 +51,8 @@ class GeminiProvider(LLMProvider):
         if not text:
             raise RuntimeError("Gemini returned an empty response.")
 
-        return text
+        used_tokens = _extract_total_tokens(response_body)
+        return text, used_tokens
 
     async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
         supported_models = {item["id"] for item in self.available_models}
@@ -136,6 +142,35 @@ def _extract_text(payload: dict[str, object]) -> str:
             chunks.append(text)
 
     return "".join(chunks).strip()
+
+
+def _extract_total_tokens(payload: dict[str, object]) -> int | None:
+    usage = payload.get("usageMetadata")
+    if not isinstance(usage, dict):
+        return None
+
+    total = usage.get("totalTokenCount")
+    if isinstance(total, int):
+        return total
+
+    return None
+
+
+def _build_contents(history: list[dict[str, str]], prompt: str) -> list[dict[str, object]]:
+    contents: list[dict[str, object]] = []
+
+    for item in history:
+        role = item.get("role")
+        content = item.get("content")
+
+        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+            continue
+
+        mapped_role = "user" if role == "user" else "model"
+        contents.append({"role": mapped_role, "parts": [{"text": content}]})
+
+    contents.append({"role": "user", "parts": [{"text": prompt}]})
+    return contents
 
 
 def _safe_read_error(exc: error.HTTPError) -> str:

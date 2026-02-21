@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
@@ -8,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import BRAINDUMP_PATH, Settings, ensure_settings_file, load_settings, save_settings
-from .providers import get_provider, get_provider_model_ids, get_provider_options, is_supported_provider
+from .providers import get_provider, get_provider_model_ids, get_provider_model_limit, get_provider_options, is_supported_provider
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,6 +22,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 class ModelOption(BaseModel):
     id: str
     label: str
+    token_limit: int
 
 
 class ProviderOption(BaseModel):
@@ -40,8 +42,14 @@ class VerifyProviderResponse(BaseModel):
     detail: str
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=5000)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=5000)
+    history: list[ChatTurn] = Field(default_factory=list)
 
 
 @app.on_event("startup")
@@ -146,14 +154,30 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     if provider is None:
         raise HTTPException(status_code=422, detail="Active provider is unavailable.")
 
+    token_limit = get_provider_model_limit(active_provider_id, provider_config.model)
+    history = [turn.model_dump() for turn in payload.history]
+
     async def event_stream():
         try:
-            text = await provider.generate(
+            text, used_tokens = await provider.generate(
                 prompt=payload.message,
                 system_prompt=settings.system_prompt,
                 model=provider_config.model,
                 api_key=provider_config.api_key,
+                history=history,
             )
+
+            if token_limit is not None:
+                used_value = used_tokens if isinstance(used_tokens, int) else 0
+                used_percent = round((used_value / token_limit) * 100, 2)
+                yield _sse(
+                    "meta",
+                    {
+                        "used_tokens": used_value,
+                        "token_limit": token_limit,
+                        "used_percent": used_percent,
+                    },
+                )
 
             for chunk in _chunk_text(text):
                 yield _sse("token", {"text": chunk})
