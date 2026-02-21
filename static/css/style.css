@@ -4,8 +4,9 @@
   --text: #122033;
   --muted: #4d5b6f;
   --border: #d8e0ea;
-  --accent: #0b66d6;
-  --accent-strong: #084ea6;
+  --accent: #9366d2;
+  --accent-strong: #9d4bc8;
+  --accent-gradient: linear-gradient(120deg, #9366d2 0%, #9d4bc8 100%);
   --error: #b42318;
   --ok: #027a48;
   --shadow: 0 12px 28px rgba(18, 32, 51, 0.08);
@@ -142,13 +143,15 @@ textarea {
   font: inherit;
   color: inherit;
   background-color: #fff;
+  transition: border-color 0.24s ease, outline-color 0.24s ease, box-shadow 0.24s ease;
 }
 
 input:focus,
 select:focus,
 textarea:focus {
-  outline: 2px solid color-mix(in srgb, var(--accent), transparent 70%);
-  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent-strong), transparent 70%);
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent), transparent 82%);
 }
 
 .actions {
@@ -181,12 +184,15 @@ button {
   font: inherit;
   font-weight: 600;
   color: #fff;
-  background: var(--accent);
+  background: var(--accent-gradient);
+  background-size: 180% 180%;
+  background-position: 0% 50%;
+  transition: background-position 0.28s ease, transform 0.12s ease;
   cursor: pointer;
 }
 
 button:hover {
-  background: var(--accent-strong);
+  background-position: 100% 50%;
 }
 
 button:disabled {
@@ -204,11 +210,14 @@ button:disabled {
   text-decoration: none;
   text-align: center;
   color: #fff;
-  background: var(--accent);
+  background: var(--accent-gradient);
+  background-size: 180% 180%;
+  background-position: 0% 50%;
+  transition: background-position 0.28s ease;
 }
 
 .button-link:hover {
-  background: var(--accent-strong);
+  background-position: 100% 50%;
 }
 
 .danger {
@@ -237,6 +246,11 @@ button:disabled {
 
 .provider-api-help a {
   color: var(--accent-strong);
+  transition: color 0.24s ease;
+}
+
+.provider-api-help a:hover {
+  color: var(--accent);
 }
 
 .provider-item {
@@ -280,7 +294,7 @@ button:disabled {
 
 .dropzone-active {
   border-color: var(--accent);
-  background: #edf4ff;
+  background: color-mix(in srgb, var(--accent) 16%, #ffffff 84%);
 }
 
 .dropzone.disabled {
@@ -426,7 +440,7 @@ button:disabled {
 }
 
 .menu-item:hover {
-  background: #edf3fc;
+  background: color-mix(in srgb, var(--accent) 14%, #ffffff 86%);
 }
 
 .chat-panel {
@@ -606,8 +620,8 @@ button:disabled {
 }
 
 .chat-message.user .chat-bubble {
-  border-color: #bdd4f5;
-  background: #e9f2ff;
+  border-color: color-mix(in srgb, var(--accent) 40%, #ffffff 60%);
+  background: color-mix(in srgb, var(--accent) 15%, #ffffff 85%);
 }
 
 .chat-composer {

@@ -75,6 +75,16 @@ async def read_banner() -> FileResponse:
     return FileResponse(BASE_DIR / "krill_banner.png")
 
 
+@app.get("/krill_icon.png", response_class=FileResponse)
+async def read_icon() -> FileResponse:
+    return FileResponse(BASE_DIR / "krill_icon.png")
+
+
+@app.get("/favicon.ico", response_class=FileResponse)
+async def read_favicon() -> FileResponse:
+    return FileResponse(BASE_DIR / "krill_icon.png")
+
+
 @app.get("/gateway")
 async def read_gateway():
     settings = await load_settings()
