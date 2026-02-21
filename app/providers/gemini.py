@@ -23,9 +23,9 @@ class GeminiProvider(LLMProvider):
         api_key: str,
         history: list[dict[str, str]],
     ) -> tuple[str, int | None]:
-        supported_models = {item["id"] for item in self.available_models}
-        if model not in supported_models:
-            raise RuntimeError("Unsupported Gemini model.")
+        model_id = model.strip()
+        if not model_id:
+            raise RuntimeError("Model is required.")
 
         if not api_key.strip():
             raise RuntimeError("API key is required.")
@@ -33,7 +33,7 @@ class GeminiProvider(LLMProvider):
         contents = _build_contents(history, prompt)
         payload = {"contents": contents, "system_instruction": {"parts": [{"text": system_prompt}]}}
 
-        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
 
         try:
             response_body = await asyncio.to_thread(_post_json_return_body, endpoint, payload)
@@ -53,9 +53,9 @@ class GeminiProvider(LLMProvider):
         return text, used_tokens
 
     async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
-        supported_models = {item["id"] for item in self.available_models}
-        if model not in supported_models:
-            return False, "Unsupported Gemini model."
+        model_id = model.strip()
+        if not model_id:
+            return False, "Model is required."
 
         if not api_key.strip():
             return False, "API key is required."
@@ -65,7 +65,7 @@ class GeminiProvider(LLMProvider):
             "generationConfig": {"maxOutputTokens": 1},
         }
 
-        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
 
         try:
             status_code = await asyncio.to_thread(_post_json_status, endpoint, payload)

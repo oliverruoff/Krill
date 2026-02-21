@@ -13,6 +13,8 @@ const fields = {
   systemPromptCount: document.getElementById("system_prompt_count"),
   providerSelect: document.getElementById("provider_select"),
   modelSelect: document.getElementById("model_select"),
+  modelOptions: document.getElementById("model_options"),
+  modelTokenLimit: document.getElementById("model_token_limit"),
   providerApiHelp: document.getElementById("provider-api-help"),
   providerApiLink: document.getElementById("provider-api-link"),
   providerApiKey: document.getElementById("provider_api_key"),
@@ -91,23 +93,47 @@ function renderProviderOptions() {
     return;
   }
 
+  fields.modelSelect.value = "";
+  fields.modelTokenLimit.value = "0";
   renderProviderApiHelp("");
 }
 
 function renderModelOptions(providerId) {
-  fields.modelSelect.innerHTML = "";
+  fields.modelOptions.innerHTML = "";
   const provider = getProviderById(providerId);
 
   if (!provider) {
+    fields.modelSelect.value = "";
+    fields.modelTokenLimit.value = "0";
     return;
   }
+
+  const existingConfig = state.providerConfigs[providerId];
+  const existingModel = typeof existingConfig?.model === "string" ? existingConfig.model : "";
+  const existingTokenLimit = Number(existingConfig?.token_limit ?? 0);
 
   provider.models.forEach((model) => {
     const option = document.createElement("option");
     option.value = model.id;
-    option.textContent = model.label;
-    fields.modelSelect.appendChild(option);
+    option.label = model.label;
+    fields.modelOptions.appendChild(option);
   });
+
+  if (existingModel) {
+    fields.modelSelect.value = existingModel;
+  } else if (provider.models.length > 0) {
+    fields.modelSelect.value = provider.models[0].id;
+  } else {
+    fields.modelSelect.value = "";
+  }
+
+  if (existingTokenLimit > 0) {
+    fields.modelTokenLimit.value = String(existingTokenLimit);
+  } else {
+    const selectedModel = provider.models.find((model) => model.id === fields.modelSelect.value);
+    const defaultTokenLimit = Number(selectedModel?.token_limit ?? 0);
+    fields.modelTokenLimit.value = String(Math.max(0, defaultTokenLimit));
+  }
 }
 
 function renderProviderApiHelp(providerId) {
@@ -139,8 +165,11 @@ function renderConfiguredProviders() {
     const item = document.createElement("div");
     item.className = "provider-item";
 
-    const modelLabel = provider?.models.find((model) => model.id === state.providerConfigs[providerId].model)?.label;
-    item.textContent = `${provider?.label ?? providerId} - ${modelLabel ?? state.providerConfigs[providerId].model}`;
+    const providerConfig = state.providerConfigs[providerId] ?? {};
+    const modelLabel = provider?.models.find((model) => model.id === providerConfig.model)?.label;
+    const tokenLimit = Number(providerConfig.token_limit ?? 0);
+    const tokenLabel = tokenLimit > 0 ? `${tokenLimit.toLocaleString("en-US")} tokens` : "No limit set";
+    item.textContent = `${provider?.label ?? providerId} - ${modelLabel ?? providerConfig.model} (${tokenLabel})`;
 
     const removeButton = document.createElement("button");
     removeButton.type = "button";
@@ -181,11 +210,17 @@ function renderActiveProviderOptions() {
 
 async function addOrUpdateProvider() {
   const providerId = fields.providerSelect.value;
-  const modelId = fields.modelSelect.value;
+  const modelId = fields.modelSelect.value.trim();
   const apiKey = fields.providerApiKey.value;
+  const tokenLimit = Number.parseInt(fields.modelTokenLimit.value, 10);
 
   if (!providerId || !modelId) {
     setStatus("Please choose a provider and model.", true);
+    return;
+  }
+
+  if (Number.isNaN(tokenLimit) || tokenLimit < 0) {
+    setStatus("Token limit must be 0 or greater.", true);
     return;
   }
 
@@ -198,6 +233,7 @@ async function addOrUpdateProvider() {
     state.providerConfigs[providerId] = {
       api_key: apiKey,
       model: modelId,
+      token_limit: tokenLimit,
     };
 
     if (!state.activeProviderId) {
@@ -233,6 +269,7 @@ function normalizeProviderConfigs(providerConfigs) {
     normalized[providerId] = {
       api_key: String(config.api_key ?? ""),
       model: String(config.model ?? ""),
+      token_limit: Math.max(0, Number.parseInt(String(config.token_limit ?? 0), 10) || 0),
     };
   });
 
@@ -260,7 +297,7 @@ function buildPayload() {
     system_prompt: fields.systemPrompt.value,
     setup_completed: true,
     active_provider_id: fields.activeProviderSelect.value,
-    provider_configs: state.providerConfigs,
+    provider_configs: normalizeProviderConfigs(state.providerConfigs),
   };
 }
 
@@ -451,6 +488,14 @@ function handleEscapeToGateway(event) {
 fields.providerSelect.addEventListener("change", () => {
   renderModelOptions(fields.providerSelect.value);
   renderProviderApiHelp(fields.providerSelect.value);
+});
+
+fields.modelSelect.addEventListener("input", () => {
+  const provider = getProviderById(fields.providerSelect.value);
+  const selectedModel = provider?.models?.find((model) => model.id === fields.modelSelect.value.trim());
+  if (selectedModel?.token_limit) {
+    fields.modelTokenLimit.value = String(selectedModel.token_limit);
+  }
 });
 
 fields.systemPrompt.addEventListener("input", updateSystemPromptCounter);

@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import BRAINDUMP_PATH, Settings, ensure_settings_file, load_settings, save_settings
-from .providers import get_provider, get_provider_model_ids, get_provider_model_limit, get_provider_options, is_supported_provider
+from .providers import get_provider, get_provider_model_limit, get_provider_options, is_supported_provider
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -119,9 +119,8 @@ async def verify_provider(payload: VerifyProviderRequest) -> VerifyProviderRespo
     if not is_supported_provider(payload.provider_id):
         raise HTTPException(status_code=422, detail="Unsupported LLM provider.")
 
-    model_ids = get_provider_model_ids(payload.provider_id)
-    if payload.model not in model_ids:
-        raise HTTPException(status_code=422, detail="Unsupported model for provider.")
+    if not payload.model.strip():
+        raise HTTPException(status_code=422, detail="Model is required.")
 
     provider = get_provider(payload.provider_id)
     if provider is None:
@@ -157,6 +156,8 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
         raise HTTPException(status_code=422, detail="Active provider is unavailable.")
 
     token_limit = get_provider_model_limit(active_provider_id, provider_config.model)
+    if token_limit is None and provider_config.token_limit > 0:
+        token_limit = provider_config.token_limit
     history = [turn.model_dump() for turn in payload.history]
 
     async def event_stream():
@@ -200,12 +201,8 @@ def _validate_provider_configs(settings: Settings) -> None:
         if not is_supported_provider(provider_id):
             raise HTTPException(status_code=422, detail=f"Unsupported LLM provider: {provider_id}")
 
-        model_ids = get_provider_model_ids(provider_id)
-        if provider_config.model and provider_config.model not in model_ids:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unsupported model '{provider_config.model}' for provider '{provider_id}'.",
-            )
+        if not provider_config.model.strip():
+            raise HTTPException(status_code=422, detail=f"Model is required for provider '{provider_id}'.")
 
 
 def _validate_settings_payload(settings: Settings) -> None:
@@ -229,10 +226,10 @@ def _can_complete_setup(settings: Settings) -> bool:
     if not active_config.api_key.strip():
         return False
 
-    if not active_config.model:
+    if not active_config.model.strip():
         return False
 
-    return active_config.model in get_provider_model_ids(settings.active_provider_id)
+    return True
 
 
 def _is_setup_complete(settings: Settings) -> bool:

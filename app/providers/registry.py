@@ -1,11 +1,13 @@
 from .base import LLMProvider
 from .gemini import GeminiProvider
 from .openai import OpenAIProvider
+from .openrouter import OpenRouterProvider
 
 
 _PROVIDERS: dict[str, LLMProvider] = {
     "gemini": GeminiProvider(),
     "openai": OpenAIProvider(),
+    "openrouter": OpenRouterProvider(),
 }
 
 

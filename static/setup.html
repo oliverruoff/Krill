@@ -51,7 +51,11 @@
           <select id="provider_select"></select>
 
           <label for="model_select">Model</label>
-          <select id="model_select"></select>
+          <input id="model_select" list="model_options" placeholder="Choose or enter a model" />
+          <datalist id="model_options"></datalist>
+
+          <label for="model_token_limit">Model token limit</label>
+          <input id="model_token_limit" type="number" min="0" step="1" value="0" />
 
           <p id="provider-api-help" class="provider-api-help hidden">
             Need an API key?

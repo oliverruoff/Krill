@@ -23,15 +23,15 @@ class OpenAIProvider(LLMProvider):
         api_key: str,
         history: list[dict[str, str]],
     ) -> tuple[str, int | None]:
-        supported_models = {item["id"] for item in self.available_models}
-        if model not in supported_models:
-            raise RuntimeError("Unsupported OpenAI model.")
+        model_id = model.strip()
+        if not model_id:
+            raise RuntimeError("Model is required.")
 
         if not api_key.strip():
             raise RuntimeError("API key is required.")
 
         payload = {
-            "model": model,
+            "model": model_id,
             "input": _build_input(history, prompt, system_prompt),
         }
 
@@ -53,15 +53,15 @@ class OpenAIProvider(LLMProvider):
         return text, used_tokens
 
     async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
-        supported_models = {item["id"] for item in self.available_models}
-        if model not in supported_models:
-            return False, "Unsupported OpenAI model."
+        model_id = model.strip()
+        if not model_id:
+            return False, "Model is required."
 
         if not api_key.strip():
             return False, "API key is required."
 
         payload = {
-            "model": model,
+            "model": model_id,
             "input": [{"role": "user", "content": "Health check."}],
             "max_output_tokens": 16,
         }

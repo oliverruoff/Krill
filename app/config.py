@@ -15,6 +15,7 @@ DATA_DIR = BRAINDUMP_PATH.parent
 class ProviderConfig(BaseModel):
     api_key: str = ""
     model: str = ""
+    token_limit: int = Field(default=0, ge=0)
 
 
 class Settings(BaseModel):

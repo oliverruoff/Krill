@@ -293,7 +293,7 @@ async function loadGatewayMeta() {
 
     state.providerLabel = activeProvider?.label ?? settings.active_provider_id ?? "";
     state.modelLabel = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.label ?? activeConfig?.model ?? "";
-    state.modelTokenLimit = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.token_limit ?? 0;
+    state.modelTokenLimit = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.token_limit ?? activeConfig?.token_limit ?? 0;
 
     updateMetaIndicators();
     updateAssistantHeader(settings);
@@ -356,7 +356,15 @@ function processSseBlock(block, assistantBubble) {
   }
 
   if (eventName === "meta") {
-    updateTokenCounter(payload.used_tokens ?? 0, payload.token_limit ?? state.modelTokenLimit);
+    const requestUsedTokens = Number(payload.used_tokens ?? 0);
+    const hasCountedRequest = assistantBubble.dataset.tokensCounted === "1";
+
+    if (!hasCountedRequest && Number.isFinite(requestUsedTokens) && requestUsedTokens > 0) {
+      state.usedTokens += requestUsedTokens;
+      assistantBubble.dataset.tokensCounted = "1";
+    }
+
+    updateTokenCounter(state.usedTokens, payload.token_limit ?? state.modelTokenLimit);
     return { done: false, hasError: false };
   }
 
@@ -390,6 +398,7 @@ async function sendMessage(event) {
   addMessage("user", message);
   const assistantBubble = addMessage("assistant", "");
   assistantBubble.dataset.rawText = "";
+  assistantBubble.dataset.tokensCounted = "0";
   chatInput.value = "";
 
   try {
