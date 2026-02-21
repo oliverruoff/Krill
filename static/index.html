@@ -13,22 +13,39 @@
         <p class="subtitle">Configure your bot settings.</p>
 
         <form id="settings-form" novalidate>
-          <label for="bot_name">Bot Name</label>
-          <input id="bot_name" name="bot_name" type="text" maxlength="15" required />
+          <div id="step-1" class="step">
+            <h2>Step 1: Base Settings</h2>
 
-          <label for="system_prompt">System Prompt</label>
-          <textarea
-            id="system_prompt"
-            name="system_prompt"
-            maxlength="100"
-            rows="3"
-            required
-          ></textarea>
+            <label for="bot_name">Bot Name</label>
+            <input id="bot_name" name="bot_name" type="text" maxlength="15" required />
 
-          <label for="api_key">API Key</label>
-          <input id="api_key" name="api_key" type="text" />
+            <label for="system_prompt">System Prompt</label>
+            <textarea
+              id="system_prompt"
+              name="system_prompt"
+              maxlength="100"
+              rows="3"
+              required
+            ></textarea>
 
-          <button type="submit" id="save-btn">Save</button>
+            <button type="button" id="next-btn">Next</button>
+          </div>
+
+          <div id="step-2" class="step hidden">
+            <h2>Step 2: Provider Setup</h2>
+
+            <label for="llm_provider">LLM Provider</label>
+            <select id="llm_provider" name="llm_provider" required></select>
+
+            <label for="api_key">API Key</label>
+            <input id="api_key" name="api_key" type="text" />
+
+            <div class="actions">
+              <button type="button" id="back-btn" class="secondary">Back</button>
+              <button type="submit" id="save-btn">Save</button>
+            </div>
+          </div>
+
           <p id="status" role="status" aria-live="polite"></p>
         </form>
       </section>

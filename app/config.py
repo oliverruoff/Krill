@@ -12,6 +12,7 @@ BRAINDUMP_PATH = DATA_DIR / "braindump.json"
 class Settings(BaseModel):
     bot_name: str = Field(default="MyBot", max_length=15)
     system_prompt: str = Field(default="You are a helpful assistant.", max_length=100)
+    llm_provider: str = Field(default="dummy")
     api_key: str = ""
 
 

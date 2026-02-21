@@ -54,12 +54,27 @@ form {
   gap: 0.6rem;
 }
 
+.step {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.hidden {
+  display: none;
+}
+
+h2 {
+  margin: 0.1rem 0 0.4rem;
+  font-size: 1.05rem;
+}
+
 label {
   font-size: 0.9rem;
   font-weight: 600;
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid var(--border);
@@ -71,9 +86,28 @@ textarea {
 }
 
 input:focus,
+select:focus,
 textarea:focus {
   outline: 2px solid color-mix(in srgb, var(--accent), transparent 70%);
   border-color: var(--accent);
+}
+
+.actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.actions button {
+  flex: 1;
+}
+
+.secondary {
+  color: var(--text);
+  background: #e7edf5;
+}
+
+.secondary:hover {
+  background: #dce5f0;
 }
 
 button {
