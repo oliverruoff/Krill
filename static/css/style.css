@@ -1,0 +1,113 @@
+:root {
+  --bg: #f6f8fb;
+  --surface: #ffffff;
+  --text: #122033;
+  --muted: #4d5b6f;
+  --border: #d8e0ea;
+  --accent: #0b66d6;
+  --accent-strong: #084ea6;
+  --error: #b42318;
+  --ok: #027a48;
+  --shadow: 0 12px 28px rgba(18, 32, 51, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--text);
+  background: linear-gradient(150deg, #edf3fb 0%, #f8fafd 100%);
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.card {
+  width: min(100%, 680px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.25rem;
+  box-shadow: var(--shadow);
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.subtitle {
+  margin: 0.35rem 0 1.1rem;
+  color: var(--muted);
+}
+
+form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.62rem 0.7rem;
+  font: inherit;
+  color: inherit;
+  background-color: #fff;
+}
+
+input:focus,
+textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent), transparent 70%);
+  border-color: var(--accent);
+}
+
+button {
+  margin-top: 0.4rem;
+  border: 0;
+  border-radius: 10px;
+  padding: 0.72rem 0.95rem;
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-strong);
+}
+
+#status {
+  min-height: 1.2rem;
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+}
+
+#status.ok {
+  color: var(--ok);
+}
+
+#status.error {
+  color: var(--error);
+}
+
+@media (max-width: 640px) {
+  .card {
+    padding: 1rem;
+  }
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Krill Settings</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="card">
+        <h1>Krill</h1>
+        <p class="subtitle">Configure your bot settings.</p>
+
+        <form id="settings-form" novalidate>
+          <label for="bot_name">Bot Name</label>
+          <input id="bot_name" name="bot_name" type="text" maxlength="15" required />
+
+          <label for="system_prompt">System Prompt</label>
+          <textarea
+            id="system_prompt"
+            name="system_prompt"
+            maxlength="100"
+            rows="3"
+            required
+          ></textarea>
+
+          <label for="api_key">API Key</label>
+          <input id="api_key" name="api_key" type="text" />
+
+          <button type="submit" id="save-btn">Save</button>
+          <p id="status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+    </main>
+
+    <script src="/static/js/main.js"></script>
+  </body>
+  </html>
