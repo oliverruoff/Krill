@@ -10,15 +10,21 @@
     <main class="gateway-shell">
       <header class="gateway-topbar">
         <img src="/krill_banner.png" alt="Krill" class="gateway-banner" />
-        <div class="topbar-actions">
-          <a href="/api/braindump/download" class="button-link secondary" download="braindump.json">Braindump</a>
-          <a href="/setup" class="button-link secondary">Settings</a>
+        <div class="menu-wrap">
+          <button type="button" id="menu-btn" class="icon-btn" aria-expanded="false" aria-controls="menu-popover" aria-label="Open menu">&#9881;</button>
+          <div id="menu-popover" class="menu-popover hidden" role="menu">
+            <a href="/api/braindump/download" class="menu-item" download="braindump.json" role="menuitem">Braindump</a>
+            <a href="/setup" class="menu-item" role="menuitem">Settings</a>
+          </div>
         </div>
       </header>
 
       <section class="chat-panel">
         <div class="chat-meta">
-          <p id="model-indicator" class="subtitle">Loading active provider...</p>
+          <div class="provider-meta">
+            <p class="meta-row"><strong>Provider</strong> <span id="provider-indicator">Loading...</span></p>
+            <p class="meta-row"><strong>Model</strong> <span id="model-indicator">Loading...</span></p>
+          </div>
           <p id="token-counter" class="token-counter">0 / 0 tokens (0.00% used)</p>
         </div>
 

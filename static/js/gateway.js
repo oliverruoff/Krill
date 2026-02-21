@@ -2,9 +2,12 @@ const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const sendButton = document.getElementById("send-btn");
 const chatThread = document.getElementById("chat-thread");
+const providerIndicator = document.getElementById("provider-indicator");
 const modelIndicator = document.getElementById("model-indicator");
 const tokenCounterNode = document.getElementById("token-counter");
 const statusNode = document.getElementById("status");
+const menuButton = document.getElementById("menu-btn");
+const menuPopover = document.getElementById("menu-popover");
 
 const state = {
   providers: [],
@@ -221,13 +224,9 @@ function renderMarkdown(rawText) {
   return html.join("");
 }
 
-function updateModelIndicator() {
-  if (!state.providerLabel || !state.modelLabel) {
-    modelIndicator.textContent = "No active provider/model configured.";
-    return;
-  }
-
-  modelIndicator.textContent = `Chatting with ${state.providerLabel} - ${state.modelLabel}`;
+function updateMetaIndicators() {
+  providerIndicator.textContent = state.providerLabel || "Not configured";
+  modelIndicator.textContent = state.modelLabel || "Not configured";
 }
 
 function formatNumber(value) {
@@ -270,14 +269,20 @@ async function loadGatewayMeta() {
     state.modelLabel = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.label ?? activeConfig?.model ?? "";
     state.modelTokenLimit = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.token_limit ?? 0;
 
-    updateModelIndicator();
+    updateMetaIndicators();
     updateTokenCounter(0, state.modelTokenLimit);
     setStatus("Gateway ready.");
   } catch (error) {
-    updateModelIndicator();
+    updateMetaIndicators();
     updateTokenCounter(0, 0);
     setStatus(error.message, true);
   }
+}
+
+function toggleMenu(forceOpen) {
+  const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : menuPopover.classList.contains("hidden");
+  menuPopover.classList.toggle("hidden", !shouldOpen);
+  menuButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
 }
 
 function setSendingState(isSending) {
@@ -432,6 +437,27 @@ chatInput.addEventListener("keydown", (event) => {
       chatForm.requestSubmit();
     }
   }
+});
+
+menuButton.addEventListener("click", () => {
+  toggleMenu();
+});
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    return;
+  }
+
+  if (menuPopover.contains(target) || menuButton.contains(target)) {
+    return;
+  }
+
+  toggleMenu(false);
+});
+
+menuPopover.addEventListener("click", () => {
+  toggleMenu(false);
 });
 
 chatForm.addEventListener("submit", sendMessage);
