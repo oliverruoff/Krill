@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .config import Settings, ensure_settings_file, load_settings, save_settings
+from .config import BRAINDUMP_PATH, Settings, ensure_settings_file, load_settings, save_settings
 from .providers import get_provider, get_provider_model_ids, get_provider_options, is_supported_provider
 
 
@@ -74,6 +74,12 @@ async def read_gateway():
         return RedirectResponse(url="/setup", status_code=307)
 
     return FileResponse(STATIC_DIR / "gateway.html")
+
+
+@app.get("/api/braindump/download", response_class=FileResponse)
+async def download_braindump() -> FileResponse:
+    await ensure_settings_file()
+    return FileResponse(BRAINDUMP_PATH, media_type="application/json", filename="braindump.json")
 
 
 @app.get("/api/settings", response_model=Settings)

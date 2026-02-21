@@ -270,6 +270,15 @@ async function loadPage() {
 }
 
 async function startFromScratch() {
+  const confirmed = window.confirm(
+    "Start from scratch? This will immediately replace your current braindump state."
+  );
+
+  if (!confirmed) {
+    setStatus("Start from scratch cancelled.");
+    return;
+  }
+
   setImportingState(true);
   setStatus("Resetting state...");
 

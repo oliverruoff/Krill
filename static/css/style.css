@@ -236,6 +236,15 @@ button:disabled {
   box-shadow: var(--shadow);
 }
 
+.topbar-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.topbar-actions .button-link {
+  margin-top: 0;
+}
+
 .gateway-banner {
   height: 42px;
   width: auto;

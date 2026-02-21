@@ -92,6 +92,7 @@ Notes:
 - `POST /api/settings` -> validates and saves settings
 - `POST /api/reset` -> resets all settings to defaults
 - `POST /api/braindump/import` -> imports and replaces full state from a braindump payload
+- `GET /api/braindump/download` -> downloads the full `braindump.json`
 
 ## Provider Architecture (LLM-Agnostic)
 
@@ -110,6 +111,7 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 - Gateway becomes the default home page after setup completion
 - Gateway now focuses on a central chat window with streamed responses
 - Top-right Settings button in gateway navigates to `/setup`
+- Gateway includes a Braindump button to download current state
 - Provider/model management remains in setup for now
 - Chat thread auto-scrolls to newest messages and renders Markdown
 - Press `Enter` to send and `Shift+Enter` for a new line
