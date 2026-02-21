@@ -17,7 +17,7 @@ Right now, I am in my first MVP stage. I focus on one job: managing bot settings
 
 As Krill grows, the plan is to expand into a full chatbot gateway while keeping the architecture clean and modular:
 
-- Add real provider integrations (OpenAI, Gemini, others)
+- Expand provider integrations and model support
 - Add conversation handling and history in the same state model
 - Add backup/restore workflow around `braindump.json`
 - Add MCP-based tool capabilities
@@ -100,7 +100,7 @@ Notes:
 Krill now includes a simple provider structure designed for easy extension:
 
 - `app/providers/base.py` -> unified provider interface
-- `app/providers/dummy.py` -> first provider implementation
+- `app/providers/openai.py` -> OpenAI provider metadata + live API integration
 - `app/providers/gemini.py` -> Gemini provider metadata + model list
 - `app/providers/registry.py` -> list of currently available providers
 
@@ -124,4 +124,4 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 
 ## Project Status
 
-Krill is intentionally small right now: no MCP tools yet. Docker deployment is now available, and a provider registry is in place with `dummy` and `gemini` providers so future integrations stay clean and modular.
+Krill is intentionally small right now: no MCP tools yet. Docker deployment is now available, and a provider registry is in place with `openai` and `gemini` providers so future integrations stay clean and modular.

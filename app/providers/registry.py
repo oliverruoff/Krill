@@ -1,11 +1,11 @@
 from .base import LLMProvider
-from .dummy import DummyProvider
 from .gemini import GeminiProvider
+from .openai import OpenAIProvider
 
 
 _PROVIDERS: dict[str, LLMProvider] = {
-    "dummy": DummyProvider(),
     "gemini": GeminiProvider(),
+    "openai": OpenAIProvider(),
 }
 
 
