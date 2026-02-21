@@ -10,7 +10,7 @@ class OpenRouterProvider(LLMProvider):
     display_name = "OpenRouter"
     api_key_url = "https://openrouter.ai/keys"
     available_models = [
-        {"id": "free", "label": "Free", "token_limit": 16000},
+        {"id": "free", "label": "Free", "token_limit": 200000},
     ]
 
     async def generate(

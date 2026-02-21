@@ -15,7 +15,6 @@ DATA_DIR = BRAINDUMP_PATH.parent
 class ProviderConfig(BaseModel):
     api_key: str = ""
     model: str = ""
-    token_limit: int = Field(default=0, ge=0)
 
 
 class Settings(BaseModel):
@@ -23,6 +22,7 @@ class Settings(BaseModel):
     system_prompt: str = Field(default="Talk english. Be playful, friendly and use emojis! :).", max_length=200)
     setup_completed: bool = False
     active_provider_id: str = ""
+    active_model_id: str = ""
     provider_configs: dict[str, ProviderConfig] = Field(default_factory=dict)
 
 
@@ -57,9 +57,10 @@ async def load_settings() -> Settings:
 
 async def save_settings(settings: Settings) -> Settings:
     await asyncio.to_thread(DATA_DIR.mkdir, parents=True, exist_ok=True)
-    payload = settings.model_dump_json(indent=2)
+    normalized = _sync_active_selection(settings)
+    payload = normalized.model_dump_json(indent=2)
     await _write_text(BRAINDUMP_PATH, payload)
-    return settings
+    return normalized
 
 
 def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]:
@@ -89,10 +90,54 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
 
     data["active_provider_id"] = active_provider_id
 
+    active_model_id = data.get("active_model_id")
+    if not isinstance(active_model_id, str):
+        active_model_id = ""
+    data["active_model_id"] = active_model_id
+
     setup_completed = data.get("setup_completed")
     if not isinstance(setup_completed, bool):
         setup_completed = bool(provider_configs)
 
     data["setup_completed"] = setup_completed
 
+    normalized_provider_configs: dict[str, dict[str, object]] = {}
+    for provider_id, raw_provider_config in provider_configs.items():
+        if not isinstance(provider_id, str) or not isinstance(raw_provider_config, dict):
+            continue
+
+        model = raw_provider_config.get("model")
+        model_id = model.strip() if isinstance(model, str) else ""
+
+        normalized_provider_configs[provider_id] = {
+            "api_key": raw_provider_config.get("api_key", "") if isinstance(raw_provider_config.get("api_key"), str) else "",
+            "model": model_id,
+        }
+
+    data["provider_configs"] = normalized_provider_configs
+
     return data
+
+
+def _sync_active_selection(settings: Settings) -> Settings:
+    provider_configs = settings.provider_configs
+    active_provider_id = settings.active_provider_id
+
+    if active_provider_id and active_provider_id not in provider_configs:
+        active_provider_id = ""
+
+    if not active_provider_id and provider_configs:
+        active_provider_id = next(iter(provider_configs.keys()))
+
+    active_model_id = ""
+    if active_provider_id:
+        active_config = provider_configs.get(active_provider_id)
+        if active_config is not None:
+            active_model_id = active_config.model.strip()
+
+    return settings.model_copy(
+        update={
+            "active_provider_id": active_provider_id,
+            "active_model_id": active_model_id,
+        }
+    )

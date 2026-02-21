@@ -511,6 +511,20 @@ button:disabled {
   white-space: nowrap;
 }
 
+.token-tools {
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+}
+
+.compact-btn {
+  margin: 0;
+  padding: 0.26rem 0.52rem;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
 .chat-thread {
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -655,6 +669,13 @@ button:disabled {
   gap: 0.28rem;
 }
 
+.compaction-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  font-size: 0.92rem;
+}
+
 .typing-dots span {
   width: 0.42rem;
   height: 0.42rem;
@@ -739,5 +760,9 @@ button:disabled {
 
   .token-counter {
     white-space: normal;
+  }
+
+  .token-tools {
+    justify-items: start;
   }
 }

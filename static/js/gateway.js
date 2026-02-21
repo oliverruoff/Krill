@@ -12,7 +12,8 @@ const assistantTitleNode = document.getElementById("assistant-title");
 const assistantMetaNode = document.getElementById("assistant-meta");
 const headerProviderSelect = document.getElementById("header-provider-select");
 const headerModelSelect = document.getElementById("header-model-select");
-const toastNode = document.getElementById("toast");
+const compactButton = document.getElementById("compact-btn");
+let toastNode = document.getElementById("toast");
 
 const state = {
   providers: [],
@@ -31,6 +32,7 @@ const state = {
   isSwitching: false,
   suppressSwitcherEvents: false,
   toastTimerId: null,
+  compactionBubble: null,
 };
 
 function setStatus(message, isError = false) {
@@ -39,6 +41,16 @@ function setStatus(message, isError = false) {
 }
 
 function showToast(message) {
+  if (!(toastNode instanceof HTMLElement)) {
+    const fallbackToast = document.createElement("div");
+    fallbackToast.id = "toast";
+    fallbackToast.className = "toast hidden";
+    fallbackToast.setAttribute("role", "status");
+    fallbackToast.setAttribute("aria-live", "polite");
+    document.body.appendChild(fallbackToast);
+    toastNode = fallbackToast;
+  }
+
   if (state.toastTimerId) {
     window.clearTimeout(state.toastTimerId);
   }
@@ -95,6 +107,31 @@ function setAssistantLoading(bubble, isLoading) {
   }
 
   bubble.classList.remove("is-loading");
+}
+
+function showCompactionProgressBubble() {
+  if (state.compactionBubble instanceof HTMLElement) {
+    return;
+  }
+
+  const bubble = addMessage("assistant", "");
+  bubble.classList.add("is-loading");
+  bubble.innerHTML =
+    '<span class="compaction-loading">Chat compaction ongoing <span class="typing-dots" aria-label="Chat compaction ongoing"><span></span><span></span><span></span></span></span>';
+  state.compactionBubble = bubble;
+}
+
+function clearCompactionProgressBubble() {
+  if (!(state.compactionBubble instanceof HTMLElement)) {
+    return;
+  }
+
+  const wrapper = state.compactionBubble.parentElement;
+  if (wrapper instanceof HTMLElement) {
+    wrapper.remove();
+  }
+
+  state.compactionBubble = null;
 }
 
 function escapeHtml(value) {
@@ -313,11 +350,6 @@ function getConfiguredProviderIds() {
 }
 
 function getModelTokenLimit(providerId, modelId) {
-  const configuredLimit = state.settings?.provider_configs?.[providerId]?.token_limit;
-  if (Number.isFinite(Number(configuredLimit))) {
-    return Math.max(0, Number(configuredLimit));
-  }
-
   const provider = getProviderById(providerId);
   const model = provider?.models?.find((entry) => entry.id === modelId);
   if (model?.token_limit) {
@@ -346,16 +378,15 @@ function syncUsedTokensToContext() {
 
 function renderCompactedChatView() {
   chatThread.innerHTML = "";
-
-  if (state.memoryBlock.trim()) {
-    addMessage("assistant", `**Auto-compacted memory**\n\n${state.memoryBlock.trim()}`);
-  }
-
   state.history.forEach((turn) => {
     if (turn?.role === "user" || turn?.role === "assistant") {
       addMessage(turn.role, String(turn.content ?? ""));
     }
   });
+
+  if (state.memoryBlock.trim()) {
+    addMessage("assistant", `**Auto-compacted memory**\n\n${state.memoryBlock.trim()}`);
+  }
 }
 
 function shouldCompactForLimit(tokenLimit) {
@@ -373,6 +404,12 @@ function shouldCompactForLimit(tokenLimit) {
 function setSwitchersDisabled(disabled) {
   headerProviderSelect.disabled = disabled;
   headerModelSelect.disabled = disabled;
+}
+
+function setCompactButtonDisabled(disabled) {
+  if (compactButton instanceof HTMLButtonElement) {
+    compactButton.disabled = disabled;
+  }
 }
 
 function renderProviderSwitcher(selectedProviderId = state.activeProviderId) {
@@ -499,6 +536,8 @@ async function compactHistoryForLimit(targetTokenLimit, reasonLabel) {
 
   state.isCompacting = true;
   setSwitchersDisabled(true);
+  setCompactButtonDisabled(true);
+  showCompactionProgressBubble();
 
   try {
     setStatus(`Compacting memory for ${reasonLabel}...`);
@@ -529,11 +568,11 @@ async function compactHistoryForLimit(targetTokenLimit, reasonLabel) {
     state.memoryBlock = typeof payload.memory_block === "string" ? payload.memory_block : state.memoryBlock;
     state.history = Array.isArray(payload.history) ? payload.history : state.history;
     state.lastRequestTokens = estimateContextTokens(state.history, state.memoryBlock);
-    renderCompactedChatView();
-    syncUsedTokensToContext();
   } finally {
+    clearCompactionProgressBubble();
     state.isCompacting = false;
     setSwitchersDisabled(state.isSwitching);
+    setCompactButtonDisabled(state.isSwitching);
   }
 }
 
@@ -544,7 +583,9 @@ async function maybeAutoCompact(reasonLabel, targetTokenLimit = state.modelToken
 
   try {
     await compactHistoryForLimit(targetTokenLimit, reasonLabel);
-    showToast("Memory compacted and context updated.");
+    renderCompactedChatView();
+    syncUsedTokensToContext();
+    showToast("Compaction complete. Chat context was reduced.");
     return { ok: true, compacted: true };
   } catch (error) {
     setStatus(error.message, true);
@@ -567,6 +608,7 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
 
   state.isSwitching = true;
   setSwitchersDisabled(true);
+  setCompactButtonDisabled(true);
 
   try {
     const targetLimit = getModelTokenLimit(nextProviderId, nextModelId);
@@ -614,6 +656,7 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
   } finally {
     state.isSwitching = false;
     setSwitchersDisabled(false);
+    setCompactButtonDisabled(false);
   }
 }
 
@@ -669,6 +712,7 @@ function setSendingState(isSending) {
   sendButton.disabled = isSending;
   chatInput.disabled = isSending;
   setSwitchersDisabled(isSending || state.isSwitching || state.isCompacting);
+  setCompactButtonDisabled(isSending || state.isSwitching || state.isCompacting);
 }
 
 function processSseBlock(block, assistantBubble) {
@@ -841,6 +885,22 @@ async function finalizeSuccessfulResponse(message, assistantBubble) {
   setStatus("Response complete.");
 }
 
+async function triggerManualCompaction() {
+  if (state.isCompacting || state.isSwitching || sendButton.disabled) {
+    return;
+  }
+
+  try {
+    await compactHistoryForLimit(state.modelTokenLimit, "manual request");
+    renderCompactedChatView();
+    syncUsedTokensToContext();
+    showToast("Compaction complete. Chat context was reduced.");
+    setStatus("Memory compacted.");
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
 chatInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -891,6 +951,10 @@ headerModelSelect.addEventListener("change", async () => {
   const nextModelId = headerModelSelect.value;
   await switchActiveProviderModel(nextProviderId, nextModelId);
 });
+
+if (compactButton instanceof HTMLButtonElement) {
+  compactButton.addEventListener("click", triggerManualCompaction);
+}
 
 chatForm.addEventListener("submit", sendMessage);
 window.addEventListener("load", loadGatewayMeta);

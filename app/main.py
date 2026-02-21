@@ -179,8 +179,6 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
         raise HTTPException(status_code=422, detail="Active provider is unavailable.")
 
     token_limit = get_provider_model_limit(active_provider_id, provider_config.model)
-    if token_limit is None and provider_config.token_limit > 0:
-        token_limit = provider_config.token_limit
     history = [turn.model_dump() for turn in payload.history]
 
     async def event_stream():
@@ -356,3 +354,4 @@ def _chunk_text(text: str) -> list[str]:
         return [text]
 
     return [f"{token} " for token in tokens[:-1]] + [tokens[-1]]
+
