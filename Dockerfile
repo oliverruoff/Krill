@@ -13,8 +13,6 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY app /app/app
 COPY static /app/static
-COPY krill_banner.png /app/krill_banner.png
-COPY krill_icon.png /app/krill_icon.png
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 
 RUN mkdir -p /app/data

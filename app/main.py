@@ -83,19 +83,9 @@ async def read_setup() -> FileResponse:
     return FileResponse(STATIC_DIR / "setup.html")
 
 
-@app.get("/krill_banner.png", response_class=FileResponse)
-async def read_banner() -> FileResponse:
-    return FileResponse(BASE_DIR / "krill_banner.png")
-
-
-@app.get("/krill_icon.png", response_class=FileResponse)
-async def read_icon() -> FileResponse:
-    return FileResponse(BASE_DIR / "krill_icon.png")
-
-
 @app.get("/favicon.ico", response_class=FileResponse)
 async def read_favicon() -> FileResponse:
-    return FileResponse(BASE_DIR / "krill_icon.png")
+    return FileResponse(STATIC_DIR / "img" / "krill_icon.png")
 
 
 @app.get("/gateway")
@@ -354,4 +344,3 @@ def _chunk_text(text: str) -> list[str]:
         return [text]
 
     return [f"{token} " for token in tokens[:-1]] + [tokens[-1]]
-

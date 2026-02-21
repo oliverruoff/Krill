@@ -44,6 +44,7 @@ body {
   margin: 0;
   font-size: 2rem;
   line-height: 1.1;
+  text-align: center;
 }
 
 .setup-landing {
@@ -65,20 +66,37 @@ body {
   display: grid;
   gap: 0.6rem;
   align-content: start;
+  grid-template-rows: auto auto auto 1fr;
+}
+
+.setup-choice-icon {
+  width: 108px;
+  height: 108px;
+  object-fit: contain;
+  justify-self: center;
 }
 
 .setup-choice-title {
   margin: 0;
   font-size: 1.3rem;
+  min-height: 2.9rem;
 }
 
 .setup-choice-copy {
   margin: 0;
   color: var(--muted);
+  min-height: 3.2rem;
 }
 
 .setup-choice-btn {
-  margin-top: 0.2rem;
+  margin-top: 0;
+  width: 100%;
+  min-height: 170px;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  font-size: 1.06rem;
+  line-height: 1.35;
 }
 
 .setup-form-topbar {
@@ -100,6 +118,7 @@ h1 {
 .subtitle {
   margin: 0.35rem 0 1.1rem;
   color: var(--muted);
+  text-align: center;
 }
 
 form {

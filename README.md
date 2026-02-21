@@ -1,4 +1,4 @@
-![Krill](krill_banner.png)
+![Krill](static/img/krill_banner.png)
 
 # Krill
 Hi, I am **Krill**: a lightweight, modular, and LLM-agnostic chatbot gateway in progress.

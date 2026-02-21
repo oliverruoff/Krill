@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Krill Setup</title>
-    <link rel="icon" type="image/png" href="/krill_icon.png" />
+    <link rel="icon" type="image/png" href="/static/img/krill_icon.png" />
     <link rel="stylesheet" href="/static/css/style.css" />
   </head>
   <body>
@@ -16,13 +16,15 @@
 
           <div class="setup-choice-grid">
             <section class="setup-choice-card">
+              <img src="/static/img/baby_krill.png" alt="Baby Krill" class="setup-choice-icon" />
               <h2 class="setup-choice-title">New here?</h2>
               <p class="setup-choice-copy">Start from scratch and configure your assistant step by step.</p>
               <button type="button" id="start-scratch-btn" class="setup-choice-btn">Start from Scratch</button>
             </section>
 
             <section class="setup-choice-card">
-              <h2 class="setup-choice-title">Have an existing braindump?</h2>
+              <img src="/static/img/old_krill.png" alt="Old Krill" class="setup-choice-icon" />
+              <h2 class="setup-choice-title">Existing Braindump?</h2>
               <p class="setup-choice-copy">Drop your file here or click the area to browse.</p>
               <input id="braindump_file" class="hidden" type="file" accept="application/json,.json" />
               <div id="braindump_dropzone" class="dropzone dropzone-large" role="button" tabindex="0" aria-label="Upload braindump file">
