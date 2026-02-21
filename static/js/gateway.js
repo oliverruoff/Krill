@@ -1,22 +1,13 @@
-const form = document.getElementById("gateway-form");
+const chatForm = document.getElementById("chat-form");
+const chatInput = document.getElementById("chat-input");
+const sendButton = document.getElementById("send-btn");
+const chatThread = document.getElementById("chat-thread");
+const modelIndicator = document.getElementById("model-indicator");
 const statusNode = document.getElementById("status");
 
-const fields = {
-  botName: document.getElementById("bot_name"),
-  systemPrompt: document.getElementById("system_prompt"),
-  activeProviderSelect: document.getElementById("active_provider_select"),
-  activeModelSelect: document.getElementById("active_model_select"),
-  activeApiKey: document.getElementById("active_api_key"),
-  addProviderSelect: document.getElementById("add_provider_select"),
-  addModelSelect: document.getElementById("add_model_select"),
-  addApiKey: document.getElementById("add_api_key"),
-  addProviderButton: document.getElementById("add-provider-btn"),
-  resetButton: document.getElementById("reset-btn"),
-};
-
 const state = {
-  providers: [],
-  providerConfigs: {},
+  providerLabel: "",
+  modelLabel: "",
 };
 
 function setStatus(message, isError = false) {
@@ -24,174 +15,36 @@ function setStatus(message, isError = false) {
   statusNode.className = isError ? "error" : "ok";
 }
 
-function getProviderById(providerId) {
-  return state.providers.find((provider) => provider.id === providerId);
+function addMessage(role, text = "") {
+  const wrapper = document.createElement("div");
+  wrapper.className = `chat-message ${role}`;
+
+  const title = document.createElement("p");
+  title.className = "chat-role";
+  title.textContent = role === "user" ? "You" : "Krill";
+
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble";
+  bubble.textContent = text;
+
+  wrapper.appendChild(title);
+  wrapper.appendChild(bubble);
+  chatThread.appendChild(wrapper);
+  chatThread.scrollTop = chatThread.scrollHeight;
+
+  return bubble;
 }
 
-function renderAddProviderOptions() {
-  fields.addProviderSelect.innerHTML = "";
-
-  state.providers.forEach((provider) => {
-    const option = document.createElement("option");
-    option.value = provider.id;
-    option.textContent = provider.label;
-    fields.addProviderSelect.appendChild(option);
-  });
-
-  renderAddModelOptions(fields.addProviderSelect.value);
-}
-
-function renderAddModelOptions(providerId) {
-  const provider = getProviderById(providerId);
-  fields.addModelSelect.innerHTML = "";
-
-  if (!provider) {
+function updateModelIndicator() {
+  if (!state.providerLabel || !state.modelLabel) {
+    modelIndicator.textContent = "No active provider/model configured.";
     return;
   }
 
-  provider.models.forEach((model) => {
-    const option = document.createElement("option");
-    option.value = model.id;
-    option.textContent = model.label;
-    fields.addModelSelect.appendChild(option);
-  });
+  modelIndicator.textContent = `Chatting with ${state.providerLabel} - ${state.modelLabel}`;
 }
 
-function renderActiveProviderOptions(selectedProviderId) {
-  const configuredProviderIds = Object.keys(state.providerConfigs);
-  fields.activeProviderSelect.innerHTML = "";
-
-  configuredProviderIds.forEach((providerId) => {
-    const provider = getProviderById(providerId);
-    const option = document.createElement("option");
-    option.value = providerId;
-    option.textContent = provider?.label ?? providerId;
-    fields.activeProviderSelect.appendChild(option);
-  });
-
-  if (configuredProviderIds.length === 0) {
-    setStatus("No configured providers. Please add one.", true);
-    return;
-  }
-
-  const nextProvider = configuredProviderIds.includes(selectedProviderId)
-    ? selectedProviderId
-    : configuredProviderIds[0];
-
-  fields.activeProviderSelect.value = nextProvider;
-  renderActiveProviderDetails(nextProvider);
-}
-
-function renderActiveProviderDetails(providerId) {
-  const provider = getProviderById(providerId);
-  const config = state.providerConfigs[providerId];
-
-  fields.activeModelSelect.innerHTML = "";
-  if (!provider || !config) {
-    return;
-  }
-
-  provider.models.forEach((model) => {
-    const option = document.createElement("option");
-    option.value = model.id;
-    option.textContent = model.label;
-    fields.activeModelSelect.appendChild(option);
-  });
-
-  fields.activeModelSelect.value = config.model || provider.models[0]?.id || "";
-  fields.activeApiKey.value = config.api_key || "";
-}
-
-async function addOrUpdateProvider() {
-  const providerId = fields.addProviderSelect.value;
-  const modelId = fields.addModelSelect.value;
-  const apiKey = fields.addApiKey.value;
-
-  if (!providerId || !modelId) {
-    setStatus("Select provider and model before adding.", true);
-    return;
-  }
-
-  fields.addProviderButton.disabled = true;
-  setStatus("checking API key.");
-
-  try {
-    await verifyProvider(providerId, modelId, apiKey);
-
-    state.providerConfigs[providerId] = {
-      api_key: apiKey,
-      model: modelId,
-    };
-
-    renderActiveProviderOptions(fields.activeProviderSelect.value || providerId);
-    setStatus("Provider verified and added. Save changes to persist.");
-  } catch (error) {
-    setStatus(error.message, true);
-  } finally {
-    fields.addProviderButton.disabled = false;
-  }
-}
-
-function syncActiveProviderConfig() {
-  const providerId = fields.activeProviderSelect.value;
-
-  if (!providerId) {
-    return;
-  }
-
-  state.providerConfigs[providerId] = {
-    api_key: fields.activeApiKey.value,
-    model: fields.activeModelSelect.value,
-  };
-}
-
-function buildPayload() {
-  syncActiveProviderConfig();
-
-  return {
-    bot_name: fields.botName.value,
-    system_prompt: fields.systemPrompt.value,
-    setup_completed: true,
-    active_provider_id: fields.activeProviderSelect.value,
-    provider_configs: state.providerConfigs,
-  };
-}
-
-async function saveGateway(event) {
-  event.preventDefault();
-  const payload = buildPayload();
-
-  try {
-    const response = await fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      throw new Error("Could not save changes.");
-    }
-
-    setStatus("Gateway settings saved.");
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-}
-
-async function resetEverything() {
-  try {
-    const response = await fetch("/api/reset", { method: "POST" });
-    if (!response.ok) {
-      throw new Error("Reset failed.");
-    }
-
-    window.location.href = "/setup";
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-}
-
-async function loadGateway() {
+async function loadGatewayMeta() {
   try {
     const [providersResponse, settingsResponse] = await Promise.all([
       fetch("/api/providers"),
@@ -199,63 +52,156 @@ async function loadGateway() {
     ]);
 
     if (!providersResponse.ok || !settingsResponse.ok) {
-      throw new Error("Unable to load gateway data.");
+      throw new Error("Failed to load gateway metadata.");
     }
 
-    state.providers = await providersResponse.json();
+    const providers = await providersResponse.json();
     const settings = await settingsResponse.json();
-    state.providerConfigs = settings.provider_configs ?? {};
 
-    fields.botName.value = settings.bot_name ?? "";
-    fields.systemPrompt.value = settings.system_prompt ?? "";
+    const activeProvider = providers.find((provider) => provider.id === settings.active_provider_id);
+    const activeConfig = settings.provider_configs?.[settings.active_provider_id];
 
-    renderAddProviderOptions();
-    renderActiveProviderOptions(settings.active_provider_id || "");
+    state.providerLabel = activeProvider?.label ?? settings.active_provider_id ?? "";
+    state.modelLabel = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.label ?? activeConfig?.model ?? "";
+
+    updateModelIndicator();
     setStatus("Gateway ready.");
   } catch (error) {
+    updateModelIndicator();
     setStatus(error.message, true);
   }
 }
 
-async function verifyProvider(providerId, modelId, apiKey) {
-  const response = await fetch("/api/providers/verify", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      provider_id: providerId,
-      model: modelId,
-      api_key: apiKey,
-    }),
+function setSendingState(isSending) {
+  sendButton.disabled = isSending;
+  chatInput.disabled = isSending;
+}
+
+function processSseBlock(block, assistantBubble) {
+  const lines = block.split("\n");
+  let eventName = "message";
+  let data = "";
+
+  lines.forEach((line) => {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+      return;
+    }
+
+    if (line.startsWith("data:")) {
+      data += line.slice(5).trim();
+    }
   });
 
-  if (response.ok) {
+  if (!data) {
+    return { done: false, hasError: false };
+  }
+
+  let payload = {};
+  try {
+    payload = JSON.parse(data);
+  } catch (error) {
+    return { done: false, hasError: true, errorMessage: "Invalid stream payload." };
+  }
+
+  if (eventName === "token") {
+    assistantBubble.textContent += payload.text ?? "";
+    chatThread.scrollTop = chatThread.scrollHeight;
+    return { done: false, hasError: false };
+  }
+
+  if (eventName === "done") {
+    return { done: true, hasError: false };
+  }
+
+  if (eventName === "error") {
+    return {
+      done: true,
+      hasError: true,
+      errorMessage: payload.detail ?? "Chat failed.",
+    };
+  }
+
+  return { done: false, hasError: false };
+}
+
+async function sendMessage(event) {
+  event.preventDefault();
+
+  const message = chatInput.value.trim();
+  if (!message) {
+    setStatus("Please enter a message.", true);
     return;
   }
 
-  let message = "Provider verification failed.";
-  try {
-    const data = await response.json();
-    if (typeof data.detail === "string") {
-      message = data.detail;
-    }
-  } catch (error) {
-    message = "Provider verification failed.";
-  }
+  setSendingState(true);
+  setStatus("Sending...");
 
-  throw new Error(message);
+  addMessage("user", message);
+  const assistantBubble = addMessage("assistant", "");
+  chatInput.value = "";
+
+  try {
+    const response = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+
+    if (!response.ok || !response.body) {
+      let detail = "Chat request failed.";
+      try {
+        const errorBody = await response.json();
+        if (typeof errorBody.detail === "string") {
+          detail = errorBody.detail;
+        }
+      } catch (error) {
+        detail = "Chat request failed.";
+      }
+
+      throw new Error(detail);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop() ?? "";
+
+      for (const block of blocks) {
+        const result = processSseBlock(block, assistantBubble);
+        if (result.hasError) {
+          throw new Error(result.errorMessage);
+        }
+
+        if (result.done) {
+          setStatus("Response complete.");
+          setSendingState(false);
+          return;
+        }
+      }
+    }
+
+    setStatus("Response complete.");
+  } catch (error) {
+    if (!assistantBubble.textContent) {
+      assistantBubble.textContent = "Sorry, something went wrong.";
+    }
+
+    setStatus(error.message, true);
+  } finally {
+    setSendingState(false);
+    chatInput.focus();
+  }
 }
 
-fields.addProviderSelect.addEventListener("change", () => {
-  renderAddModelOptions(fields.addProviderSelect.value);
-});
-
-fields.activeProviderSelect.addEventListener("change", () => {
-  renderActiveProviderDetails(fields.activeProviderSelect.value);
-});
-
-fields.activeModelSelect.addEventListener("change", syncActiveProviderConfig);
-fields.activeApiKey.addEventListener("input", syncActiveProviderConfig);
-fields.addProviderButton.addEventListener("click", addOrUpdateProvider);
-fields.resetButton.addEventListener("click", resetEverything);
-form.addEventListener("submit", saveGateway);
-window.addEventListener("load", loadGateway);
+chatForm.addEventListener("submit", sendMessage);
+window.addEventListener("load", loadGatewayMeta);

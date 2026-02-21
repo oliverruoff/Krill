@@ -1,10 +1,11 @@
+import asyncio
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import Settings, ensure_settings_file, load_settings, save_settings
 from .providers import get_provider, get_provider_model_ids, get_provider_options, is_supported_provider
@@ -39,6 +40,10 @@ class VerifyProviderResponse(BaseModel):
     detail: str
 
 
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=5000)
+
+
 @app.on_event("startup")
 async def startup_event() -> None:
     await ensure_settings_file()
@@ -54,6 +59,11 @@ async def read_root() -> FileResponse:
 @app.get("/setup", response_class=FileResponse)
 async def read_setup() -> FileResponse:
     return FileResponse(STATIC_DIR / "setup.html")
+
+
+@app.get("/krill_banner.png", response_class=FileResponse)
+async def read_banner() -> FileResponse:
+    return FileResponse(BASE_DIR / "krill_banner.png")
 
 
 @app.get("/gateway")
@@ -115,6 +125,42 @@ async def reset_settings() -> Settings:
     return await save_settings(defaults)
 
 
+@app.post("/api/chat/stream")
+async def chat_stream(payload: ChatRequest) -> StreamingResponse:
+    settings = await load_settings()
+    if not _is_setup_complete(settings):
+        raise HTTPException(status_code=422, detail="Setup is not complete.")
+
+    active_provider_id = settings.active_provider_id
+    provider_config = settings.provider_configs.get(active_provider_id)
+
+    if provider_config is None:
+        raise HTTPException(status_code=422, detail="Active provider is not configured.")
+
+    provider = get_provider(active_provider_id)
+    if provider is None:
+        raise HTTPException(status_code=422, detail="Active provider is unavailable.")
+
+    async def event_stream():
+        try:
+            text = await provider.generate(
+                prompt=payload.message,
+                system_prompt=settings.system_prompt,
+                model=provider_config.model,
+                api_key=provider_config.api_key,
+            )
+
+            for chunk in _chunk_text(text):
+                yield _sse("token", {"text": chunk})
+                await asyncio.sleep(0.01)
+
+            yield _sse("done", {"ok": True})
+        except Exception as exc:
+            yield _sse("error", {"detail": str(exc)})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 def _validate_provider_configs(settings: Settings) -> None:
     if settings.active_provider_id and settings.active_provider_id not in settings.provider_configs:
         raise HTTPException(status_code=422, detail="Active provider must exist in provider configs.")
@@ -153,3 +199,16 @@ def _is_setup_complete(settings: Settings) -> bool:
         return False
 
     return _can_complete_setup(settings)
+
+
+def _sse(event_name: str, payload: dict[str, object]) -> str:
+    return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
+
+
+def _chunk_text(text: str) -> list[str]:
+    tokens = text.split(" ")
+
+    if len(tokens) <= 1:
+        return [text]
+
+    return [f"{token} " for token in tokens[:-1]] + [tokens[-1]]

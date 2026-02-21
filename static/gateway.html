@@ -7,50 +7,26 @@
     <link rel="stylesheet" href="/static/css/style.css" />
   </head>
   <body>
-    <main class="app-shell">
-      <section class="card">
-        <h1>Krill Gateway</h1>
-        <p class="subtitle">Switch providers and models quickly.</p>
+    <main class="gateway-shell">
+      <header class="gateway-topbar">
+        <img src="/krill_banner.png" alt="Krill" class="gateway-banner" />
+        <a href="/setup" class="button-link secondary">Settings</a>
+      </header>
 
-        <form id="gateway-form" novalidate>
-          <h2>Gateway Settings</h2>
+      <section class="chat-panel">
+        <p id="model-indicator" class="subtitle">Loading active provider...</p>
 
-          <label for="bot_name">Bot Name</label>
-          <input id="bot_name" type="text" maxlength="15" required />
+        <div id="chat-thread" class="chat-thread" aria-live="polite"></div>
 
-          <label for="system_prompt">System Prompt</label>
-          <textarea id="system_prompt" maxlength="100" rows="3" required></textarea>
-
-          <label for="active_provider_select">Active Provider</label>
-          <select id="active_provider_select"></select>
-
-          <label for="active_model_select">Active Model</label>
-          <select id="active_model_select"></select>
-
-          <label for="active_api_key">API Key</label>
-          <input id="active_api_key" type="text" />
-
-          <h2>Add Another Provider</h2>
-
-          <label for="add_provider_select">Provider</label>
-          <select id="add_provider_select"></select>
-
-          <label for="add_model_select">Model</label>
-          <select id="add_model_select"></select>
-
-          <label for="add_api_key">API Key</label>
-          <input id="add_api_key" type="text" />
-
-          <button type="button" id="add-provider-btn">Add / Update Provider</button>
-
+        <form id="chat-form" class="chat-composer" novalidate>
+          <label for="chat-input">Message</label>
+          <textarea id="chat-input" rows="3" maxlength="5000" required></textarea>
           <div class="actions">
-            <button type="submit">Save Changes</button>
-            <a class="button-link secondary" href="/setup">Adjust Setup</a>
-            <button type="button" class="danger" id="reset-btn">Reset Everything</button>
+            <button type="submit" id="send-btn">Send</button>
           </div>
-
-          <p id="status" role="status" aria-live="polite"></p>
         </form>
+
+        <p id="status" role="status" aria-live="polite"></p>
       </section>
     </main>
 

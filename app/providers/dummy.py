@@ -8,8 +8,8 @@ class DummyProvider(LLMProvider):
         {"id": "dummy-basic", "label": "Dummy Basic"},
     ]
 
-    async def generate(self, prompt: str, system_prompt: str) -> str:
-        return f"[dummy] {prompt}"
+    async def generate(self, prompt: str, system_prompt: str, model: str, api_key: str) -> str:
+        return f"[dummy:{model}] {prompt}"
 
     async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
         if model != "dummy-basic":

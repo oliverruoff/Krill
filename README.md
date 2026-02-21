@@ -81,8 +81,9 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 
 - Setup appears until first valid provider/model/api-key is saved
 - Gateway becomes the default home page after setup completion
-- Gateway supports switching active provider/model quickly
-- Gateway allows reset and links back to setup for deeper adjustments
+- Gateway now focuses on a central chat window with streamed responses
+- Top-right Settings button in gateway navigates to `/setup`
+- Provider/model management remains in setup for now
 - Add/Update provider verifies API key + model before accepting provider config
 
 ## Project Status

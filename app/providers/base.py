@@ -6,7 +6,7 @@ class LLMProvider(Protocol):
     display_name: str
     available_models: list[dict[str, str]]
 
-    async def generate(self, prompt: str, system_prompt: str) -> str:
+    async def generate(self, prompt: str, system_prompt: str, model: str, api_key: str) -> str:
         ...
 
     async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
