@@ -7,7 +7,7 @@ Guidance for coding agents working in `Krill`.
 - Backend entrypoint: `app/main.py` (`app = FastAPI(...)`).
 - Runtime state source: `data/braindump.json`.
 - Frontend assets: `static/setup.html`, `static/gateway.html`, `static/css/style.css`, `static/js/setup.js`, `static/js/gateway.js`.
-- Architecture direction: keep modular/lightweight; no chat runtime, MCP tools, or Docker yet.
+- Architecture direction: keep modular/lightweight; no MCP tools yet.
 
 ## 2) Repository Layout
 - `app/__init__.py`: package marker.
@@ -48,7 +48,17 @@ pip install -r requirements.txt
 
 Run local server:
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8055
+```
+
+Build Docker image:
+```bash
+docker build -t krill:latest .
+```
+
+Run Docker container:
+```bash
+docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
 
 Backend syntax/build sanity check:
@@ -154,6 +164,7 @@ Frontend (vanilla):
 - `GET /api/settings` returns current settings.
 - `POST /api/settings` validates and persists full settings payload.
 - `POST /api/reset` resets settings to defaults.
+- `POST /api/braindump/import` replaces state from uploaded braindump content.
 - Validate provider IDs and model IDs against registry-supported values before saving.
 
 ## 9) Agent Change Management + Pre-PR

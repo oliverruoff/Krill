@@ -1,13 +1,15 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-BRAINDUMP_PATH = DATA_DIR / "braindump.json"
+DEFAULT_BRAINDUMP_PATH = BASE_DIR / "data" / "braindump.json"
+BRAINDUMP_PATH = Path(os.getenv("KRILL_BRAINDUMP_PATH", str(DEFAULT_BRAINDUMP_PATH))).resolve()
+DATA_DIR = BRAINDUMP_PATH.parent
 
 
 class ProviderConfig(BaseModel):

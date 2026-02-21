@@ -13,6 +13,18 @@
         <p class="subtitle">Finish setup to enter your gateway.</p>
 
         <form id="setup-form" novalidate>
+          <h2>Bootstrap State</h2>
+          <p class="subtitle">Start fresh or import an existing braindump file.</p>
+
+          <div class="actions">
+            <button type="button" id="start-scratch-btn" class="secondary">Start from Scratch</button>
+          </div>
+
+          <label for="braindump_file">Import braindump.json</label>
+          <input id="braindump_file" type="file" accept="application/json,.json" />
+          <div id="braindump_dropzone" class="dropzone">Drag and drop braindump.json here</div>
+          <button type="button" id="import-braindump-btn">Import Braindump</button>
+
           <h2>Base Settings</h2>
 
           <label for="bot_name">Bot Name</label>

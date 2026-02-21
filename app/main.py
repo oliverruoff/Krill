@@ -88,14 +88,13 @@ async def get_providers() -> list[dict[str, object]]:
 
 @app.post("/api/settings", response_model=Settings)
 async def update_settings(settings: Settings) -> Settings:
-    _validate_provider_configs(settings)
+    _validate_settings_payload(settings)
+    return await save_settings(settings)
 
-    if settings.setup_completed and not _can_complete_setup(settings):
-        raise HTTPException(
-            status_code=422,
-            detail="Setup cannot be marked complete without active provider, model, and API key.",
-        )
 
+@app.post("/api/braindump/import", response_model=Settings)
+async def import_braindump(settings: Settings) -> Settings:
+    _validate_settings_payload(settings)
     return await save_settings(settings)
 
 
@@ -175,6 +174,16 @@ def _validate_provider_configs(settings: Settings) -> None:
                 status_code=422,
                 detail=f"Unsupported model '{provider_config.model}' for provider '{provider_id}'.",
             )
+
+
+def _validate_settings_payload(settings: Settings) -> None:
+    _validate_provider_configs(settings)
+
+    if settings.setup_completed and not _can_complete_setup(settings):
+        raise HTTPException(
+            status_code=422,
+            detail="Setup cannot be marked complete without active provider, model, and API key.",
+        )
 
 
 def _can_complete_setup(settings: Settings) -> bool:

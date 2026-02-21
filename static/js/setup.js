@@ -3,6 +3,10 @@ const statusNode = document.getElementById("status");
 const gatewayLink = document.getElementById("gateway-link");
 
 const fields = {
+  startScratchButton: document.getElementById("start-scratch-btn"),
+  braindumpFileInput: document.getElementById("braindump_file"),
+  braindumpDropzone: document.getElementById("braindump_dropzone"),
+  importBraindumpButton: document.getElementById("import-braindump-btn"),
   botName: document.getElementById("bot_name"),
   systemPrompt: document.getElementById("system_prompt"),
   providerSelect: document.getElementById("provider_select"),
@@ -24,6 +28,11 @@ const state = {
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.className = isError ? "error" : "ok";
+}
+
+function setImportingState(isImporting) {
+  fields.importBraindumpButton.disabled = isImporting;
+  fields.startScratchButton.disabled = isImporting;
 }
 
 function getProviderById(providerId) {
@@ -260,8 +269,101 @@ async function loadPage() {
   }
 }
 
+async function startFromScratch() {
+  setImportingState(true);
+  setStatus("Resetting state...");
+
+  try {
+    const response = await fetch("/api/reset", { method: "POST" });
+    if (!response.ok) {
+      throw new Error("Failed to reset settings.");
+    }
+
+    await loadPage();
+    setStatus("Started from scratch.");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    setImportingState(false);
+  }
+}
+
+function setFile(file) {
+  const dataTransfer = new DataTransfer();
+  dataTransfer.items.add(file);
+  fields.braindumpFileInput.files = dataTransfer.files;
+}
+
+async function importBraindump() {
+  const file = fields.braindumpFileInput.files?.[0];
+  if (!file) {
+    setStatus("Please choose a braindump.json file first.", true);
+    return;
+  }
+
+  setImportingState(true);
+  setStatus("Importing braindump...");
+
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+
+    const response = await fetch("/api/braindump/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      let detail = "Braindump import failed.";
+      try {
+        const errorData = await response.json();
+        if (typeof errorData.detail === "string") {
+          detail = errorData.detail;
+        }
+      } catch (error) {
+        detail = "Braindump import failed.";
+      }
+
+      throw new Error(detail);
+    }
+
+    await loadPage();
+    setStatus("Braindump imported and applied.");
+  } catch (error) {
+    setStatus(error.message || "Invalid braindump.json file.", true);
+  } finally {
+    setImportingState(false);
+  }
+}
+
 fields.providerSelect.addEventListener("change", () => {
   renderModelOptions(fields.providerSelect.value);
+});
+
+fields.startScratchButton.addEventListener("click", startFromScratch);
+fields.importBraindumpButton.addEventListener("click", importBraindump);
+
+fields.braindumpDropzone.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  fields.braindumpDropzone.classList.add("dropzone-active");
+});
+
+fields.braindumpDropzone.addEventListener("dragleave", () => {
+  fields.braindumpDropzone.classList.remove("dropzone-active");
+});
+
+fields.braindumpDropzone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  fields.braindumpDropzone.classList.remove("dropzone-active");
+
+  const file = event.dataTransfer?.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  setFile(file);
+  setStatus(`Selected file: ${file.name}`);
 });
 
 fields.addProviderButton.addEventListener("click", addOrUpdateProvider);

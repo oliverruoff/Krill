@@ -42,7 +42,7 @@ Windows PowerShell:
 ```bash
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8055
 ```
 
 macOS/Linux:
@@ -50,10 +50,36 @@ macOS/Linux:
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8055
 ```
 
-Open `http://127.0.0.1:8000` to access the settings page.
+Open `http://127.0.0.1:8055` to access the settings page.
+
+## Docker (Lightweight Deployment)
+
+Build image:
+
+```bash
+docker build -t krill:latest .
+```
+
+Run with persisted data volume:
+
+```bash
+docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
+```
+
+Run with optional preloaded braindump (first start only):
+
+```bash
+docker run --name krill -p 8055:8055 -v krill_data:/app/data -v /absolute/path/to/braindump.json:/bootstrap/braindump.json:ro krill:latest
+```
+
+Notes:
+
+- Runtime state is always stored in `/app/data/braindump.json` inside the container.
+- If `/app/data/braindump.json` does not exist and `/bootstrap/braindump.json` is mounted, it will be preloaded automatically at container startup.
+- You can also import a braindump later from the Setup UI.
 
 ## Current API
 
@@ -65,6 +91,7 @@ Open `http://127.0.0.1:8000` to access the settings page.
 - `GET /api/settings` -> returns current settings
 - `POST /api/settings` -> validates and saves settings
 - `POST /api/reset` -> resets all settings to defaults
+- `POST /api/braindump/import` -> imports and replaces full state from a braindump payload
 
 ## Provider Architecture (LLM-Agnostic)
 
@@ -87,7 +114,8 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 - Chat thread auto-scrolls to newest messages and renders Markdown
 - Press `Enter` to send and `Shift+Enter` for a new line
 - Add/Update provider verifies API key + model before accepting provider config
+- Setup offers "Start from scratch" and braindump import (file picker or drag/drop)
 
 ## Project Status
 
-Krill is intentionally small right now: no chat engine, no MCP tools, and no Docker setup yet. A provider registry is in place with a `dummy` provider so future provider integrations can stay clean and modular.
+Krill is intentionally small right now: no MCP tools yet. Docker deployment is now available, and a provider registry is in place with `dummy` and `gemini` providers so future integrations stay clean and modular.
