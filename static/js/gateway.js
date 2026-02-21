@@ -8,6 +8,8 @@ const tokenCounterNode = document.getElementById("token-counter");
 const statusNode = document.getElementById("status");
 const menuButton = document.getElementById("menu-btn");
 const menuPopover = document.getElementById("menu-popover");
+const assistantTitleNode = document.getElementById("assistant-title");
+const assistantMetaNode = document.getElementById("assistant-meta");
 
 const state = {
   providers: [],
@@ -25,13 +27,24 @@ function setStatus(message, isError = false) {
   statusNode.className = isError ? "error" : "ok";
 }
 
+function formatMessageTimestamp(date = new Date()) {
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getFullYear();
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const month = months[date.getMonth()];
+  return `${hour}:${minute} ${day}. ${month}. ${year}`;
+}
+
 function addMessage(role, text = "") {
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message ${role}`;
 
   const title = document.createElement("p");
   title.className = "chat-role";
-  title.textContent = role === "user" ? "You" : "Krill";
+  const roleLabel = role === "user" ? "You" : "Krill";
+  title.textContent = `${roleLabel} - ${formatMessageTimestamp()}`;
 
   const bubble = document.createElement("div");
   bubble.className = "chat-bubble";
@@ -229,6 +242,19 @@ function updateMetaIndicators() {
   modelIndicator.textContent = state.modelLabel || "Not configured";
 }
 
+function updateAssistantHeader(settings) {
+  const botName = settings?.bot_name?.trim();
+  const configuredProviders = Object.keys(settings?.provider_configs ?? {}).length;
+  const providerText = configuredProviders === 1 ? "1 provider" : `${configuredProviders} providers`;
+  const activeProviderText = state.providerLabel || "No provider selected";
+  const modelText = state.modelLabel || "No model selected";
+
+  assistantTitleNode.textContent = botName
+    ? `This is ${botName} - your personal assistant`
+    : "This is your personal assistant";
+  assistantMetaNode.textContent = `${providerText} connected - Active provider: ${activeProviderText} - Active model: ${modelText}`;
+}
+
 function formatNumber(value) {
   return Number(value || 0).toLocaleString("de-DE");
 }
@@ -270,10 +296,13 @@ async function loadGatewayMeta() {
     state.modelTokenLimit = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.token_limit ?? 0;
 
     updateMetaIndicators();
+    updateAssistantHeader(settings);
     updateTokenCounter(0, state.modelTokenLimit);
     setStatus("Gateway ready.");
   } catch (error) {
     updateMetaIndicators();
+    assistantTitleNode.textContent = "This is your personal assistant";
+    assistantMetaNode.textContent = "Assistant metadata unavailable.";
     updateTokenCounter(0, 0);
     setStatus(error.message, true);
   }

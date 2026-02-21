@@ -347,6 +347,32 @@ button:disabled {
   width: auto;
 }
 
+.assistant-header {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.assistant-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assistant-meta {
+  margin: 0;
+  color: #6d7b91;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .menu-wrap {
   position: relative;
 }
@@ -591,6 +617,11 @@ button:disabled {
 
   .gateway-banner {
     height: 42px;
+  }
+
+  .assistant-title,
+  .assistant-meta {
+    white-space: normal;
   }
 
   .chat-panel {
