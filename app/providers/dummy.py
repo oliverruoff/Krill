@@ -4,6 +4,7 @@ from .base import LLMProvider
 class DummyProvider(LLMProvider):
     provider_id = "dummy"
     display_name = "Dummy Provider"
+    api_key_url = ""
     available_models = [
         {"id": "dummy-basic", "label": "Dummy Basic", "token_limit": 1000000},
     ]

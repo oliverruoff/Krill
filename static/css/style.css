@@ -229,6 +229,16 @@ button:disabled {
   gap: 0.5rem;
 }
 
+.provider-api-help {
+  margin: 0.1rem 0 -0.2rem;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.provider-api-help a {
+  color: var(--accent-strong);
+}
+
 .provider-item {
   display: flex;
   justify-content: space-between;

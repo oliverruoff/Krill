@@ -35,7 +35,6 @@
         <form id="setup-form" class="hidden" novalidate>
           <div class="setup-form-topbar">
             <h1 class="setup-title">Setup</h1>
-            <button type="button" id="back-to-landing-btn" class="secondary">Back</button>
           </div>
 
           <h2>Base Settings</h2>
@@ -54,6 +53,11 @@
           <label for="model_select">Model</label>
           <select id="model_select"></select>
 
+          <p id="provider-api-help" class="provider-api-help hidden">
+            Need an API key?
+            <a id="provider-api-link" href="#" target="_blank" rel="noopener noreferrer">Get it from the provider</a>
+          </p>
+
           <label for="provider_api_key">API Key</label>
           <input id="provider_api_key" type="text" />
 
@@ -68,8 +72,8 @@
           <select id="active_provider_select"></select>
 
           <div class="actions">
-            <button type="submit" id="complete-btn">Save and Continue</button>
-            <a class="button-link secondary hidden" id="gateway-link" href="/gateway">Go to Gateway</a>
+            <button type="submit" id="complete-btn">Apply and Back to Gateway</button>
+            <button type="button" id="cancel-btn" class="secondary">Cancel</button>
           </div>
 
           <p id="status" role="status" aria-live="polite"></p>

@@ -28,6 +28,7 @@ class ModelOption(BaseModel):
 class ProviderOption(BaseModel):
     id: str
     label: str
+    api_key_url: str
     models: list[ModelOption]
 
 

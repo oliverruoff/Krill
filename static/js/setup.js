@@ -2,11 +2,10 @@ const form = document.getElementById("setup-form");
 const landingView = document.getElementById("setup-landing");
 const statusNode = document.getElementById("status");
 const toastNode = document.getElementById("toast");
-const gatewayLink = document.getElementById("gateway-link");
 
 const fields = {
   startScratchButton: document.getElementById("start-scratch-btn"),
-  backToLandingButton: document.getElementById("back-to-landing-btn"),
+  cancelButton: document.getElementById("cancel-btn"),
   braindumpFileInput: document.getElementById("braindump_file"),
   braindumpDropzone: document.getElementById("braindump_dropzone"),
   botName: document.getElementById("bot_name"),
@@ -14,6 +13,8 @@ const fields = {
   systemPromptCount: document.getElementById("system_prompt_count"),
   providerSelect: document.getElementById("provider_select"),
   modelSelect: document.getElementById("model_select"),
+  providerApiHelp: document.getElementById("provider-api-help"),
+  providerApiLink: document.getElementById("provider-api-link"),
   providerApiKey: document.getElementById("provider_api_key"),
   providerList: document.getElementById("provider-list"),
   activeProviderSelect: document.getElementById("active_provider_select"),
@@ -26,7 +27,7 @@ const state = {
   providerConfigs: {},
   activeProviderId: "",
   setupCompleted: false,
-  openedFromCompletedSetup: false,
+  initialSetupSnapshot: "",
   toastTimerId: null,
 };
 
@@ -65,7 +66,7 @@ function updateSystemPromptCounter() {
 
 function setImportingState(isImporting) {
   fields.startScratchButton.disabled = isImporting;
-  fields.backToLandingButton.disabled = isImporting;
+  fields.cancelButton.disabled = isImporting;
   fields.braindumpDropzone.classList.toggle("disabled", isImporting);
   fields.braindumpFileInput.disabled = isImporting;
 }
@@ -86,7 +87,11 @@ function renderProviderOptions() {
 
   if (state.providers.length > 0) {
     renderModelOptions(fields.providerSelect.value);
+    renderProviderApiHelp(fields.providerSelect.value);
+    return;
   }
+
+  renderProviderApiHelp("");
 }
 
 function renderModelOptions(providerId) {
@@ -103,6 +108,20 @@ function renderModelOptions(providerId) {
     option.textContent = model.label;
     fields.modelSelect.appendChild(option);
   });
+}
+
+function renderProviderApiHelp(providerId) {
+  const provider = getProviderById(providerId);
+  const apiKeyUrl = provider?.api_key_url;
+
+  if (typeof apiKeyUrl !== "string" || !apiKeyUrl.trim()) {
+    fields.providerApiHelp.classList.add("hidden");
+    fields.providerApiLink.removeAttribute("href");
+    return;
+  }
+
+  fields.providerApiLink.href = apiKeyUrl;
+  fields.providerApiHelp.classList.remove("hidden");
 }
 
 function renderConfiguredProviders() {
@@ -205,6 +224,36 @@ function removeProvider(providerId) {
   setStatus("Provider removed.");
 }
 
+function normalizeProviderConfigs(providerConfigs) {
+  const normalized = {};
+  const providerIds = Object.keys(providerConfigs).sort();
+
+  providerIds.forEach((providerId) => {
+    const config = providerConfigs[providerId] ?? {};
+    normalized[providerId] = {
+      api_key: String(config.api_key ?? ""),
+      model: String(config.model ?? ""),
+    };
+  });
+
+  return normalized;
+}
+
+function createSetupSnapshot() {
+  const snapshot = {
+    bot_name: fields.botName.value,
+    system_prompt: fields.systemPrompt.value,
+    active_provider_id: fields.activeProviderSelect.value || "",
+    provider_configs: normalizeProviderConfigs(state.providerConfigs),
+  };
+
+  return JSON.stringify(snapshot);
+}
+
+function hasUnsavedChanges() {
+  return createSetupSnapshot() !== state.initialSetupSnapshot;
+}
+
 function buildPayload() {
   return {
     bot_name: fields.botName.value,
@@ -231,8 +280,7 @@ async function saveSetup(event) {
     }
 
     state.setupCompleted = true;
-    gatewayLink.classList.remove("hidden");
-    fields.completeButton.textContent = "Save Changes";
+    state.initialSetupSnapshot = createSetupSnapshot();
     setStatus("Setup saved. Redirecting to gateway...");
     window.setTimeout(() => {
       window.location.href = "/gateway";
@@ -272,19 +320,13 @@ async function verifyProvider(providerId, modelId, apiKey) {
 
 function setModeFromSettings() {
   if (state.setupCompleted) {
-    state.openedFromCompletedSetup = true;
     showConfigView();
-    fields.completeButton.textContent = "Save Changes";
-    gatewayLink.classList.remove("hidden");
-    fields.backToLandingButton.textContent = "Back to Gateway";
+    fields.completeButton.textContent = "Apply and Back to Gateway";
     return;
   }
 
-  state.openedFromCompletedSetup = false;
   showLandingView();
-  fields.completeButton.textContent = "Save and Continue";
-  gatewayLink.classList.add("hidden");
-  fields.backToLandingButton.textContent = "Back";
+  fields.completeButton.textContent = "Apply and Back to Gateway";
 }
 
 async function loadPage() {
@@ -312,6 +354,7 @@ async function loadPage() {
     renderProviderOptions();
     renderConfiguredProviders();
     setModeFromSettings();
+    state.initialSetupSnapshot = createSetupSnapshot();
     setStatus("Setup data loaded.");
   } catch (error) {
     setStatus(error.message, true);
@@ -385,23 +428,34 @@ function startFromScratch() {
   setStatus("Configure your assistant, then save to continue.");
 }
 
-function returnToLanding() {
-  if (state.openedFromCompletedSetup) {
-    window.location.href = "/gateway";
+function cancelSetupChanges() {
+  if (hasUnsavedChanges()) {
+    const shouldDiscard = window.confirm("Discard unsaved changes and return to gateway?");
+    if (!shouldDiscard) {
+      return;
+    }
+  }
+
+  window.location.href = "/gateway";
+}
+
+function handleEscapeToGateway(event) {
+  if (event.key !== "Escape") {
     return;
   }
 
-  showLandingView();
-  setStatus("Pick one path to continue.");
+  event.preventDefault();
+  cancelSetupChanges();
 }
 
 fields.providerSelect.addEventListener("change", () => {
   renderModelOptions(fields.providerSelect.value);
+  renderProviderApiHelp(fields.providerSelect.value);
 });
 
 fields.systemPrompt.addEventListener("input", updateSystemPromptCounter);
 fields.startScratchButton.addEventListener("click", startFromScratch);
-fields.backToLandingButton.addEventListener("click", returnToLanding);
+fields.cancelButton.addEventListener("click", cancelSetupChanges);
 
 fields.braindumpDropzone.addEventListener("click", openFilePicker);
 fields.braindumpDropzone.addEventListener("keydown", handleDropzoneKeydown);
@@ -453,4 +507,5 @@ fields.activeProviderSelect.addEventListener("change", () => {
 });
 
 form.addEventListener("submit", saveSetup);
+document.addEventListener("keydown", handleEscapeToGateway);
 window.addEventListener("load", loadPage);

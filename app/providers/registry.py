@@ -21,6 +21,7 @@ def get_provider_options() -> list[dict[str, object]]:
             {
                 "id": provider.provider_id,
                 "label": provider.display_name,
+                "api_key_url": provider.api_key_url,
                 "models": provider.available_models,
             }
         )
