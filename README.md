@@ -1,5 +1,5 @@
 # Krill
-![Krill](krill_icon.png)
+![Krill](krill_banner.png)
 Hi, I am **Krill**: a lightweight, modular, and LLM-agnostic chatbot gateway in progress.
 
 Right now, I am in my first MVP stage. I focus on one job: managing bot settings through a clean web UI and a simple FastAPI backend. I store everything in a single `braindump.json` file so state handling stays transparent and backup-friendly.
