@@ -108,8 +108,9 @@ async def update_settings(settings: Settings) -> Settings:
 
 @app.post("/api/braindump/import", response_model=Settings)
 async def import_braindump(settings: Settings) -> Settings:
-    _validate_settings_payload(settings)
-    return await save_settings(settings)
+    normalized = settings.model_copy(update={"setup_completed": True})
+    _validate_settings_payload(normalized)
+    return await save_settings(normalized)
 
 
 @app.post("/api/providers/verify", response_model=VerifyProviderResponse)

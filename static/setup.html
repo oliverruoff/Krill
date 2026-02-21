@@ -9,28 +9,41 @@
   <body>
     <main class="app-shell">
       <section class="card">
-        <h1>Krill Setup</h1>
-        <p class="subtitle">Finish setup to enter your gateway.</p>
+        <div id="setup-landing" class="setup-landing">
+          <h1 class="setup-title">Welcome to Krill</h1>
+          <p class="subtitle">Pick one path to get started.</p>
 
-        <form id="setup-form" novalidate>
-          <h2>Bootstrap State</h2>
-          <p class="subtitle">Start fresh or import an existing braindump file.</p>
+          <div class="setup-choice-grid">
+            <section class="setup-choice-card">
+              <h2 class="setup-choice-title">New here?</h2>
+              <p class="setup-choice-copy">Start from scratch and configure your assistant step by step.</p>
+              <button type="button" id="start-scratch-btn" class="setup-choice-btn">Start from Scratch</button>
+            </section>
 
-          <div class="actions">
-            <button type="button" id="start-scratch-btn" class="secondary">Start from Scratch</button>
+            <section class="setup-choice-card">
+              <h2 class="setup-choice-title">Have an existing braindump?</h2>
+              <p class="setup-choice-copy">Drop your file here or click the area to browse.</p>
+              <input id="braindump_file" class="hidden" type="file" accept="application/json,.json" />
+              <div id="braindump_dropzone" class="dropzone dropzone-large" role="button" tabindex="0" aria-label="Upload braindump file">
+                Drop braindump.json here
+                <span class="dropzone-subtext">or click to choose a file</span>
+              </div>
+            </section>
           </div>
+        </div>
 
-          <label for="braindump_file">Import braindump.json</label>
-          <input id="braindump_file" type="file" accept="application/json,.json" />
-          <div id="braindump_dropzone" class="dropzone">Drag and drop braindump.json here</div>
-          <button type="button" id="import-braindump-btn">Import Braindump</button>
+        <form id="setup-form" class="hidden" novalidate>
+          <div class="setup-form-topbar">
+            <h1 class="setup-title">Setup</h1>
+            <button type="button" id="back-to-landing-btn" class="secondary">Back</button>
+          </div>
 
           <h2>Base Settings</h2>
 
-          <label for="bot_name">Bot Name</label>
+          <label for="bot_name">Name your assistant</label>
           <input id="bot_name" type="text" maxlength="15" required />
 
-          <label for="system_prompt">System Prompt <span id="system_prompt_count" class="count-hint">0/200</span></label>
+          <label for="system_prompt">How should Krill behave? <span id="system_prompt_count" class="count-hint">0/200</span></label>
           <textarea id="system_prompt" maxlength="200" rows="3" required></textarea>
 
           <h2>Provider Configuration</h2>
@@ -55,7 +68,7 @@
           <select id="active_provider_select"></select>
 
           <div class="actions">
-            <button type="submit" id="complete-btn">Complete Setup</button>
+            <button type="submit" id="complete-btn">Save and Continue</button>
             <a class="button-link secondary hidden" id="gateway-link" href="/gateway">Go to Gateway</a>
           </div>
 
@@ -63,6 +76,8 @@
         </form>
       </section>
     </main>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
     <script src="/static/js/setup.js"></script>
   </body>

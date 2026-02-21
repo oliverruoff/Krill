@@ -1,12 +1,14 @@
 const form = document.getElementById("setup-form");
+const landingView = document.getElementById("setup-landing");
 const statusNode = document.getElementById("status");
+const toastNode = document.getElementById("toast");
 const gatewayLink = document.getElementById("gateway-link");
 
 const fields = {
   startScratchButton: document.getElementById("start-scratch-btn"),
+  backToLandingButton: document.getElementById("back-to-landing-btn"),
   braindumpFileInput: document.getElementById("braindump_file"),
   braindumpDropzone: document.getElementById("braindump_dropzone"),
-  importBraindumpButton: document.getElementById("import-braindump-btn"),
   botName: document.getElementById("bot_name"),
   systemPrompt: document.getElementById("system_prompt"),
   systemPromptCount: document.getElementById("system_prompt_count"),
@@ -24,11 +26,36 @@ const state = {
   providerConfigs: {},
   activeProviderId: "",
   setupCompleted: false,
+  openedFromCompletedSetup: false,
+  toastTimerId: null,
 };
 
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.className = isError ? "error" : "ok";
+}
+
+function showToast(message) {
+  if (state.toastTimerId) {
+    window.clearTimeout(state.toastTimerId);
+  }
+
+  toastNode.textContent = message;
+  toastNode.classList.remove("hidden");
+  state.toastTimerId = window.setTimeout(() => {
+    toastNode.classList.add("hidden");
+    state.toastTimerId = null;
+  }, 1600);
+}
+
+function showLandingView() {
+  landingView.classList.remove("hidden");
+  form.classList.add("hidden");
+}
+
+function showConfigView() {
+  landingView.classList.add("hidden");
+  form.classList.remove("hidden");
 }
 
 function updateSystemPromptCounter() {
@@ -37,8 +64,10 @@ function updateSystemPromptCounter() {
 }
 
 function setImportingState(isImporting) {
-  fields.importBraindumpButton.disabled = isImporting;
   fields.startScratchButton.disabled = isImporting;
+  fields.backToLandingButton.disabled = isImporting;
+  fields.braindumpDropzone.classList.toggle("disabled", isImporting);
+  fields.braindumpFileInput.disabled = isImporting;
 }
 
 function getProviderById(providerId) {
@@ -142,7 +171,7 @@ async function addOrUpdateProvider() {
   }
 
   fields.addProviderButton.disabled = true;
-  setStatus("checking API key.");
+  setStatus("Checking API key...");
 
   try {
     await verifyProvider(providerId, modelId, apiKey);
@@ -157,7 +186,7 @@ async function addOrUpdateProvider() {
     }
 
     renderConfiguredProviders();
-    setStatus("Provider verified and saved in setup form.");
+    setStatus("Provider verified and ready.");
   } catch (error) {
     setStatus(error.message, true);
   } finally {
@@ -198,7 +227,7 @@ async function saveSetup(event) {
     });
 
     if (!response.ok) {
-      throw new Error("Setup save failed. Check provider/model/api key.");
+      throw new Error("Setup save failed. Check provider, model, and API key.");
     }
 
     state.setupCompleted = true;
@@ -207,7 +236,7 @@ async function saveSetup(event) {
     setStatus("Setup saved. Redirecting to gateway...");
     window.setTimeout(() => {
       window.location.href = "/gateway";
-    }, 500);
+    }, 550);
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -241,6 +270,23 @@ async function verifyProvider(providerId, modelId, apiKey) {
   throw new Error(message);
 }
 
+function setModeFromSettings() {
+  if (state.setupCompleted) {
+    state.openedFromCompletedSetup = true;
+    showConfigView();
+    fields.completeButton.textContent = "Save Changes";
+    gatewayLink.classList.remove("hidden");
+    fields.backToLandingButton.textContent = "Back to Gateway";
+    return;
+  }
+
+  state.openedFromCompletedSetup = false;
+  showLandingView();
+  fields.completeButton.textContent = "Save and Continue";
+  gatewayLink.classList.add("hidden");
+  fields.backToLandingButton.textContent = "Back";
+}
+
 async function loadPage() {
   try {
     const [providersResponse, settingsResponse] = await Promise.all([
@@ -258,62 +304,29 @@ async function loadPage() {
     fields.botName.value = settings.bot_name ?? "";
     fields.systemPrompt.value = settings.system_prompt ?? "";
     updateSystemPromptCounter();
+
     state.providerConfigs = settings.provider_configs ?? {};
     state.activeProviderId = settings.active_provider_id ?? "";
     state.setupCompleted = settings.setup_completed ?? false;
 
     renderProviderOptions();
     renderConfiguredProviders();
-
-    if (state.setupCompleted) {
-      fields.completeButton.textContent = "Save Changes";
-      gatewayLink.classList.remove("hidden");
-    }
-
+    setModeFromSettings();
     setStatus("Setup data loaded.");
   } catch (error) {
     setStatus(error.message, true);
   }
 }
 
-async function startFromScratch() {
-  const confirmed = window.confirm(
-    "Start from scratch? This will immediately replace your current braindump state."
-  );
-
-  if (!confirmed) {
-    setStatus("Start from scratch cancelled.");
-    return;
-  }
-
-  setImportingState(true);
-  setStatus("Resetting state...");
-
-  try {
-    const response = await fetch("/api/reset", { method: "POST" });
-    if (!response.ok) {
-      throw new Error("Failed to reset settings.");
-    }
-
-    await loadPage();
-    setStatus("Started from scratch.");
-  } catch (error) {
-    setStatus(error.message, true);
-  } finally {
-    setImportingState(false);
+function openFilePicker() {
+  if (!fields.braindumpFileInput.disabled) {
+    fields.braindumpFileInput.click();
   }
 }
 
-function setFile(file) {
-  const dataTransfer = new DataTransfer();
-  dataTransfer.items.add(file);
-  fields.braindumpFileInput.files = dataTransfer.files;
-}
-
-async function importBraindump() {
-  const file = fields.braindumpFileInput.files?.[0];
+async function importBraindumpFile(file) {
   if (!file) {
-    setStatus("Please choose a braindump.json file first.", true);
+    setStatus("Please choose a braindump.json file.", true);
     return;
   }
 
@@ -323,6 +336,7 @@ async function importBraindump() {
   try {
     const text = await file.text();
     const payload = JSON.parse(text);
+    payload.setup_completed = true;
 
     const response = await fetch("/api/braindump/import", {
       method: "POST",
@@ -344,13 +358,41 @@ async function importBraindump() {
       throw new Error(detail);
     }
 
-    await loadPage();
-    setStatus("Braindump imported and applied.");
+    showToast("Braindump loaded");
+    setStatus("Braindump imported. Redirecting to gateway...");
+    window.setTimeout(() => {
+      window.location.href = "/gateway";
+    }, 800);
   } catch (error) {
-    setStatus(error.message || "Invalid braindump.json file.", true);
+    const message = error.message || "Invalid braindump.json file.";
+    setStatus(message, true);
+    showToast(message);
   } finally {
+    fields.braindumpFileInput.value = "";
     setImportingState(false);
   }
+}
+
+function handleDropzoneKeydown(event) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    openFilePicker();
+  }
+}
+
+function startFromScratch() {
+  showConfigView();
+  setStatus("Configure your assistant, then save to continue.");
+}
+
+function returnToLanding() {
+  if (state.openedFromCompletedSetup) {
+    window.location.href = "/gateway";
+    return;
+  }
+
+  showLandingView();
+  setStatus("Pick one path to continue.");
 }
 
 fields.providerSelect.addEventListener("change", () => {
@@ -358,9 +400,18 @@ fields.providerSelect.addEventListener("change", () => {
 });
 
 fields.systemPrompt.addEventListener("input", updateSystemPromptCounter);
-
 fields.startScratchButton.addEventListener("click", startFromScratch);
-fields.importBraindumpButton.addEventListener("click", importBraindump);
+fields.backToLandingButton.addEventListener("click", returnToLanding);
+
+fields.braindumpDropzone.addEventListener("click", openFilePicker);
+fields.braindumpDropzone.addEventListener("keydown", handleDropzoneKeydown);
+
+fields.braindumpFileInput.addEventListener("change", () => {
+  const file = fields.braindumpFileInput.files?.[0];
+  if (file) {
+    importBraindumpFile(file);
+  }
+});
 
 fields.braindumpDropzone.addEventListener("dragover", (event) => {
   event.preventDefault();
@@ -376,12 +427,9 @@ fields.braindumpDropzone.addEventListener("drop", (event) => {
   fields.braindumpDropzone.classList.remove("dropzone-active");
 
   const file = event.dataTransfer?.files?.[0];
-  if (!file) {
-    return;
+  if (file) {
+    importBraindumpFile(file);
   }
-
-  setFile(file);
-  setStatus(`Selected file: ${file.name}`);
 });
 
 fields.addProviderButton.addEventListener("click", addOrUpdateProvider);
