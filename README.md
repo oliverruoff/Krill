@@ -61,6 +61,7 @@ Open `http://127.0.0.1:8000` to access the settings page.
 - `GET /setup` -> setup and provider management view
 - `GET /gateway` -> main gateway view (redirects to setup if incomplete)
 - `GET /api/providers` -> returns available providers and model lists from registry
+- `POST /api/providers/verify` -> verifies provider credentials with a live test call
 - `GET /api/settings` -> returns current settings
 - `POST /api/settings` -> validates and saves settings
 - `POST /api/reset` -> resets all settings to defaults
@@ -82,6 +83,7 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 - Gateway becomes the default home page after setup completion
 - Gateway supports switching active provider/model quickly
 - Gateway allows reset and links back to setup for deeper adjustments
+- Add/Update provider verifies API key + model before accepting provider config
 
 ## Project Status
 

@@ -150,6 +150,7 @@ Frontend (vanilla):
 - `GET /setup` serves setup UI.
 - `GET /gateway` serves gateway UI or redirects to setup.
 - `GET /api/providers` returns providers and model lists.
+- `POST /api/providers/verify` verifies provider credentials against the upstream API.
 - `GET /api/settings` returns current settings.
 - `POST /api/settings` validates and persists full settings payload.
 - `POST /api/reset` resets settings to defaults.

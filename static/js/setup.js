@@ -116,7 +116,7 @@ function renderActiveProviderOptions() {
   fields.activeProviderSelect.value = state.activeProviderId;
 }
 
-function addOrUpdateProvider() {
+async function addOrUpdateProvider() {
   const providerId = fields.providerSelect.value;
   const modelId = fields.modelSelect.value;
   const apiKey = fields.providerApiKey.value;
@@ -126,17 +126,28 @@ function addOrUpdateProvider() {
     return;
   }
 
-  state.providerConfigs[providerId] = {
-    api_key: apiKey,
-    model: modelId,
-  };
+  fields.addProviderButton.disabled = true;
+  setStatus("checking API key.");
 
-  if (!state.activeProviderId) {
-    state.activeProviderId = providerId;
+  try {
+    await verifyProvider(providerId, modelId, apiKey);
+
+    state.providerConfigs[providerId] = {
+      api_key: apiKey,
+      model: modelId,
+    };
+
+    if (!state.activeProviderId) {
+      state.activeProviderId = providerId;
+    }
+
+    renderConfiguredProviders();
+    setStatus("Provider verified and saved in setup form.");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    fields.addProviderButton.disabled = false;
   }
-
-  renderConfiguredProviders();
-  setStatus("Provider added/updated.");
 }
 
 function removeProvider(providerId) {
@@ -185,6 +196,34 @@ async function saveSetup(event) {
   } catch (error) {
     setStatus(error.message, true);
   }
+}
+
+async function verifyProvider(providerId, modelId, apiKey) {
+  const response = await fetch("/api/providers/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider_id: providerId,
+      model: modelId,
+      api_key: apiKey,
+    }),
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  let message = "Provider verification failed.";
+  try {
+    const data = await response.json();
+    if (typeof data.detail === "string") {
+      message = data.detail;
+    }
+  } catch (error) {
+    message = "Provider verification failed.";
+  }
+
+  throw new Error(message);
 }
 
 async function loadPage() {

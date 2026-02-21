@@ -8,3 +8,6 @@ class LLMProvider(Protocol):
 
     async def generate(self, prompt: str, system_prompt: str) -> str:
         ...
+
+    async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
+        ...

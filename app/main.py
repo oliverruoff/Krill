@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import Settings, ensure_settings_file, load_settings, save_settings
-from .providers import get_provider_model_ids, get_provider_options, is_supported_provider
+from .providers import get_provider, get_provider_model_ids, get_provider_options, is_supported_provider
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,6 +26,17 @@ class ProviderOption(BaseModel):
     id: str
     label: str
     models: list[ModelOption]
+
+
+class VerifyProviderRequest(BaseModel):
+    provider_id: str
+    model: str
+    api_key: str
+
+
+class VerifyProviderResponse(BaseModel):
+    ok: bool
+    detail: str
 
 
 @app.on_event("startup")
@@ -76,6 +87,26 @@ async def update_settings(settings: Settings) -> Settings:
         )
 
     return await save_settings(settings)
+
+
+@app.post("/api/providers/verify", response_model=VerifyProviderResponse)
+async def verify_provider(payload: VerifyProviderRequest) -> VerifyProviderResponse:
+    if not is_supported_provider(payload.provider_id):
+        raise HTTPException(status_code=422, detail="Unsupported LLM provider.")
+
+    model_ids = get_provider_model_ids(payload.provider_id)
+    if payload.model not in model_ids:
+        raise HTTPException(status_code=422, detail="Unsupported model for provider.")
+
+    provider = get_provider(payload.provider_id)
+    if provider is None:
+        raise HTTPException(status_code=422, detail="Provider not found.")
+
+    ok, detail = await provider.verify(payload.model, payload.api_key)
+    if not ok:
+        raise HTTPException(status_code=422, detail=detail)
+
+    return VerifyProviderResponse(ok=True, detail=detail)
 
 
 @app.post("/api/reset", response_model=Settings)

@@ -35,3 +35,7 @@ def get_provider_model_ids(provider_id: str) -> set[str]:
         return set()
 
     return {model["id"] for model in provider.available_models}
+
+
+def get_provider(provider_id: str) -> LLMProvider | None:
+    return _PROVIDERS.get(provider_id)

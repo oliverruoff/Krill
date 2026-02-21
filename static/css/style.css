@@ -130,6 +130,11 @@ button:hover {
   background: var(--accent-strong);
 }
 
+button:disabled {
+  background: #95a2b6;
+  cursor: not-allowed;
+}
+
 .button-link {
   margin-top: 0.4rem;
   border: 0;

@@ -10,3 +10,9 @@ class DummyProvider(LLMProvider):
 
     async def generate(self, prompt: str, system_prompt: str) -> str:
         return f"[dummy] {prompt}"
+
+    async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
+        if model != "dummy-basic":
+            return False, "Unsupported dummy model."
+
+        return True, "Dummy provider verified."

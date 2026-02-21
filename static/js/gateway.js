@@ -102,7 +102,7 @@ function renderActiveProviderDetails(providerId) {
   fields.activeApiKey.value = config.api_key || "";
 }
 
-function addOrUpdateProvider() {
+async function addOrUpdateProvider() {
   const providerId = fields.addProviderSelect.value;
   const modelId = fields.addModelSelect.value;
   const apiKey = fields.addApiKey.value;
@@ -112,13 +112,24 @@ function addOrUpdateProvider() {
     return;
   }
 
-  state.providerConfigs[providerId] = {
-    api_key: apiKey,
-    model: modelId,
-  };
+  fields.addProviderButton.disabled = true;
+  setStatus("checking API key.");
 
-  renderActiveProviderOptions(fields.activeProviderSelect.value || providerId);
-  setStatus("Provider added/updated. Save changes to persist.");
+  try {
+    await verifyProvider(providerId, modelId, apiKey);
+
+    state.providerConfigs[providerId] = {
+      api_key: apiKey,
+      model: modelId,
+    };
+
+    renderActiveProviderOptions(fields.activeProviderSelect.value || providerId);
+    setStatus("Provider verified and added. Save changes to persist.");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    fields.addProviderButton.disabled = false;
+  }
 }
 
 function syncActiveProviderConfig() {
@@ -204,6 +215,34 @@ async function loadGateway() {
   } catch (error) {
     setStatus(error.message, true);
   }
+}
+
+async function verifyProvider(providerId, modelId, apiKey) {
+  const response = await fetch("/api/providers/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider_id: providerId,
+      model: modelId,
+      api_key: apiKey,
+    }),
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  let message = "Provider verification failed.";
+  try {
+    const data = await response.json();
+    if (typeof data.detail === "string") {
+      message = data.detail;
+    }
+  } catch (error) {
+    message = "Provider verification failed.";
+  }
+
+  throw new Error(message);
 }
 
 fields.addProviderSelect.addEventListener("change", () => {
