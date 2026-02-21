@@ -161,7 +161,7 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
         try:
             text, used_tokens = await provider.generate(
                 prompt=payload.message,
-                system_prompt=settings.system_prompt,
+                system_prompt=_compose_runtime_system_prompt(settings),
                 model=provider_config.model,
                 api_key=provider_config.api_key,
                 history=history,
@@ -242,6 +242,14 @@ def _is_setup_complete(settings: Settings) -> bool:
 
 def _sse(event_name: str, payload: dict[str, object]) -> str:
     return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
+
+
+def _compose_runtime_system_prompt(settings: Settings) -> str:
+    invisible_context = (
+        f"You are Krill assistant named '{settings.bot_name}'. "
+        f"This is the system prompt your user provided: {settings.system_prompt}"
+    )
+    return invisible_context
 
 
 def _chunk_text(text: str) -> list[str]:

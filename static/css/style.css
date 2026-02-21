@@ -73,6 +73,13 @@ label {
   font-weight: 600;
 }
 
+.count-hint {
+  margin-left: 0.35rem;
+  font-weight: 500;
+  color: #6c7b91;
+  font-size: 0.82rem;
+}
+
 input,
 select,
 textarea {

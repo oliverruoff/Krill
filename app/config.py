@@ -19,7 +19,7 @@ class ProviderConfig(BaseModel):
 
 class Settings(BaseModel):
     bot_name: str = Field(default="MyBot", max_length=15)
-    system_prompt: str = Field(default="You are a helpful assistant.", max_length=100)
+    system_prompt: str = Field(default="Talk english. Be playful, friendly and use emojis! :).", max_length=200)
     setup_completed: bool = False
     active_provider_id: str = ""
     provider_configs: dict[str, ProviderConfig] = Field(default_factory=dict)

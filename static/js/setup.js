@@ -9,6 +9,7 @@ const fields = {
   importBraindumpButton: document.getElementById("import-braindump-btn"),
   botName: document.getElementById("bot_name"),
   systemPrompt: document.getElementById("system_prompt"),
+  systemPromptCount: document.getElementById("system_prompt_count"),
   providerSelect: document.getElementById("provider_select"),
   modelSelect: document.getElementById("model_select"),
   providerApiKey: document.getElementById("provider_api_key"),
@@ -28,6 +29,11 @@ const state = {
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.className = isError ? "error" : "ok";
+}
+
+function updateSystemPromptCounter() {
+  const used = fields.systemPrompt.value.length;
+  fields.systemPromptCount.textContent = `${used}/200`;
 }
 
 function setImportingState(isImporting) {
@@ -251,6 +257,7 @@ async function loadPage() {
 
     fields.botName.value = settings.bot_name ?? "";
     fields.systemPrompt.value = settings.system_prompt ?? "";
+    updateSystemPromptCounter();
     state.providerConfigs = settings.provider_configs ?? {};
     state.activeProviderId = settings.active_provider_id ?? "";
     state.setupCompleted = settings.setup_completed ?? false;
@@ -349,6 +356,8 @@ async function importBraindump() {
 fields.providerSelect.addEventListener("change", () => {
   renderModelOptions(fields.providerSelect.value);
 });
+
+fields.systemPrompt.addEventListener("input", updateSystemPromptCounter);
 
 fields.startScratchButton.addEventListener("click", startFromScratch);
 fields.importBraindumpButton.addEventListener("click", importBraindump);

@@ -109,12 +109,14 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 ## Current UI Flow
 
 - Setup appears until first valid provider/model/api-key is saved
+- Setup system prompt supports up to 200 characters with a live counter
 - Gateway becomes the default home page after setup completion
 - Gateway now focuses on a central chat window with streamed responses
 - Top-right Settings button in gateway navigates to `/setup`
 - Gateway includes a Braindump button to download current state
 - Chat requests are continuous within the current page session (history is sent each turn)
 - Token usage is shown in the top-right of chat based on selected model token limits
+- Chat runtime includes an invisible starter instruction with bot name + configured system prompt
 - Provider/model management remains in setup for now
 - Chat thread auto-scrolls to newest messages and renders Markdown
 - Press `Enter` to send and `Shift+Enter` for a new line
