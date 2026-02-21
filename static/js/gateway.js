@@ -25,7 +25,12 @@ function addMessage(role, text = "") {
 
   const bubble = document.createElement("div");
   bubble.className = "chat-bubble";
-  bubble.textContent = text;
+
+  if (role === "assistant") {
+    bubble.innerHTML = renderMarkdown(text);
+  } else {
+    bubble.textContent = text;
+  }
 
   wrapper.appendChild(title);
   wrapper.appendChild(bubble);
@@ -33,6 +38,180 @@ function addMessage(role, text = "") {
   chatThread.scrollTop = chatThread.scrollHeight;
 
   return bubble;
+}
+
+function escapeHtml(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderInlineMarkdown(text) {
+  let output = text;
+  output = output.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  output = output.replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>");
+  output = output.replace(/`([^`]+)`/g, "<code>$1</code>");
+  output = output.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  output = output.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  output = output.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  return output;
+}
+
+function isTableSeparatorRow(line) {
+  const normalized = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  if (!normalized) {
+    return false;
+  }
+
+  const parts = normalized.split("|").map((part) => part.trim());
+  if (parts.length === 0) {
+    return false;
+  }
+
+  return parts.every((part) => /^:?-{3,}:?$/.test(part));
+}
+
+function parseTableCells(line) {
+  const normalized = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return normalized.split("|").map((cell) => renderInlineMarkdown(cell.trim()));
+}
+
+function renderMarkdown(rawText) {
+  const escaped = escapeHtml(rawText || "");
+  const lines = escaped.split("\n");
+  const html = [];
+  let inCodeBlock = false;
+  let inUlList = false;
+  let inOlList = false;
+
+  function closeOpenLists() {
+    if (inUlList) {
+      html.push("</ul>");
+      inUlList = false;
+    }
+
+    if (inOlList) {
+      html.push("</ol>");
+      inOlList = false;
+    }
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("```")) {
+      if (!inCodeBlock) {
+        closeOpenLists();
+        html.push("<pre><code>");
+        inCodeBlock = true;
+      } else {
+        html.push("</code></pre>");
+        inCodeBlock = false;
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      html.push(`${line}\n`);
+      continue;
+    }
+
+    if (trimmed.includes("|") && i + 1 < lines.length && isTableSeparatorRow(lines[i + 1])) {
+      closeOpenLists();
+
+      const headerCells = parseTableCells(trimmed);
+      html.push("<table><thead><tr>");
+      headerCells.forEach((cell) => {
+        html.push(`<th>${cell}</th>`);
+      });
+      html.push("</tr></thead><tbody>");
+
+      i += 2;
+      while (i < lines.length) {
+        const rowLine = lines[i];
+        if (!rowLine.trim() || !rowLine.includes("|")) {
+          i -= 1;
+          break;
+        }
+
+        const rowCells = parseTableCells(rowLine);
+        html.push("<tr>");
+        rowCells.forEach((cell) => {
+          html.push(`<td>${cell}</td>`);
+        });
+        html.push("</tr>");
+        i += 1;
+      }
+
+      html.push("</tbody></table>");
+      continue;
+    }
+
+    if (trimmed.startsWith("- ")) {
+      if (!inUlList) {
+        if (inOlList) {
+          html.push("</ol>");
+          inOlList = false;
+        }
+        html.push("<ul>");
+        inUlList = true;
+      }
+      html.push(`<li>${renderInlineMarkdown(trimmed.slice(2))}</li>`);
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.*)$/);
+    if (orderedMatch) {
+      if (!inOlList) {
+        if (inUlList) {
+          html.push("</ul>");
+          inUlList = false;
+        }
+        html.push("<ol>");
+        inOlList = true;
+      }
+      html.push(`<li>${renderInlineMarkdown(orderedMatch[1])}</li>`);
+      continue;
+    }
+
+    closeOpenLists();
+
+    if (/^---+$/.test(trimmed) || /^\*\*\*+$/.test(trimmed)) {
+      html.push("<hr>");
+      continue;
+    }
+
+    if (trimmed.startsWith("> ")) {
+      html.push(`<blockquote>${renderInlineMarkdown(trimmed.slice(2))}</blockquote>`);
+      continue;
+    }
+
+    if (trimmed.length === 0) {
+      html.push("<br>");
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      html.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+      continue;
+    }
+
+    html.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
+  }
+
+  closeOpenLists();
+
+  if (inCodeBlock) {
+    html.push("</code></pre>");
+  }
+
+  return html.join("");
 }
 
 function updateModelIndicator() {
@@ -105,7 +284,10 @@ function processSseBlock(block, assistantBubble) {
   }
 
   if (eventName === "token") {
-    assistantBubble.textContent += payload.text ?? "";
+    const currentText = assistantBubble.dataset.rawText ?? "";
+    const nextText = `${currentText}${payload.text ?? ""}`;
+    assistantBubble.dataset.rawText = nextText;
+    assistantBubble.innerHTML = renderMarkdown(nextText);
     chatThread.scrollTop = chatThread.scrollHeight;
     return { done: false, hasError: false };
   }
@@ -139,6 +321,7 @@ async function sendMessage(event) {
 
   addMessage("user", message);
   const assistantBubble = addMessage("assistant", "");
+  assistantBubble.dataset.rawText = "";
   chatInput.value = "";
 
   try {
@@ -192,8 +375,9 @@ async function sendMessage(event) {
 
     setStatus("Response complete.");
   } catch (error) {
-    if (!assistantBubble.textContent) {
-      assistantBubble.textContent = "Sorry, something went wrong.";
+    if (!assistantBubble.dataset.rawText) {
+      assistantBubble.dataset.rawText = "Sorry, something went wrong.";
+      assistantBubble.innerHTML = renderMarkdown(assistantBubble.dataset.rawText);
     }
 
     setStatus(error.message, true);
@@ -202,6 +386,15 @@ async function sendMessage(event) {
     chatInput.focus();
   }
 }
+
+chatInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    if (!sendButton.disabled) {
+      chatForm.requestSubmit();
+    }
+  }
+});
 
 chatForm.addEventListener("submit", sendMessage);
 window.addEventListener("load", loadGatewayMeta);

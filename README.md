@@ -84,6 +84,8 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 - Gateway now focuses on a central chat window with streamed responses
 - Top-right Settings button in gateway navigates to `/setup`
 - Provider/model management remains in setup for now
+- Chat thread auto-scrolls to newest messages and renders Markdown
+- Press `Enter` to send and `Shift+Enter` for a new line
 - Add/Update provider verifies API key + model before accepting provider config
 
 ## Project Status
