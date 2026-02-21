@@ -6,7 +6,7 @@ Guidance for coding agents working in `Krill`.
 - Current phase: settings-first MVP with provider registry scaffolding.
 - Backend entrypoint: `app/main.py` (`app = FastAPI(...)`).
 - Runtime state source: `data/braindump.json`.
-- Frontend assets: `static/index.html`, `static/css/style.css`, `static/js/main.js`.
+- Frontend assets: `static/setup.html`, `static/gateway.html`, `static/css/style.css`, `static/js/setup.js`, `static/js/gateway.js`.
 - Architecture direction: keep modular/lightweight; no chat runtime, MCP tools, or Docker yet.
 
 ## 2) Repository Layout
@@ -16,7 +16,7 @@ Guidance for coding agents working in `Krill`.
 - `app/providers/base.py`: unified provider interface contract.
 - `app/providers/dummy.py`: first provider implementation.
 - `app/providers/registry.py`: provider registration and lookup helpers.
-- `static/`: dependency-free frontend (2-step settings flow).
+- `static/`: dependency-free frontend (setup + gateway views).
 - `data/`: persisted runtime state (`braindump.json`).
 - `requirements.txt`: runtime dependencies (unpinned).
 
@@ -146,10 +146,14 @@ Frontend (vanilla):
 - Provider options shown to users come from `app/providers/registry.py`.
 - Add each new provider in its own file under `app/providers/`.
 - Register new providers in one place (`_PROVIDERS` in registry).
-- `GET /api/providers` returns providers for the dropdown.
+- `GET /` serves setup until complete, then gateway.
+- `GET /setup` serves setup UI.
+- `GET /gateway` serves gateway UI or redirects to setup.
+- `GET /api/providers` returns providers and model lists.
 - `GET /api/settings` returns current settings.
 - `POST /api/settings` validates and persists full settings payload.
-- Validate `llm_provider` against registry-supported IDs before saving.
+- `POST /api/reset` resets settings to defaults.
+- Validate provider IDs and model IDs against registry-supported values before saving.
 
 ## 9) Agent Change Management + Pre-PR
 - Keep scope tight to requested tasks.

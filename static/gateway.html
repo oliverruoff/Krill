@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Krill Gateway</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="card">
+        <h1>Krill Gateway</h1>
+        <p class="subtitle">Switch providers and models quickly.</p>
+
+        <form id="gateway-form" novalidate>
+          <h2>Gateway Settings</h2>
+
+          <label for="bot_name">Bot Name</label>
+          <input id="bot_name" type="text" maxlength="15" required />
+
+          <label for="system_prompt">System Prompt</label>
+          <textarea id="system_prompt" maxlength="100" rows="3" required></textarea>
+
+          <label for="active_provider_select">Active Provider</label>
+          <select id="active_provider_select"></select>
+
+          <label for="active_model_select">Active Model</label>
+          <select id="active_model_select"></select>
+
+          <label for="active_api_key">API Key</label>
+          <input id="active_api_key" type="text" />
+
+          <h2>Add Another Provider</h2>
+
+          <label for="add_provider_select">Provider</label>
+          <select id="add_provider_select"></select>
+
+          <label for="add_model_select">Model</label>
+          <select id="add_model_select"></select>
+
+          <label for="add_api_key">API Key</label>
+          <input id="add_api_key" type="text" />
+
+          <button type="button" id="add-provider-btn">Add / Update Provider</button>
+
+          <div class="actions">
+            <button type="submit">Save Changes</button>
+            <a class="button-link secondary" href="/setup">Adjust Setup</a>
+            <button type="button" class="danger" id="reset-btn">Reset Everything</button>
+          </div>
+
+          <p id="status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+    </main>
+
+    <script src="/static/js/gateway.js"></script>
+  </body>
+</html>

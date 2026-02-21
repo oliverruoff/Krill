@@ -101,6 +101,10 @@ textarea:focus {
   flex: 1;
 }
 
+.actions .button-link {
+  flex: 1;
+}
+
 .secondary {
   color: var(--text);
   background: #e7edf5;
@@ -124,6 +128,52 @@ button {
 
 button:hover {
   background: var(--accent-strong);
+}
+
+.button-link {
+  margin-top: 0.4rem;
+  border: 0;
+  border-radius: 10px;
+  padding: 0.72rem 0.95rem;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  text-align: center;
+  color: #fff;
+  background: var(--accent);
+}
+
+.button-link:hover {
+  background: var(--accent-strong);
+}
+
+.danger {
+  background: #c9342f;
+}
+
+.danger:hover {
+  background: #a92724;
+}
+
+.ghost {
+  margin-top: 0;
+  padding: 0.35rem 0.65rem;
+}
+
+.provider-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.provider-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.92rem;
 }
 
 #status {

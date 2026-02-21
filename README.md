@@ -9,6 +9,7 @@ Right now, I am in my first MVP stage. I focus on one job: managing bot settings
 
 - Serve a dependency-free settings UI (`HTML/CSS/JS`)
 - Expose settings APIs via FastAPI
+- Expose provider registry APIs via FastAPI
 - Validate settings with Pydantic
 - Persist runtime state in `data/braindump.json`
 
@@ -56,10 +57,13 @@ Open `http://127.0.0.1:8000` to access the settings page.
 
 ## Current API
 
-- `GET /` -> serves the settings page
-- `GET /api/providers` -> returns available providers from registry
+- `GET /` -> serves setup page until complete, then serves gateway page
+- `GET /setup` -> setup and provider management view
+- `GET /gateway` -> main gateway view (redirects to setup if incomplete)
+- `GET /api/providers` -> returns available providers and model lists from registry
 - `GET /api/settings` -> returns current settings
 - `POST /api/settings` -> validates and saves settings
+- `POST /api/reset` -> resets all settings to defaults
 
 ## Provider Architecture (LLM-Agnostic)
 
@@ -67,14 +71,17 @@ Krill now includes a simple provider structure designed for easy extension:
 
 - `app/providers/base.py` -> unified provider interface
 - `app/providers/dummy.py` -> first provider implementation
+- `app/providers/gemini.py` -> Gemini provider metadata + model list
 - `app/providers/registry.py` -> list of currently available providers
 
 To add a provider, add one new file in `app/providers/` and register it in `app/providers/registry.py`.
 
 ## Current UI Flow
 
-- Step 1: Bot name + system prompt
-- Step 2: Provider dropdown + API key
+- Setup appears until first valid provider/model/api-key is saved
+- Gateway becomes the default home page after setup completion
+- Gateway supports switching active provider/model quickly
+- Gateway allows reset and links back to setup for deeper adjustments
 
 ## Project Status
 
