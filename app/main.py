@@ -51,6 +51,19 @@ class ChatTurn(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=5000)
     history: list[ChatTurn] = Field(default_factory=list)
+    memory_block: str = Field(default="", max_length=8000)
+
+
+class CompactChatRequest(BaseModel):
+    history: list[ChatTurn] = Field(default_factory=list)
+    target_token_limit: int = Field(default=0, ge=0)
+    memory_block: str = Field(default="", max_length=8000)
+
+
+class CompactChatResponse(BaseModel):
+    memory_block: str
+    history: list[ChatTurn]
+    used_tokens: int | None = None
 
 
 @app.on_event("startup")
@@ -174,7 +187,7 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
         try:
             text, used_tokens = await provider.generate(
                 prompt=payload.message,
-                system_prompt=_compose_runtime_system_prompt(settings),
+                system_prompt=_compose_runtime_system_prompt(settings, payload.memory_block),
                 model=provider_config.model,
                 api_key=provider_config.api_key,
                 history=history,
@@ -201,6 +214,44 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
             yield _sse("error", {"detail": str(exc)})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/chat/compact", response_model=CompactChatResponse)
+async def compact_chat(payload: CompactChatRequest) -> CompactChatResponse:
+    settings = await load_settings()
+    if not _is_setup_complete(settings):
+        raise HTTPException(status_code=422, detail="Setup is not complete.")
+
+    active_provider_id = settings.active_provider_id
+    provider_config = settings.provider_configs.get(active_provider_id)
+    if provider_config is None:
+        raise HTTPException(status_code=422, detail="Active provider is not configured.")
+
+    provider = get_provider(active_provider_id)
+    if provider is None:
+        raise HTTPException(status_code=422, detail="Active provider is unavailable.")
+
+    incoming_history = [turn.model_dump() for turn in payload.history]
+    if not incoming_history and not payload.memory_block.strip():
+        return CompactChatResponse(memory_block="", history=[])
+
+    try:
+        compacted_text, used_tokens = await provider.generate(
+            prompt=_build_compaction_prompt(payload.memory_block, payload.target_token_limit),
+            system_prompt=_compaction_system_prompt(),
+            model=provider_config.model,
+            api_key=provider_config.api_key,
+            history=incoming_history,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Compaction failed: {exc}") from exc
+
+    trimmed_history = payload.history[-4:] if len(payload.history) > 4 else payload.history
+    memory_block = compacted_text.strip()
+    if not memory_block:
+        raise HTTPException(status_code=422, detail="Compaction failed: Provider returned empty compact memory.")
+
+    return CompactChatResponse(memory_block=memory_block, history=trimmed_history, used_tokens=used_tokens)
 
 
 def _validate_provider_configs(settings: Settings) -> None:
@@ -253,12 +304,49 @@ def _sse(event_name: str, payload: dict[str, object]) -> str:
     return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
 
 
-def _compose_runtime_system_prompt(settings: Settings) -> str:
+def _compose_runtime_system_prompt(settings: Settings, memory_block: str = "") -> str:
     invisible_context = (
         f"You are Krill assistant named '{settings.bot_name}'. "
         f"This is the system prompt your user provided: {settings.system_prompt}"
     )
+
+    if memory_block.strip():
+        invisible_context = f"{invisible_context}\n\nCompacted conversation memory:\n{memory_block.strip()}"
+
     return invisible_context
+
+
+def _compaction_system_prompt() -> str:
+    return (
+        "You compress chat history into a durable memory block. "
+        "Keep only facts that matter for future turns: user preferences, goals, constraints, "
+        "decisions, unresolved items, and concrete context. "
+        "Do not invent facts. Keep compact wording and avoid filler."
+    )
+
+
+def _build_compaction_prompt(existing_memory: str, target_token_limit: int) -> str:
+    lines = [
+        "Create an updated compact memory block from the conversation history.",
+        "Return plain text only.",
+        "Use sections exactly in this order:",
+        "1) User profile and preferences",
+        "2) Confirmed facts and decisions",
+        "3) Open tasks and pending questions",
+        "4) Important style constraints",
+        "Keep it concise and dense.",
+    ]
+
+    if target_token_limit > 0:
+        lines.append(
+            f"This memory will support a model with {target_token_limit} token context, so keep memory lean."
+        )
+
+    if existing_memory.strip():
+        lines.append("Merge and refresh this previous memory block, keeping only still-relevant points:")
+        lines.append(existing_memory.strip())
+
+    return "\n".join(lines)
 
 
 def _chunk_text(text: str) -> list[str]:

@@ -4,9 +4,9 @@
   --text: #122033;
   --muted: #4d5b6f;
   --border: #d8e0ea;
-  --accent: #9366d2;
-  --accent-strong: #9d4bc8;
-  --accent-gradient: linear-gradient(120deg, #9366d2 0%, #9d4bc8 100%);
+  --accent: #FB9682;
+  --accent-strong: #68D7FC;
+  --accent-gradient: linear-gradient(120deg, #FB9682 0%, #68D7FC 100%);
   --error: #b42318;
   --ok: #027a48;
   --shadow: 0 12px 28px rgba(18, 32, 51, 0.08);
@@ -378,6 +378,30 @@ button:disabled {
   gap: 0.2rem;
 }
 
+.gateway-switchers {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.switch-field {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 150px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.switch-field select {
+  margin: 0;
+  padding: 0.4rem 0.45rem;
+  border-radius: 9px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--accent) 9%, #ffffff 91%);
+}
+
 .assistant-title {
   margin: 0;
   font-size: 1.05rem;
@@ -619,6 +643,49 @@ button:disabled {
   background: #fff;
 }
 
+.chat-bubble.is-loading {
+  display: flex;
+  align-items: center;
+  min-height: 2.1rem;
+}
+
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.typing-dots span {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 72%, #ffffff 28%);
+  opacity: 0.35;
+  animation: typing-dot-pulse 1s ease-in-out infinite;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing-dot-pulse {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+
+  40% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
 .chat-message.user .chat-bubble {
   border-color: color-mix(in srgb, var(--accent) 40%, #ffffff 60%);
   background: color-mix(in srgb, var(--accent) 15%, #ffffff 85%);
@@ -641,6 +708,20 @@ button:disabled {
 
   .gateway-banner {
     height: 42px;
+  }
+
+  .gateway-topbar {
+    flex-wrap: wrap;
+  }
+
+  .gateway-switchers {
+    width: 100%;
+    order: 4;
+  }
+
+  .switch-field {
+    flex: 1;
+    min-width: 0;
   }
 
   .assistant-title,

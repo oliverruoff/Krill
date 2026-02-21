@@ -15,6 +15,16 @@
           <p id="assistant-title" class="assistant-title">This is your personal assistant.</p>
           <p id="assistant-meta" class="assistant-meta">Loading assistant metadata...</p>
         </div>
+        <div class="gateway-switchers">
+          <label class="switch-field" for="header-provider-select">
+            <span>Provider</span>
+            <select id="header-provider-select"></select>
+          </label>
+          <label class="switch-field" for="header-model-select">
+            <span>Model</span>
+            <select id="header-model-select"></select>
+          </label>
+        </div>
         <div class="menu-wrap">
           <button type="button" id="menu-btn" class="icon-btn" aria-expanded="false" aria-controls="menu-popover" aria-label="Open menu">&#9881;</button>
           <div id="menu-popover" class="menu-popover hidden" role="menu">
@@ -46,6 +56,8 @@
         <p id="status" role="status" aria-live="polite"></p>
       </section>
     </main>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
     <script src="/static/js/gateway.js"></script>
   </body>

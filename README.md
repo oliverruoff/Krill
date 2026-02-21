@@ -94,6 +94,7 @@ Notes:
 - `POST /api/braindump/import` -> imports and replaces full state from a braindump payload
 - `GET /api/braindump/download` -> downloads the full `braindump.json`
 - `POST /api/chat/stream` -> streams chat response events (`meta`, `token`, `done`, `error`)
+- `POST /api/chat/compact` -> compacts chat memory into a reusable block + last 4 turns
 
 ## Provider Architecture (LLM-Agnostic)
 
@@ -117,7 +118,8 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 - Chat requests are continuous within the current page session (history is sent each turn)
 - Token usage is shown in the top-right of chat based on selected model token limits
 - Chat runtime includes an invisible starter instruction with bot name + configured system prompt
-- Provider/model management remains in setup for now
+- Gateway header includes live provider/model switchers for configured providers
+- Automatic memory compaction keeps continuity when context nears limits (>=75%) and before constrained model switches
 - Chat thread auto-scrolls to newest messages and renders Markdown
 - Press `Enter` to send and `Shift+Enter` for a new line
 - Add/Update provider verifies API key + model before accepting provider config
