@@ -1,156 +1,154 @@
 # AGENTS.md
-Agent guidance for contributors and coding agents in `Krill`.
-## 1) Project Snapshot
+Practical guidance for coding agents working in `Krill`.
+
+## 1) Project Overview
 - Stack: Python 3.11+, FastAPI, Uvicorn, Pydantic, vanilla HTML/CSS/JS.
 - Entrypoint: `app/main.py`.
-- Runtime state: `data/braindump.json`.
-- Key frontend files: `static/setup.html`, `static/gateway.html`, `static/css/style.css`, `static/js/setup.js`, `static/js/gateway.js`.
-- Image assets: `static/img/*`.
-- Architecture: lightweight monolith with provider-registry pattern.
-## 2) Repository Layout
-- `app/main.py`: API routes, static serving, chat stream, chat compaction.
-- `app/config.py`: settings models, persistence, normalization.
-- `app/providers/base.py`: provider interface.
-- `app/providers/openai.py`: OpenAI metadata/behavior.
-- `app/providers/gemini.py`: Gemini metadata/behavior.
-- `app/providers/openrouter.py`: OpenRouter metadata/behavior.
-- `app/providers/registry.py`: registration and lookup.
-- `static/`: setup/gateway UIs and scripts.
-- `data/`: persisted `braindump.json`.
-- `Dockerfile`, `docker-entrypoint.sh`: container runtime.
-## 3) External Instruction Files
+- Persistence: single state file `data/braindump.json`.
+- Product shape: setup UI + gateway UI + provider registry + tool (MCP) orchestration.
+
+## 2) Important Paths
+- `app/main.py`: API routes, SSE chat stream, settings validation.
+- `app/config.py`: Pydantic models + legacy normalization + save/load.
+- `app/providers/`: provider interface + implementations (`openai`, `gemini`, `openrouter`).
+- `app/mcps/`: tool plugins (`brave_search`, `git_ops`, `local_files`) + registry.
+- `app/tooling/orchestrator.py`: recursive sequential tool orchestration.
+- `static/setup.html`, `static/js/setup.js`: setup and advanced settings.
+- `static/gateway.html`, `static/js/gateway.js`: multi-chat gateway and live orchestration UI.
+- `static/css/style.css`: shared UI styling.
+
+## 3) External Agent Rule Files
 - `.cursorrules`: not present.
 - `.cursor/rules/`: not present.
 - `.github/copilot-instructions.md`: not present.
-- This `AGENTS.md` is the only in-repo agent rule file.
-## 4) Setup / Build / Run Commands
+- Therefore, this `AGENTS.md` is the canonical in-repo agent guide.
+
+## 4) Build / Run Commands
 Run from repo root: `C:\Users\olive\Documents\develop\Krill`
+
 Create venv:
 ```bash
 python -m venv .venv
 ```
+
 Install deps (PowerShell):
 ```bash
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
+
 Install deps (macOS/Linux):
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
 Run app:
 ```bash
 uvicorn app.main:app --reload --port 8055
 ```
-Backend sanity check:
+
+Backend compile sanity check:
 ```bash
 python -m compileall app
 ```
+
 Frontend JS syntax checks:
 ```bash
 node --check static/js/setup.js
 node --check static/js/gateway.js
 ```
-Docker build/run:
+
+Docker:
 ```bash
 docker build -t krill:latest .
 docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
-## 5) Test Commands
-Current state:
-- No committed `tests/` directory yet.
-- No committed `pytest` config yet.
-Install pytest when needed:
-```bash
-pip install pytest
-```
-Run full test suite:
+
+## 5) Lint / Format / Test Commands
+Current repository state:
+- No committed lint config (`ruff`, `flake8`, etc.)
+- No committed formatter config (`black`, `prettier`, etc.)
+- No committed `tests/` directory yet
+
+If tests are added, use pytest:
 ```bash
 pytest
 ```
-Run a single test file:
+
+Single test file:
 ```bash
-pytest tests/test_settings_api.py
+pytest tests/test_api.py
 ```
-Run a single test function (important):
+
+Single test function (important pattern):
 ```bash
-pytest tests/test_settings_api.py::test_post_settings_rejects_long_bot_name
+pytest tests/test_api.py::test_chat_stream_returns_sse
 ```
-Useful filters:
+
+Useful options:
 ```bash
 pytest -k settings
 pytest -x
+pytest -q
 ```
-## 6) Lint / Formatting
-Current state:
-- No committed lint/formatter config.
-Agent policy:
-- Match local style in nearby files.
-- Keep imports grouped `stdlib -> third-party -> local`.
-- Run `python -m compileall app` after backend edits.
-- Run `node --check` for changed frontend JS files.
-- Do not add lint tooling unless explicitly requested.
-If linting is requested, prefer:
-- `ruff` for lint + import sorting.
-- `black` or `ruff format` for formatting.
-## 7) Code Style Guidelines
-Python:
-- Use explicit imports; avoid wildcard imports.
-- Type parameters and return values.
-- Prefer concrete types over `Any`.
-- Keep helpers focused and side effects clear.
-- Use verb-oriented route/helper names.
-Naming:
-- `snake_case` for variables/functions.
-- `PascalCase` for classes/Pydantic models.
-- `UPPER_SNAKE_CASE` for constants.
-FastAPI / Pydantic:
-- Define request/response models explicitly.
+
+## 6) Code Style Guidelines
+
+### Python
+- Use explicit imports; no wildcard imports.
+- Prefer `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants.
+- Type hints are expected on new/changed functions.
+- Keep helpers focused and side effects obvious.
+- Keep async I/O non-blocking (`asyncio.to_thread` for blocking file operations).
+- Do not silently swallow exceptions; return actionable `HTTPException` details.
+
+### FastAPI / Pydantic
+- Define explicit request/response models.
 - Put constraints/defaults in `Field(...)`.
-- Prefer default FastAPI 422 behavior when possible.
-- Validate provider/model IDs against registry metadata.
-Error handling:
-- Fail fast on invalid state.
-- Do not silently swallow exceptions.
-- Return actionable HTTP error details.
-- Preserve existing behavior unless a change is requested.
-Async + IO:
-- Keep blocking file IO in `asyncio.to_thread(...)`.
-- Ensure parent directories exist before writes.
-- Keep startup initialization idempotent.
-Frontend:
-- No frameworks.
-- Keep JS functions small/composable.
-- Prefer `const`; use `let` only when reassignment is required.
-- Keep IDs/selectors stable and payload-aligned.
-- Preserve accessibility (`label`, semantic structure, `aria-live`).
-- Reuse existing CSS variables/classes.
-## 8) Provider + API Conventions
-- Provider metadata comes from `app/providers/registry.py`.
-- Add new providers in `app/providers/<provider>.py` and register once.
-- Setup model selection is dropdown-only from registered models.
-- Token limits are provider/model-defined.
-- `GET /` serves setup until complete, else gateway.
-- `GET /setup`, `GET /gateway` serve setup/gateway views.
-- `GET /api/providers` returns provider list + models.
-- `POST /api/providers/verify` verifies API key/model upstream.
-- `GET /api/settings` and `POST /api/settings` read/write persisted settings.
-- `POST /api/reset` resets defaults.
-- `POST /api/braindump/import` replaces state.
-- `GET /api/braindump/download` downloads `braindump.json`.
-- `POST /api/chat/stream` streams chat events.
-- `POST /api/chat/compact` performs memory compaction.
-## 9) Persistence Expectations
-- Persist both `active_provider_id` and `active_model_id` in settings.
-- Store provider API keys and selected models in `provider_configs`.
-- Normalize legacy payloads safely in `app/config.py`.
-- Never commit real API keys or secrets.
-## 10) Agent Workflow Checklist
-- Keep scope tight to user request.
-- Respect unrelated local changes; do not revert user work.
-- Prefer minimal diffs; preserve existing architecture.
-- After backend edits: run `python -m compileall app`.
-- After frontend JS edits: run `node --check` on changed files.
-- Smoke-test setup -> save -> gateway for behavior changes.
-- Update `README.md` for user-visible behavior changes.
+- Preserve backward compatibility through normalization in `app/config.py`.
+- Validate IDs against registries (providers/MCPs) where applicable.
+
+### Frontend (Vanilla JS)
+- Prefer `const`; use `let` only for reassignment.
+- Keep functions small and composable.
+- Keep API payload shape aligned with backend models.
+- Preserve accessibility attributes and semantic structure.
+- Avoid framework-like abstractions; follow existing style.
+
+### CSS / HTML
+- Reuse existing classes/variables before adding new primitives.
+- Keep visual changes subtle and consistent with current UI language.
+- Maintain responsive behavior (desktop + mobile).
+
+## 7) Naming / Architecture Conventions
+- Providers are registered once in `app/providers/registry.py`.
+- Tools (MCPs) are registered once in `app/mcps/registry.py`.
+- Orchestrator performs sequential recursive tool steps; do not bypass it for normal chat flows.
+- Runtime state is persisted via settings API to `braindump.json`.
+
+## 8) Error Handling Conventions
+- Fail fast on invalid inputs/state.
+- Emit clear user-facing messages for recoverable failures.
+- Keep hard tool errors explicit (`MCP hard error: ...`) unless changing behavior is requested.
+- Preserve existing SSE event contract unless explicitly changing it.
+
+## 9) Persistence Rules
+- `data/braindump.json` is the source of truth.
+- Never remove existing keys without migration/normalization support.
+- Any new persisted field must be normalized in `_normalize_legacy_settings`.
+- Keep setup save path from dropping unrelated state (chats, mcp configs, daily usage, etc.).
+
+## 10) Security / Secrets
+- Do not commit real secrets.
+- Be careful when logging token/key fields from `provider_configs` or MCP params.
+- Git MCP intentionally handles sensitive key material; avoid printing private key content.
+
+## 11) Agent Workflow Checklist
+- Read nearby code before editing.
+- Keep diffs minimal and scoped to request.
+- Do not revert unrelated user changes.
+- After backend edits: `python -m compileall app`.
+- After frontend JS edits: `node --check` on changed files.
+- Update `README.md` when user-facing behavior or architecture changes.
+- Prefer incremental, verifiable changes over broad rewrites.
