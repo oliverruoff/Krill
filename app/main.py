@@ -24,6 +24,7 @@ from .mcps.git_ops import (
 )
 from .mcps import get_mcp, get_mcp_options, is_supported_mcp
 from .providers import get_provider, get_provider_model_limit, get_provider_options, is_supported_provider
+from .runtime_prompt import compose_runtime_system_prompt
 from .tooling import generate_with_tools
 
 
@@ -78,6 +79,10 @@ class VerifyIntegrationResponse(BaseModel):
     detail: str
 
 
+class IntegrationStatusResponse(BaseModel):
+    statuses: dict[str, dict[str, object]]
+
+
 class GitSshKeyResponse(BaseModel):
     public_key: str
 
@@ -119,9 +124,6 @@ class ChatStateResponse(BaseModel):
     chats: list[dict[str, object]]
     active_chat_id: str
     daily_token_usage: list[dict[str, object]]
-    telegram_state: dict[str, object]
-    telegram_enabled: bool
-    telegram_token_configured: bool
 
 
 @app.on_event("startup")
@@ -178,16 +180,10 @@ async def get_settings() -> Settings:
 @app.get("/api/chat/state", response_model=ChatStateResponse)
 async def get_chat_state() -> ChatStateResponse:
     settings = await load_settings()
-    telegram_config = settings.integration_configs.get("telegram") or IntegrationConfig()
-    bot_token = telegram_config.params.get("bot_token", "")
-    token_configured = isinstance(bot_token, str) and bool(bot_token.strip())
     return ChatStateResponse(
         chats=[chat.model_dump() for chat in settings.chats],
         active_chat_id=settings.active_chat_id,
         daily_token_usage=[entry.model_dump() for entry in settings.daily_token_usage],
-        telegram_state={"owner_user_id": settings.telegram_state.owner_user_id},
-        telegram_enabled=bool(telegram_config.enabled),
-        telegram_token_configured=token_configured,
     )
 
 
@@ -268,6 +264,26 @@ async def verify_integration(payload: VerifyIntegrationRequest) -> VerifyIntegra
         raise HTTPException(status_code=422, detail=detail)
 
     return VerifyIntegrationResponse(ok=True, detail=detail)
+
+
+@app.get("/api/integrations/status", response_model=IntegrationStatusResponse)
+async def get_integration_status() -> IntegrationStatusResponse:
+    settings = await load_settings()
+    telegram_config = settings.integration_configs.get("telegram") or IntegrationConfig()
+    token_value = telegram_config.params.get("bot_token", "")
+    token_configured = isinstance(token_value, str) and bool(token_value.strip())
+    owner_user_id = settings.telegram_state.owner_user_id.strip()
+
+    return IntegrationStatusResponse(
+        statuses={
+            "telegram": {
+                "enabled": bool(telegram_config.enabled),
+                "token_configured": token_configured,
+                "owner_user_id": owner_user_id,
+                "owner_bound": bool(owner_user_id),
+            }
+        }
+    )
 
 
 @app.get("/api/mcps/git/ssh-key", response_model=GitSshKeyResponse)
@@ -526,15 +542,7 @@ def _compose_runtime_system_prompt(settings: Settings, memory_block: str = "") -
 
 
 def _compose_runtime_system_prompt_from_values(bot_name: str, system_prompt: str, memory_block: str = "") -> str:
-    invisible_context = (
-        f"You are Krill assistant named '{bot_name}'. "
-        f"This is the system prompt your user provided: {system_prompt}"
-    )
-
-    if memory_block.strip():
-        invisible_context = f"{invisible_context}\n\nCompacted conversation memory:\n{memory_block.strip()}"
-
-    return invisible_context
+    return compose_runtime_system_prompt(bot_name=bot_name, system_prompt=system_prompt, memory_block=memory_block)
 
 
 def _compaction_system_prompt() -> str:

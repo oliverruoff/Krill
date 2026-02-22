@@ -1,6 +1,7 @@
 const CHAT_TITLE_MAX_LENGTH = 24;
 const EDITABLE_CHAT_TITLE_MAX_LENGTH = 24;
 const CHAT_SYNC_INTERVAL_MS = 3000;
+const INTEGRATION_STATUS_SYNC_INTERVAL_MS = 3000;
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -55,6 +56,8 @@ const state = {
   compactionBubble: null,
   chatSyncTimerId: null,
   chatSyncInFlight: false,
+  integrationStatusSyncTimerId: null,
+  integrationStatusSyncInFlight: false,
   lastChatStateSignature: "",
   telegramEnabled: false,
   telegramTokenConfigured: false,
@@ -868,21 +871,45 @@ function updateTelegramStatusLabel() {
   telegramStatusNode.textContent = "Telegram: connected";
 }
 
-function applyTelegramStatusFromPayload(payload) {
-  state.telegramEnabled = Boolean(payload?.telegram_enabled);
-  state.telegramTokenConfigured = Boolean(payload?.telegram_token_configured);
-  state.telegramOwnerUserId = typeof payload?.telegram_state?.owner_user_id === "string"
-    ? payload.telegram_state.owner_user_id
-    : "";
-  updateTelegramStatusLabel();
-}
-
 function syncTelegramFlagsFromIntegrationConfig() {
   const telegramConfig = getIntegrationConfig("telegram");
   state.telegramEnabled = Boolean(telegramConfig.enabled);
   state.telegramTokenConfigured = Boolean(
     typeof telegramConfig.params?.bot_token === "string" && telegramConfig.params.bot_token.trim(),
   );
+}
+
+function applyIntegrationStatusPayload(payload) {
+  const statuses = payload?.statuses;
+  const telegramStatus = statuses && typeof statuses === "object" ? statuses.telegram : null;
+  if (!telegramStatus || typeof telegramStatus !== "object") {
+    return;
+  }
+
+  state.telegramEnabled = Boolean(telegramStatus.enabled);
+  state.telegramTokenConfigured = Boolean(telegramStatus.token_configured);
+  state.telegramOwnerUserId = typeof telegramStatus.owner_user_id === "string" ? telegramStatus.owner_user_id : "";
+  updateTelegramStatusLabel();
+}
+
+async function syncIntegrationStatus() {
+  if (state.integrationStatusSyncInFlight) {
+    return;
+  }
+
+  state.integrationStatusSyncInFlight = true;
+  try {
+    const response = await fetch("/api/integrations/status", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    applyIntegrationStatusPayload(payload);
+  } catch (error) {
+    // Keep sync best-effort and silent.
+  } finally {
+    state.integrationStatusSyncInFlight = false;
+  }
 }
 
 function addDailyTokenUsage(tokensToAdd) {
@@ -1704,6 +1731,8 @@ async function loadGatewayMeta() {
     updateTelegramStatusLabel();
     refreshLocalChatStateSignature();
     startChatStateSync();
+    startIntegrationStatusSync();
+    syncIntegrationStatus();
     updateComposerState();
     setStatus("Gateway ready.");
   } catch (error) {
@@ -1719,6 +1748,7 @@ async function loadGatewayMeta() {
     updateDailyTokenUsageLabel();
     updateTelegramStatusLabel();
     startChatStateSync();
+    startIntegrationStatusSync();
     updateComposerState();
     setStatus(error.message, true);
   }
@@ -1728,10 +1758,7 @@ function buildChatStateSignature(payload) {
   const chats = Array.isArray(payload?.chats) ? payload.chats : [];
   const activeChatId = typeof payload?.active_chat_id === "string" ? payload.active_chat_id : "";
   const dailyTokenUsage = Array.isArray(payload?.daily_token_usage) ? payload.daily_token_usage : [];
-  const telegramOwnerUserId = typeof payload?.telegram_state?.owner_user_id === "string" ? payload.telegram_state.owner_user_id : "";
-  const telegramEnabled = Boolean(payload?.telegram_enabled);
-  const telegramTokenConfigured = Boolean(payload?.telegram_token_configured);
-  return JSON.stringify({ chats, activeChatId, dailyTokenUsage, telegramOwnerUserId, telegramEnabled, telegramTokenConfigured });
+  return JSON.stringify({ chats, activeChatId, dailyTokenUsage });
 }
 
 function refreshLocalChatStateSignature() {
@@ -1739,9 +1766,6 @@ function refreshLocalChatStateSignature() {
     chats: state.chats,
     active_chat_id: state.activeChatId,
     daily_token_usage: state.dailyTokenUsage,
-    telegram_state: { owner_user_id: state.telegramOwnerUserId },
-    telegram_enabled: state.telegramEnabled,
-    telegram_token_configured: state.telegramTokenConfigured,
   });
 }
 
@@ -1752,7 +1776,6 @@ function applyRemoteChatState(payload) {
 
   state.chats = incomingChats;
   state.dailyTokenUsage = incomingDailyUsage;
-  applyTelegramStatusFromPayload(payload);
   updateDailyTokenUsageLabel();
 
   if (state.chats.some((chat) => chat.id === incomingActiveChatId)) {
@@ -1780,8 +1803,6 @@ async function syncRemoteChatState() {
       return;
     }
     const payload = await response.json();
-    applyTelegramStatusFromPayload(payload);
-
     if (isAnyChatBusy()) {
       return;
     }
@@ -1805,6 +1826,13 @@ function startChatStateSync() {
     window.clearInterval(state.chatSyncTimerId);
   }
   state.chatSyncTimerId = window.setInterval(syncRemoteChatState, CHAT_SYNC_INTERVAL_MS);
+}
+
+function startIntegrationStatusSync() {
+  if (state.integrationStatusSyncTimerId) {
+    window.clearInterval(state.integrationStatusSyncTimerId);
+  }
+  state.integrationStatusSyncTimerId = window.setInterval(syncIntegrationStatus, INTEGRATION_STATUS_SYNC_INTERVAL_MS);
 }
 
 function toggleMenu(forceOpen) {
@@ -2649,6 +2677,10 @@ window.addEventListener("beforeunload", () => {
   if (state.chatSyncTimerId) {
     window.clearInterval(state.chatSyncTimerId);
     state.chatSyncTimerId = null;
+  }
+  if (state.integrationStatusSyncTimerId) {
+    window.clearInterval(state.integrationStatusSyncTimerId);
+    state.integrationStatusSyncTimerId = null;
   }
 });
 window.addEventListener("load", loadGatewayMeta);

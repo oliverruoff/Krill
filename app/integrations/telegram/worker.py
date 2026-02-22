@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from app.config import ChatMessage, ChatSession, DailyTokenUsage, IntegrationConfig, Settings, load_settings, save_settings
 from app.providers import get_provider
+from app.runtime_prompt import compose_runtime_system_prompt
 from app.tooling import generate_with_tools
 
 from .client import telegram_get_me, telegram_get_updates, telegram_send_message
@@ -23,6 +24,8 @@ class TelegramBridgeWorker:
         self._stop_event = asyncio.Event()
         self._bridge_active = False
         self._last_token = ""
+        self._telegram_chats: list[ChatSession] = []
+        self._active_chat_id = ""
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -76,11 +79,9 @@ class TelegramBridgeWorker:
                         continue
 
                     message = update.get("message")
-                    if not isinstance(message, dict):
-                        await self._store_last_update_id(update_id)
-                        continue
+                    if isinstance(message, dict):
+                        await self._handle_message(token, message, bot_username, bot_id)
 
-                    await self._handle_message(token, message, bot_username, bot_id)
                     await self._store_last_update_id(update_id)
             except asyncio.CancelledError:
                 raise
@@ -152,7 +153,7 @@ class TelegramBridgeWorker:
 
         command, command_arg = _parse_command(text, bot_username)
         if command:
-            response_text = await self._handle_command(settings, command, command_arg)
+            response_text = await self._handle_command(command, command_arg, settings)
             if response_text:
                 await asyncio.to_thread(telegram_send_message, token, chat_id, response_text)
             return
@@ -162,22 +163,24 @@ class TelegramBridgeWorker:
             for chunk in _chunk_telegram_text(response_text):
                 await asyncio.to_thread(telegram_send_message, token, chat_id, chunk)
 
-    async def _handle_command(self, settings: Settings, command: str, argument: str) -> str:
+    async def _handle_command(self, command: str, argument: str, settings: Settings) -> str:
         if command == "new":
             chat = _create_chat_entry("New chat")
-            settings.chats.append(chat)
-            settings.active_chat_id = chat.id
-            await save_settings(settings)
+            self._telegram_chats.append(chat)
+            self._active_chat_id = chat.id
             return f"Started new chat: {chat.title}"
 
-        if command == "where":
-            active = _get_active_chat(settings)
+        if command in {"status", "where"}:
+            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
+            self._active_chat_id = active.id if active is not None else ""
+            owner_bound = "yes" if settings.telegram_state.owner_user_id.strip() else "no"
             if active is None:
-                return "No active chat yet. Send a message or use /new."
-            return f"Active chat: {active.title} ({_short_chat_id(active.id)})"
+                return f"Status\nOwner bound: {owner_bound}\nActive chat: none"
+            return f"Status\nOwner bound: {owner_bound}\nActive chat: {active.title} ({_short_chat_id(active.id)})"
 
         if command == "usage":
-            active = _get_active_chat(settings)
+            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
+            self._active_chat_id = active.id if active is not None else ""
             chat_tokens = active.total_tokens_used if active is not None else 0
             daily_tokens = _today_token_usage(settings)
             return f"Usage\nChat tokens: {chat_tokens}\nToday tokens: {daily_tokens}"
@@ -186,33 +189,33 @@ class TelegramBridgeWorker:
             return (
                 "Available commands:\n"
                 "/new - Create and switch to a new chat\n"
-                "/chats - List recent chats\n"
-                "/use <number> - Switch active chat\n"
-                "/where - Show active chat\n"
+                "/chats - List recent Telegram chats\n"
+                "/use <number> - Switch active Telegram chat\n"
+                "/status - Show Telegram chat status\n"
+                "/where - Alias for /status\n"
                 "/usage - Show chat and daily token usage\n"
                 "/help - Show this help"
             )
 
         if command == "chats":
-            if not settings.chats:
-                return "No chats yet."
-            lines = ["Recent chats:"]
-            sorted_chats = sorted(settings.chats, key=_latest_timestamp_or_empty, reverse=True)
+            if not self._telegram_chats:
+                return "No Telegram chats yet."
+            lines = ["Recent Telegram chats:"]
+            sorted_chats = sorted(self._telegram_chats, key=_latest_timestamp_or_empty, reverse=True)
             for index, chat in enumerate(sorted_chats[:10], start=1):
-                active_marker = " *" if chat.id == settings.active_chat_id else ""
+                active_marker = " *" if chat.id == self._active_chat_id else ""
                 lines.append(f"{index}. {chat.title} ({_short_chat_id(chat.id)}){active_marker}")
             lines.append("Use /use <number> to switch.")
             return "\n".join(lines)
 
         if command == "use":
-            if not settings.chats:
-                return "No chats available."
+            if not self._telegram_chats:
+                return "No Telegram chats available."
 
-            selected = _select_chat_by_argument(settings.chats, argument)
+            selected = _select_chat_by_argument(self._telegram_chats, argument)
             if selected is None:
                 return "Invalid chat selector. Use /chats first."
-            settings.active_chat_id = selected.id
-            await save_settings(settings)
+            self._active_chat_id = selected.id
             return f"Switched active chat to: {selected.title}"
 
         return "Unknown command. Use /help for available commands."
@@ -222,17 +225,16 @@ class TelegramBridgeWorker:
         if not prompt:
             return ""
 
-        active_chat = _get_active_chat(settings)
+        active_chat = _get_active_chat(self._telegram_chats, self._active_chat_id)
         if active_chat is None:
             active_chat = _create_chat_entry(prompt)
-            settings.chats.append(active_chat)
-            settings.active_chat_id = active_chat.id
+            self._telegram_chats.append(active_chat)
+            self._active_chat_id = active_chat.id
         elif not active_chat.messages and active_chat.title.strip().lower() == "new chat":
             active_chat.title = _derive_chat_title(prompt)
 
         user_timestamp = _timestamp()
         active_chat.messages.append(ChatMessage(role="user", content=prompt, timestamp=user_timestamp))
-        await save_settings(settings)
 
         provider_id = settings.active_provider_id.strip()
         provider_config = settings.provider_configs.get(provider_id)
@@ -249,7 +251,7 @@ class TelegramBridgeWorker:
             if message.role in {"user", "assistant"} and message.content.strip()
         ]
 
-        runtime_system_prompt = _compose_runtime_system_prompt(settings.bot_name, settings.system_prompt, active_chat.memory_block)
+        runtime_system_prompt = compose_runtime_system_prompt(settings.bot_name, settings.system_prompt, active_chat.memory_block)
 
         try:
             orchestration = await generate_with_tools(
@@ -315,9 +317,8 @@ class TelegramBridgeWorker:
 
         if isinstance(used_tokens, int) and used_tokens > 0:
             active_chat.total_tokens_used = max(0, active_chat.total_tokens_used) + used_tokens
-            _add_daily_usage(settings, used_tokens)
+            await _add_daily_usage(used_tokens)
 
-        await save_settings(settings)
         return text_response
 
 
@@ -359,16 +360,13 @@ def _create_chat_entry(first_message: str) -> ChatSession:
     )
 
 
-def _get_active_chat(settings: Settings) -> ChatSession | None:
-    active_id = settings.active_chat_id.strip()
+def _get_active_chat(chats: list[ChatSession], active_chat_id: str) -> ChatSession | None:
+    active_id = active_chat_id.strip()
     if active_id:
-        for chat in settings.chats:
+        for chat in chats:
             if chat.id == active_id:
                 return chat
-    if settings.chats:
-        settings.active_chat_id = settings.chats[0].id
-        return settings.chats[0]
-    return None
+    return chats[0] if chats else None
 
 
 def _latest_timestamp_or_empty(chat: ChatSession) -> str:
@@ -460,25 +458,18 @@ def _is_group_message_addressed_to_bot(message: dict[str, Any], bot_username: st
     return False
 
 
-def _compose_runtime_system_prompt(bot_name: str, system_prompt: str, memory_block: str = "") -> str:
-    invisible_context = (
-        f"You are Krill assistant named '{bot_name}'. "
-        f"This is the system prompt your user provided: {system_prompt}"
-    )
-    if memory_block.strip():
-        invisible_context = f"{invisible_context}\n\nCompacted conversation memory:\n{memory_block.strip()}"
-    return invisible_context
-
-
-def _add_daily_usage(settings: Settings, tokens_to_add: int) -> None:
+async def _add_daily_usage(tokens_to_add: int) -> None:
     if tokens_to_add <= 0:
         return
+    settings = await load_settings()
     date_key = datetime.now(timezone.utc).date().isoformat()
     for entry in settings.daily_token_usage:
         if entry.date == date_key:
             entry.tokens += tokens_to_add
+            await save_settings(settings)
             return
     settings.daily_token_usage.append(DailyTokenUsage(date=date_key, tokens=tokens_to_add))
+    await save_settings(settings)
 
 
 def _today_token_usage(settings: Settings) -> int:

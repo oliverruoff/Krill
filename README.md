@@ -70,6 +70,8 @@ Telegram integration notes:
 - owner can use private chats and group chats
 - in group chats, Krill responds only to explicit mentions/replies to the bot
 - non-owner messages are silently ignored
+- Telegram chat sessions are ephemeral and isolated from Gateway chats
+- Telegram chat history is not written to `braindump.json`
 
 ### 4) Orchestrator (reason + act loop)
 
@@ -106,7 +108,7 @@ SSE events include:
 ## Current UI Flow
 
 - Setup first, then Gateway
-- Gateway has three panes: chats (left), chat view (center), tools (right)
+- Gateway has three panes: chats (left), chat view (center), tools/integrations (right)
 - Chat execution supports per-chat queueing and cross-chat parallel background processing
 - Assistant/tool progress is visible through system trace messages
 - Tool usage is displayed below assistant responses (`used Tools: ...`)
@@ -162,6 +164,7 @@ docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 - `POST /api/mcps/verify` -> tool verification (when applicable)
 - `GET /api/integrations` -> available integration metadata
 - `POST /api/integrations/verify` -> integration verification
+- `GET /api/integrations/status` -> lightweight integration runtime status
 - `GET /api/mcps/git/ssh-key` -> generate/load Git SSH public key
 - `POST /api/mcps/git/verify-ssh` -> verify GitHub SSH access
 - `GET /api/settings` -> load settings
