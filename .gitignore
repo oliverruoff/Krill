@@ -2,3 +2,4 @@
 braindump.json
 *ed25519
 *.pub
+workspace/*
