@@ -127,6 +127,7 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 - Gateway sidebar includes MCP management (enable, configure, save, verify)
 - Assistant messages display subtle MCP usage tags when tools are used
 - Internal orchestrator/system trace messages are shown in-chat and persisted
+- Git MCP supports workspace-based repo checkout, commit, pull/push, and GitHub PR creation via `gh`
 - Press `Enter` to send and `Shift+Enter` for a new line
 - Add/Update provider verifies API key + model before accepting provider config
 - Setup offers "Start from scratch" and braindump import (file picker or drag/drop)

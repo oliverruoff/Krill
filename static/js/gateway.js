@@ -1060,6 +1060,51 @@ async function verifyMcpConfig(mcpId) {
   }
 }
 
+async function fetchGitSshKey() {
+  const response = await fetch("/api/mcps/git/ssh-key");
+  if (!response.ok) {
+    let detail = "Failed to load SSH key.";
+    try {
+      const payload = await response.json();
+      if (typeof payload.detail === "string" && payload.detail) {
+        detail = payload.detail;
+      }
+    } catch (error) {
+      detail = "Failed to load SSH key.";
+    }
+    throw new Error(detail);
+  }
+
+  const payload = await response.json();
+  const publicKey = typeof payload.public_key === "string" ? payload.public_key : "";
+  if (!publicKey) {
+    throw new Error("SSH key response was empty.");
+  }
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(publicKey);
+    return;
+  }
+
+  throw new Error("Clipboard API unavailable. Use a modern browser context.");
+}
+
+async function verifyGitSshAccess() {
+  const response = await fetch("/api/mcps/git/verify-ssh", { method: "POST" });
+  if (!response.ok) {
+    let detail = "GitHub SSH verification failed.";
+    try {
+      const payload = await response.json();
+      if (typeof payload.detail === "string" && payload.detail) {
+        detail = payload.detail;
+      }
+    } catch (error) {
+      detail = "GitHub SSH verification failed.";
+    }
+    throw new Error(detail);
+  }
+}
+
 function renderMcpPanel() {
   if (!(mcpList instanceof HTMLElement)) {
     return;
@@ -1144,22 +1189,42 @@ function renderMcpPanel() {
     const actions = document.createElement("div");
     actions.className = "mcp-card-actions";
 
-    const saveButton = document.createElement("button");
-    saveButton.type = "button";
-    saveButton.className = "mcp-link-btn";
-    saveButton.textContent = "Save";
-    saveButton.dataset.action = "save";
-    saveButton.dataset.mcpId = mcp.id;
+    if (mcp.id === "git_ops") {
+      const sshKeyButton = document.createElement("button");
+      sshKeyButton.type = "button";
+      sshKeyButton.className = "mcp-link-btn";
+      sshKeyButton.textContent = "SSH key";
+      sshKeyButton.dataset.action = "ssh-key";
+      sshKeyButton.dataset.mcpId = mcp.id;
 
-    const verifyButton = document.createElement("button");
-    verifyButton.type = "button";
-    verifyButton.className = "mcp-link-btn";
-    verifyButton.textContent = "Verify";
-    verifyButton.dataset.action = "verify";
-    verifyButton.dataset.mcpId = mcp.id;
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "mcp-link-btn";
+      verifyButton.textContent = "Verify";
+      verifyButton.dataset.action = "verify-ssh";
+      verifyButton.dataset.mcpId = mcp.id;
 
-    actions.appendChild(saveButton);
-    actions.appendChild(verifyButton);
+      actions.appendChild(sshKeyButton);
+      actions.appendChild(verifyButton);
+    } else {
+      const saveButton = document.createElement("button");
+      saveButton.type = "button";
+      saveButton.className = "mcp-link-btn";
+      saveButton.textContent = "Save";
+      saveButton.dataset.action = "save";
+      saveButton.dataset.mcpId = mcp.id;
+
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "mcp-link-btn";
+      verifyButton.textContent = "Verify";
+      verifyButton.dataset.action = "verify";
+      verifyButton.dataset.mcpId = mcp.id;
+
+      actions.appendChild(saveButton);
+      actions.appendChild(verifyButton);
+    }
+
     card.appendChild(actions);
     mcpList.appendChild(card);
   });
@@ -1940,6 +2005,18 @@ async function handleMcpActionClick(event) {
     if (action === "save") {
       await persistMcpConfigsToSettings();
       setStatus("MCP settings saved.");
+      return;
+    }
+
+    if (action === "ssh-key") {
+      await fetchGitSshKey();
+      setStatus("GitHub SSH public key copied to clipboard.");
+      return;
+    }
+
+    if (action === "verify-ssh") {
+      await verifyGitSshAccess();
+      setStatus("GitHub SSH access verified.");
       return;
     }
 

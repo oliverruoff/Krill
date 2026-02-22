@@ -8,7 +8,14 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .config import BRAINDUMP_PATH, Settings, ensure_settings_file, load_settings, save_settings
+from .config import BRAINDUMP_PATH, McpConfig, Settings, ensure_settings_file, load_settings, save_settings
+from .mcps.git_ops import (
+    SSH_PRIVATE_PARAM,
+    SSH_PUBLIC_PARAM,
+    get_or_create_ssh_public_key,
+    get_workspace_path,
+    verify_github_ssh_access,
+)
 from .mcps import get_mcp, get_mcp_options, is_supported_mcp
 from .providers import get_provider, get_provider_model_limit, get_provider_options, is_supported_provider
 from .tooling import generate_with_tools
@@ -51,6 +58,15 @@ class VerifyMcpRequest(BaseModel):
 
 
 class VerifyMcpResponse(BaseModel):
+    ok: bool
+    detail: str
+
+
+class GitSshKeyResponse(BaseModel):
+    public_key: str
+
+
+class GitSshVerifyResponse(BaseModel):
     ok: bool
     detail: str
 
@@ -182,6 +198,41 @@ async def verify_mcp(payload: VerifyMcpRequest) -> VerifyMcpResponse:
         raise HTTPException(status_code=422, detail=detail)
 
     return VerifyMcpResponse(ok=True, detail=detail)
+
+
+@app.get("/api/mcps/git/ssh-key", response_model=GitSshKeyResponse)
+async def get_git_ssh_key() -> GitSshKeyResponse:
+    settings = await load_settings()
+    git_mcp_config = settings.mcp_configs.get("git_ops") or McpConfig()
+    workspace = get_workspace_path()
+    private_key, public_key = await get_or_create_ssh_public_key(git_mcp_config.params, workspace)
+
+    updated_params = dict(git_mcp_config.params)
+    updated_params[SSH_PRIVATE_PARAM] = private_key
+    updated_params[SSH_PUBLIC_PARAM] = public_key
+    settings.mcp_configs["git_ops"] = McpConfig(enabled=git_mcp_config.enabled, params=updated_params)
+    await save_settings(settings)
+
+    return GitSshKeyResponse(public_key=public_key)
+
+
+@app.post("/api/mcps/git/verify-ssh", response_model=GitSshVerifyResponse)
+async def verify_git_ssh() -> GitSshVerifyResponse:
+    settings = await load_settings()
+    git_mcp_config = settings.mcp_configs.get("git_ops") or McpConfig()
+    workspace = get_workspace_path()
+    private_key, public_key = await get_or_create_ssh_public_key(git_mcp_config.params, workspace)
+
+    updated_params = dict(git_mcp_config.params)
+    updated_params[SSH_PRIVATE_PARAM] = private_key
+    updated_params[SSH_PUBLIC_PARAM] = public_key
+    settings.mcp_configs["git_ops"] = McpConfig(enabled=git_mcp_config.enabled, params=updated_params)
+    await save_settings(settings)
+
+    ok, detail = await verify_github_ssh_access(workspace, private_key)
+    if not ok:
+        raise HTTPException(status_code=422, detail=detail)
+    return GitSshVerifyResponse(ok=True, detail=detail)
 
 
 @app.post("/api/reset", response_model=Settings)
@@ -343,11 +394,6 @@ def _validate_mcp_configs(settings: Settings) -> None:
         mcp = get_mcp(mcp_id)
         if mcp is None:
             raise HTTPException(status_code=422, detail=f"MCP unavailable: {mcp_id}")
-
-        field_ids = {field.id for field in mcp.config_fields}
-        for key in mcp_config.params.keys():
-            if key not in field_ids:
-                raise HTTPException(status_code=422, detail=f"Unsupported config field '{key}' for MCP '{mcp_id}'.")
 
 
 def _is_setup_complete(settings: Settings) -> bool:
