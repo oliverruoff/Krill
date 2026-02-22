@@ -1,5 +1,7 @@
 *.pyc
 braindump.json
+braindump.json.bak
 *ed25519
 *.pub
 workspace/*
+braindump.json.bak
