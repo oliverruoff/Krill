@@ -121,6 +121,7 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 - Gateway header includes live provider/model switchers for configured providers
 - Automatic memory compaction keeps continuity when context nears limits (>=75%) and before constrained model switches
 - Chat thread auto-scrolls to newest messages and renders Markdown
+- Gateway sidebar stores persistent chat history with sortable conversations
 - Press `Enter` to send and `Shift+Enter` for a new line
 - Add/Update provider verifies API key + model before accepting provider config
 - Setup offers "Start from scratch" and braindump import (file picker or drag/drop)

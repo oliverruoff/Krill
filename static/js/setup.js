@@ -25,6 +25,7 @@ const fields = {
 const state = {
   providers: [],
   providerConfigs: {},
+  chats: [],
   activeProviderId: "",
   setupCompleted: false,
   initialSetupSnapshot: "",
@@ -259,6 +260,7 @@ function createSetupSnapshot() {
     system_prompt: fields.systemPrompt.value,
     active_provider_id: fields.activeProviderSelect.value || "",
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
+    chats: state.chats,
   };
 
   return JSON.stringify(snapshot);
@@ -275,6 +277,7 @@ function buildPayload() {
     setup_completed: true,
     active_provider_id: fields.activeProviderSelect.value,
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
+    chats: state.chats,
   };
 }
 
@@ -362,6 +365,7 @@ async function loadPage() {
     updateSystemPromptCounter();
 
     state.providerConfigs = settings.provider_configs ?? {};
+    state.chats = Array.isArray(settings.chats) ? settings.chats : [];
     state.activeProviderId = settings.active_provider_id ?? "";
     state.setupCompleted = settings.setup_completed ?? false;
 

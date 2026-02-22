@@ -1,3 +1,5 @@
+const CHAT_TITLE_MAX_LENGTH = 48;
+
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const sendButton = document.getElementById("send-btn");
@@ -13,6 +15,9 @@ const assistantMetaNode = document.getElementById("assistant-meta");
 const headerProviderSelect = document.getElementById("header-provider-select");
 const headerModelSelect = document.getElementById("header-model-select");
 const compactButton = document.getElementById("compact-btn");
+const currentChatTitleNode = document.getElementById("current-chat-title");
+const chatHistoryList = document.getElementById("chat-history-list");
+const newChatButton = document.getElementById("new-chat-btn");
 let toastNode = document.getElementById("toast");
 
 const state = {
@@ -25,11 +30,12 @@ const state = {
   modelTokenLimit: 0,
   usedTokens: 0,
   lastRequestTokens: 0,
-  memoryBlock: "",
   settings: null,
-  history: [],
+  chats: [],
+  activeChatId: "",
   isCompacting: false,
   isSwitching: false,
+  isSending: false,
   suppressSwitcherEvents: false,
   toastTimerId: null,
   compactionBubble: null,
@@ -63,7 +69,9 @@ function showToast(message) {
   }, 1800);
 }
 
-function formatMessageTimestamp(date = new Date()) {
+function formatMessageTimestamp(rawValue = "") {
+  const parsed = rawValue ? new Date(rawValue) : new Date();
+  const date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   const hour = String(date.getHours()).padStart(2, "0");
   const minute = String(date.getMinutes()).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
@@ -73,14 +81,117 @@ function formatMessageTimestamp(date = new Date()) {
   return `${hour}:${minute} ${day}. ${month}. ${year}`;
 }
 
-function addMessage(role, text = "") {
+function createTimestamp() {
+  return new Date().toISOString();
+}
+
+function normalizeChatTitle(rawTitle) {
+  if (typeof rawTitle !== "string") {
+    return "New chat";
+  }
+
+  const trimmed = rawTitle.trim();
+  return trimmed || "New chat";
+}
+
+function deriveChatTitle(firstMessage) {
+  const normalized = String(firstMessage || "").trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return "New chat";
+  }
+
+  if (normalized.length <= CHAT_TITLE_MAX_LENGTH) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, CHAT_TITLE_MAX_LENGTH).trimEnd()}...`;
+}
+
+function createChatId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `chat-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function getLatestChatMessage(chat) {
+  if (!chat || !Array.isArray(chat.messages) || chat.messages.length === 0) {
+    return null;
+  }
+
+  return chat.messages[chat.messages.length - 1] ?? null;
+}
+
+function getLatestChatTimestamp(chat) {
+  const latest = getLatestChatMessage(chat);
+  if (latest && typeof latest.timestamp === "string" && latest.timestamp) {
+    return latest.timestamp;
+  }
+
+  return "";
+}
+
+function sortChatsByLatestMessage(chats) {
+  return [...chats].sort((left, right) => {
+    const leftDate = new Date(getLatestChatTimestamp(left) || 0).getTime();
+    const rightDate = new Date(getLatestChatTimestamp(right) || 0).getTime();
+    if (rightDate !== leftDate) {
+      return rightDate - leftDate;
+    }
+    return (left.title || "").localeCompare(right.title || "");
+  });
+}
+
+function getActiveChat() {
+  return state.chats.find((chat) => chat.id === state.activeChatId) ?? null;
+}
+
+function updateCurrentChatTitle() {
+  if (!(currentChatTitleNode instanceof HTMLElement)) {
+    return;
+  }
+
+  const activeChat = getActiveChat();
+  currentChatTitleNode.textContent = activeChat ? normalizeChatTitle(activeChat.title) : "New chat";
+}
+
+function createChatEntry(firstMessage) {
+  const timestamp = createTimestamp();
+  return {
+    id: createChatId(),
+    title: deriveChatTitle(firstMessage),
+    type: "normal",
+    messages: [],
+    memory_block: "",
+    created_at: timestamp,
+    updated_at: timestamp,
+  };
+}
+
+function toApiHistory(messages) {
+  return messages.map((turn) => ({ role: turn.role, content: turn.content }));
+}
+
+function setHistoryControlsDisabled(disabled) {
+  if (newChatButton instanceof HTMLButtonElement) {
+    newChatButton.disabled = disabled;
+  }
+
+  const buttons = chatHistoryList.querySelectorAll("button[data-chat-id]");
+  buttons.forEach((button) => {
+    button.disabled = disabled;
+  });
+}
+
+function addMessage(role, text = "", timestamp = "") {
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message ${role}`;
 
   const title = document.createElement("p");
   title.className = "chat-role";
   const roleLabel = role === "user" ? "You" : state.botName || "Krill";
-  title.textContent = `${roleLabel} - ${formatMessageTimestamp()}`;
+  title.textContent = `${roleLabel} - ${formatMessageTimestamp(timestamp)}`;
 
   const bubble = document.createElement("div");
   bubble.className = "chat-bubble";
@@ -97,6 +208,93 @@ function addMessage(role, text = "") {
   chatThread.scrollTop = chatThread.scrollHeight;
 
   return bubble;
+}
+
+function renderEmptyChatView() {
+  chatThread.innerHTML = "";
+  const emptyNode = document.createElement("p");
+  emptyNode.className = "chat-history-empty";
+  emptyNode.textContent = "Start a new chat with your first message.";
+  chatThread.appendChild(emptyNode);
+}
+
+function renderActiveChat() {
+  updateCurrentChatTitle();
+  const activeChat = getActiveChat();
+  if (!activeChat) {
+    renderEmptyChatView();
+    return;
+  }
+
+  chatThread.innerHTML = "";
+  activeChat.messages.forEach((turn) => {
+    if (turn?.role === "user" || turn?.role === "assistant") {
+      addMessage(turn.role, String(turn.content ?? ""), String(turn.timestamp ?? ""));
+    }
+  });
+
+  if (typeof activeChat.memory_block === "string" && activeChat.memory_block.trim()) {
+    addMessage("assistant", `**Auto-compacted memory**\n\n${activeChat.memory_block.trim()}`);
+  }
+}
+
+function renderChatHistory() {
+  chatHistoryList.innerHTML = "";
+  const sortedChats = sortChatsByLatestMessage(state.chats);
+
+  if (sortedChats.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "chat-history-empty";
+    emptyNode.textContent = "No chats yet.";
+    chatHistoryList.appendChild(emptyNode);
+    return;
+  }
+
+  sortedChats.forEach((chat) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "chat-history-item";
+    if (chat.id === state.activeChatId) {
+      item.classList.add("active");
+    }
+    item.dataset.chatId = chat.id;
+    item.disabled = state.isSending || state.isSwitching || state.isCompacting;
+
+    const titleNode = document.createElement("p");
+    titleNode.className = "chat-history-title";
+    titleNode.textContent = normalizeChatTitle(chat.title);
+
+    const timeNode = document.createElement("p");
+    timeNode.className = "chat-history-time";
+    const latestTimestamp = getLatestChatTimestamp(chat);
+    timeNode.textContent = latestTimestamp ? formatMessageTimestamp(latestTimestamp) : "No messages yet";
+
+    item.appendChild(titleNode);
+    item.appendChild(timeNode);
+    chatHistoryList.appendChild(item);
+  });
+}
+
+function activateChat(chatId) {
+  state.activeChatId = chatId;
+  state.lastRequestTokens = 0;
+  renderChatHistory();
+  renderActiveChat();
+  syncUsedTokensToContext();
+}
+
+function startNewChat() {
+  if (state.isSending || state.isSwitching || state.isCompacting) {
+    return;
+  }
+
+  state.activeChatId = "";
+  state.lastRequestTokens = 0;
+  renderChatHistory();
+  renderActiveChat();
+  updateTokenCounter(0, state.modelTokenLimit);
+  setStatus("New chat ready. Send a first message to create it.");
+  chatInput.focus();
 }
 
 function setAssistantLoading(bubble, isLoading) {
@@ -359,9 +557,9 @@ function getModelTokenLimit(providerId, modelId) {
   return 0;
 }
 
-function estimateContextTokens(history, memoryBlock = "") {
+function estimateContextTokens(messages, memoryBlock = "") {
   const memoryTokens = Math.ceil((memoryBlock || "").length / 4);
-  const historyTokens = history.reduce((total, item) => {
+  const historyTokens = messages.reduce((total, item) => {
     const role = typeof item?.role === "string" ? item.role : "";
     const content = typeof item?.content === "string" ? item.content : "";
     return total + Math.ceil((role.length + content.length) / 4);
@@ -370,33 +568,26 @@ function estimateContextTokens(history, memoryBlock = "") {
 }
 
 function syncUsedTokensToContext() {
-  const estimatedContext = estimateContextTokens(state.history, state.memoryBlock);
+  const activeChat = getActiveChat();
+  if (!activeChat) {
+    updateTokenCounter(0, state.modelTokenLimit);
+    return;
+  }
+
+  const estimatedContext = estimateContextTokens(activeChat.messages, activeChat.memory_block || "");
   const contextTokens = Math.max(estimatedContext, Number(state.lastRequestTokens || 0));
   state.usedTokens = Math.max(0, contextTokens);
   updateTokenCounter(state.usedTokens, state.modelTokenLimit);
 }
 
-function renderCompactedChatView() {
-  chatThread.innerHTML = "";
-  state.history.forEach((turn) => {
-    if (turn?.role === "user" || turn?.role === "assistant") {
-      addMessage(turn.role, String(turn.content ?? ""));
-    }
-  });
-
-  if (state.memoryBlock.trim()) {
-    addMessage("assistant", `**Auto-compacted memory**\n\n${state.memoryBlock.trim()}`);
-  }
-}
-
-function shouldCompactForLimit(tokenLimit) {
+function shouldCompactForLimit(messages, memoryBlock, tokenLimit) {
   const safeLimit = Math.max(0, Number(tokenLimit || 0));
   if (safeLimit <= 0) {
     return false;
   }
 
   const observedContext = Math.max(0, Number(state.lastRequestTokens || 0));
-  const estimatedContext = estimateContextTokens(state.history, state.memoryBlock);
+  const estimatedContext = estimateContextTokens(messages, memoryBlock);
   const contextTokens = Math.max(observedContext, estimatedContext);
   return contextTokens >= safeLimit * 0.75;
 }
@@ -529,14 +720,26 @@ async function persistSettings(nextSettings) {
   return response.json();
 }
 
-async function compactHistoryForLimit(targetTokenLimit, reasonLabel) {
-  if (state.isCompacting) {
+async function persistChatsToSettings() {
+  if (!state.settings) {
+    return;
+  }
+
+  const nextSettings = JSON.parse(JSON.stringify(state.settings));
+  nextSettings.chats = state.chats;
+  const persisted = await persistSettings(nextSettings);
+  state.settings = persisted;
+}
+
+async function compactHistoryForLimit(chat, targetTokenLimit, reasonLabel) {
+  if (state.isCompacting || !chat) {
     return;
   }
 
   state.isCompacting = true;
   setSwitchersDisabled(true);
   setCompactButtonDisabled(true);
+  setHistoryControlsDisabled(true);
   showCompactionProgressBubble();
 
   try {
@@ -545,9 +748,9 @@ async function compactHistoryForLimit(targetTokenLimit, reasonLabel) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        history: state.history,
+        history: toApiHistory(chat.messages),
         target_token_limit: Math.max(0, Number(targetTokenLimit || 0)),
-        memory_block: state.memoryBlock,
+        memory_block: chat.memory_block || "",
       }),
     });
 
@@ -565,25 +768,42 @@ async function compactHistoryForLimit(targetTokenLimit, reasonLabel) {
     }
 
     const payload = await response.json();
-    state.memoryBlock = typeof payload.memory_block === "string" ? payload.memory_block : state.memoryBlock;
-    state.history = Array.isArray(payload.history) ? payload.history : state.history;
-    state.lastRequestTokens = estimateContextTokens(state.history, state.memoryBlock);
+    const compactedMessages = Array.isArray(payload.history) ? payload.history : [];
+
+    if (compactedMessages.length > 0) {
+      const timestamp = createTimestamp();
+      chat.messages = compactedMessages.map((turn) => ({
+        role: turn.role,
+        content: turn.content,
+        timestamp,
+      }));
+    }
+
+    chat.memory_block = typeof payload.memory_block === "string" ? payload.memory_block : chat.memory_block;
+    chat.updated_at = createTimestamp();
+    state.lastRequestTokens = estimateContextTokens(chat.messages, chat.memory_block);
   } finally {
     clearCompactionProgressBubble();
     state.isCompacting = false;
-    setSwitchersDisabled(state.isSwitching);
-    setCompactButtonDisabled(state.isSwitching);
+    setSwitchersDisabled(state.isSwitching || state.isSending);
+    setCompactButtonDisabled(state.isSwitching || state.isSending);
+    setHistoryControlsDisabled(state.isSwitching || state.isSending);
   }
 }
 
-async function maybeAutoCompact(reasonLabel, targetTokenLimit = state.modelTokenLimit) {
-  if (!shouldCompactForLimit(targetTokenLimit)) {
+async function maybeAutoCompact(chat, reasonLabel, targetTokenLimit = state.modelTokenLimit) {
+  if (!chat) {
+    return { ok: true, compacted: false };
+  }
+
+  if (!shouldCompactForLimit(chat.messages, chat.memory_block || "", targetTokenLimit)) {
     return { ok: true, compacted: false };
   }
 
   try {
-    await compactHistoryForLimit(targetTokenLimit, reasonLabel);
-    renderCompactedChatView();
+    await compactHistoryForLimit(chat, targetTokenLimit, reasonLabel);
+    renderActiveChat();
+    renderChatHistory();
     syncUsedTokensToContext();
     showToast("Compaction complete. Chat context was reduced.");
     return { ok: true, compacted: true };
@@ -609,15 +829,16 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
   state.isSwitching = true;
   setSwitchersDisabled(true);
   setCompactButtonDisabled(true);
+  setHistoryControlsDisabled(true);
 
   try {
+    const activeChat = getActiveChat();
     const targetLimit = getModelTokenLimit(nextProviderId, nextModelId);
-    const currentContextTokens = Math.max(
-      Number(state.usedTokens || 0),
-      estimateContextTokens(state.history, state.memoryBlock),
-    );
-    if (targetLimit > 0 && currentContextTokens > targetLimit) {
-      const compactResult = await maybeAutoCompact("provider/model switch", targetLimit);
+    const currentContextTokens = activeChat
+      ? Math.max(Number(state.usedTokens || 0), estimateContextTokens(activeChat.messages, activeChat.memory_block || ""))
+      : 0;
+    if (targetLimit > 0 && currentContextTokens > targetLimit && activeChat) {
+      const compactResult = await maybeAutoCompact(activeChat, "provider/model switch", targetLimit);
       if (!compactResult.ok) {
         throw new Error("Model switch could not be performed because compaction failed.");
       }
@@ -633,6 +854,7 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
 
     nextProviderConfig.model = nextModelId;
     nextSettings.active_provider_id = nextProviderId;
+    nextSettings.chats = state.chats;
     const persisted = await persistSettings(nextSettings);
 
     state.settings = persisted;
@@ -645,7 +867,7 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
     syncSwitcherControls();
     updateMetaIndicators();
     updateAssistantHeader(state.settings);
-    updateTokenCounter(state.usedTokens, state.modelTokenLimit);
+    syncUsedTokensToContext();
     setStatus("Active provider/model updated.");
   } catch (error) {
     state.activeProviderId = previousProviderId;
@@ -655,9 +877,50 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
     setStatus(error.message, true);
   } finally {
     state.isSwitching = false;
-    setSwitchersDisabled(false);
-    setCompactButtonDisabled(false);
+    setSwitchersDisabled(state.isSending || state.isCompacting);
+    setCompactButtonDisabled(state.isSending || state.isCompacting);
+    setHistoryControlsDisabled(state.isSending || state.isCompacting);
   }
+}
+
+function normalizeIncomingChats(rawChats) {
+  if (!Array.isArray(rawChats)) {
+    return [];
+  }
+
+  const normalized = [];
+  rawChats.forEach((rawChat) => {
+    if (!rawChat || typeof rawChat !== "object") {
+      return;
+    }
+
+    const chatId = typeof rawChat.id === "string" ? rawChat.id.trim() : "";
+    if (!chatId) {
+      return;
+    }
+
+    const messages = Array.isArray(rawChat.messages)
+      ? rawChat.messages
+          .filter((message) => message && (message.role === "user" || message.role === "assistant"))
+          .map((message) => ({
+            role: message.role,
+            content: typeof message.content === "string" ? message.content : "",
+            timestamp: typeof message.timestamp === "string" ? message.timestamp : createTimestamp(),
+          }))
+      : [];
+
+    normalized.push({
+      id: chatId,
+      title: normalizeChatTitle(rawChat.title),
+      type: "normal",
+      messages,
+      memory_block: typeof rawChat.memory_block === "string" ? rawChat.memory_block : "",
+      created_at: typeof rawChat.created_at === "string" ? rawChat.created_at : "",
+      updated_at: typeof rawChat.updated_at === "string" ? rawChat.updated_at : "",
+    });
+  });
+
+  return normalized;
 }
 
 async function loadGatewayMeta() {
@@ -682,21 +945,29 @@ async function loadGatewayMeta() {
     state.activeProviderId = settings.active_provider_id ?? "";
     state.activeModelId = activeConfig?.model ?? "";
     state.botName = typeof settings?.bot_name === "string" ? settings.bot_name.trim() : "";
+    state.chats = normalizeIncomingChats(settings.chats);
 
     state.providerLabel = activeProvider?.label ?? settings.active_provider_id ?? "";
     state.modelLabel = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.label ?? activeConfig?.model ?? "";
     state.modelTokenLimit = getModelTokenLimit(state.activeProviderId, state.activeModelId);
 
+    const sortedChats = sortChatsByLatestMessage(state.chats);
+    state.activeChatId = sortedChats[0]?.id ?? "";
+
     syncSwitcherControls();
     updateMetaIndicators();
     updateAssistantHeader(settings);
-    updateTokenCounter(0, state.modelTokenLimit);
+    renderChatHistory();
+    renderActiveChat();
+    syncUsedTokensToContext();
     setStatus("Gateway ready.");
   } catch (error) {
     updateMetaIndicators();
     assistantTitleNode.textContent = "This is your personal assistant";
     assistantMetaNode.textContent = "Assistant metadata unavailable.";
     syncSwitcherControls();
+    renderChatHistory();
+    renderEmptyChatView();
     updateTokenCounter(0, 0);
     setStatus(error.message, true);
   }
@@ -709,10 +980,12 @@ function toggleMenu(forceOpen) {
 }
 
 function setSendingState(isSending) {
+  state.isSending = isSending;
   sendButton.disabled = isSending;
   chatInput.disabled = isSending;
   setSwitchersDisabled(isSending || state.isSwitching || state.isCompacting);
   setCompactButtonDisabled(isSending || state.isSwitching || state.isCompacting);
+  setHistoryControlsDisabled(isSending || state.isSwitching || state.isCompacting);
 }
 
 function processSseBlock(block, assistantBubble) {
@@ -785,6 +1058,42 @@ function processSseBlock(block, assistantBubble) {
   return { done: false, hasError: false };
 }
 
+async function finalizeSuccessfulResponse(chatId, assistantBubble) {
+  const chat = state.chats.find((entry) => entry.id === chatId);
+  if (!chat) {
+    return;
+  }
+
+  chat.messages.push({
+    role: "assistant",
+    content: assistantBubble.dataset.rawText ?? "",
+    timestamp: createTimestamp(),
+  });
+  chat.updated_at = createTimestamp();
+
+  const compactResult = await maybeAutoCompact(chat, "ongoing chat", state.modelTokenLimit);
+  if (!compactResult.ok) {
+    return;
+  }
+
+  renderChatHistory();
+  syncUsedTokensToContext();
+
+  try {
+    await persistChatsToSettings();
+  } catch (error) {
+    setStatus(`Response complete, but chat history was not saved: ${error.message}`, true);
+    return;
+  }
+
+  if (compactResult.compacted) {
+    setStatus("Response complete. Memory compacted.");
+    return;
+  }
+
+  setStatus("Response complete.");
+}
+
 async function sendMessage(event) {
   event.preventDefault();
 
@@ -794,20 +1103,52 @@ async function sendMessage(event) {
     return;
   }
 
+  const existingChat = getActiveChat();
+  const requestHistory = existingChat ? toApiHistory(existingChat.messages) : [];
+  const requestMemoryBlock = existingChat?.memory_block || "";
+
+  let chat = existingChat;
+  if (!chat) {
+    chat = createChatEntry(message);
+    state.chats.push(chat);
+    state.activeChatId = chat.id;
+    updateCurrentChatTitle();
+    renderChatHistory();
+  }
+
+  const userTimestamp = createTimestamp();
+  chat.messages.push({
+    role: "user",
+    content: message,
+    timestamp: userTimestamp,
+  });
+  chat.updated_at = userTimestamp;
+
+  renderChatHistory();
   setSendingState(true);
   setStatus("Sending...");
 
-  addMessage("user", message);
+  addMessage("user", message, userTimestamp);
   const assistantBubble = addMessage("assistant", "");
   assistantBubble.dataset.rawText = "";
   setAssistantLoading(assistantBubble, true);
   chatInput.value = "";
 
   try {
+    await persistChatsToSettings();
+  } catch (error) {
+    setStatus(`Message sent, but chat history was not saved yet: ${error.message}`, true);
+  }
+
+  try {
     const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history: state.history, memory_block: state.memoryBlock }),
+      body: JSON.stringify({
+        message,
+        history: requestHistory,
+        memory_block: requestMemoryBlock,
+      }),
     });
 
     if (!response.ok || !response.body) {
@@ -845,14 +1186,14 @@ async function sendMessage(event) {
         }
 
         if (result.done) {
-          await finalizeSuccessfulResponse(message, assistantBubble);
+          await finalizeSuccessfulResponse(chat.id, assistantBubble);
           setSendingState(false);
           return;
         }
       }
     }
 
-    await finalizeSuccessfulResponse(message, assistantBubble);
+    await finalizeSuccessfulResponse(chat.id, assistantBubble);
   } catch (error) {
     setAssistantLoading(assistantBubble, false);
 
@@ -864,25 +1205,9 @@ async function sendMessage(event) {
     setStatus(error.message, true);
   } finally {
     setSendingState(false);
+    syncUsedTokensToContext();
     chatInput.focus();
   }
-}
-
-async function finalizeSuccessfulResponse(message, assistantBubble) {
-  state.history.push({ role: "user", content: message });
-  state.history.push({ role: "assistant", content: assistantBubble.dataset.rawText ?? "" });
-  const compactResult = await maybeAutoCompact("ongoing chat", state.modelTokenLimit);
-  if (!compactResult.ok) {
-    return;
-  }
-
-  syncUsedTokensToContext();
-  if (compactResult.compacted) {
-    setStatus("Response complete. Memory compacted.");
-    return;
-  }
-
-  setStatus("Response complete.");
 }
 
 async function triggerManualCompaction() {
@@ -890,10 +1215,18 @@ async function triggerManualCompaction() {
     return;
   }
 
+  const activeChat = getActiveChat();
+  if (!activeChat) {
+    setStatus("No active chat to compact.", true);
+    return;
+  }
+
   try {
-    await compactHistoryForLimit(state.modelTokenLimit, "manual request");
-    renderCompactedChatView();
+    await compactHistoryForLimit(activeChat, state.modelTokenLimit, "manual request");
+    renderActiveChat();
+    renderChatHistory();
     syncUsedTokensToContext();
+    await persistChatsToSettings();
     showToast("Compaction complete. Chat context was reduced.");
     setStatus("Memory compacted.");
   } catch (error) {
@@ -955,6 +1288,29 @@ headerModelSelect.addEventListener("change", async () => {
 if (compactButton instanceof HTMLButtonElement) {
   compactButton.addEventListener("click", triggerManualCompaction);
 }
+
+if (newChatButton instanceof HTMLButtonElement) {
+  newChatButton.addEventListener("click", startNewChat);
+}
+
+chatHistoryList.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    return;
+  }
+
+  const item = target instanceof HTMLElement ? target.closest("button[data-chat-id]") : null;
+  if (!(item instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const chatId = item.dataset.chatId;
+  if (!chatId || chatId === state.activeChatId) {
+    return;
+  }
+
+  activateChat(chatId);
+});
 
 chatForm.addEventListener("submit", sendMessage);
 window.addEventListener("load", loadGatewayMeta);

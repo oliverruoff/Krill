@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,20 @@ class ProviderConfig(BaseModel):
     model: str = ""
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(default="", max_length=5000)
+    timestamp: str = ""
+
+
+class ChatSession(BaseModel):
+    id: str
+    title: str = Field(default="New chat", max_length=120)
+    type: Literal["normal"] = "normal"
+    messages: list[ChatMessage] = Field(default_factory=list)
+    memory_block: str = Field(default="", max_length=8000)
+
+
 class Settings(BaseModel):
     bot_name: str = Field(default="MyBot", max_length=15)
     system_prompt: str = Field(default="Talk english. Be playful, friendly and use emojis! :).", max_length=200)
@@ -24,6 +39,7 @@ class Settings(BaseModel):
     active_provider_id: str = ""
     active_model_id: str = ""
     provider_configs: dict[str, ProviderConfig] = Field(default_factory=dict)
+    chats: list[ChatSession] = Field(default_factory=list)
 
 
 async def _read_text(path: Path) -> str:
@@ -115,6 +131,60 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
         }
 
     data["provider_configs"] = normalized_provider_configs
+
+    chats = data.get("chats")
+    normalized_chats: list[dict[str, object]] = []
+    if isinstance(chats, list):
+        for raw_chat in chats:
+            if not isinstance(raw_chat, dict):
+                continue
+
+            chat_id = raw_chat.get("id")
+            chat_title = raw_chat.get("title")
+            raw_messages = raw_chat.get("messages")
+            memory_block = raw_chat.get("memory_block")
+
+            if not isinstance(chat_id, str) or not chat_id.strip():
+                continue
+
+            messages: list[dict[str, str]] = []
+            if isinstance(raw_messages, list):
+                for raw_message in raw_messages:
+                    if not isinstance(raw_message, dict):
+                        continue
+
+                    role = raw_message.get("role")
+                    content = raw_message.get("content")
+                    timestamp = raw_message.get("timestamp")
+
+                    if role not in {"user", "assistant"}:
+                        continue
+
+                    if not isinstance(content, str):
+                        content = ""
+
+                    if not isinstance(timestamp, str):
+                        timestamp = ""
+
+                    messages.append(
+                        {
+                            "role": role,
+                            "content": content,
+                            "timestamp": timestamp,
+                        }
+                    )
+
+            normalized_chats.append(
+                {
+                    "id": chat_id.strip(),
+                    "title": chat_title.strip() if isinstance(chat_title, str) and chat_title.strip() else "New chat",
+                    "type": "normal",
+                    "messages": messages,
+                    "memory_block": memory_block if isinstance(memory_block, str) else "",
+                }
+            )
+
+    data["chats"] = normalized_chats
 
     return data
 

@@ -34,30 +34,42 @@
         </div>
       </header>
 
-      <section class="chat-panel">
-        <div class="chat-meta">
-          <div class="provider-meta">
-            <p class="meta-row"><strong>Provider</strong> <span id="provider-indicator">Loading...</span></p>
-            <p class="meta-row"><strong>Model</strong> <span id="model-indicator">Loading...</span></p>
+      <div class="gateway-body">
+        <aside class="chat-history-panel">
+          <div class="chat-history-header">
+            <h2>Chats</h2>
+            <button type="button" id="new-chat-btn" class="new-chat-btn">New chat</button>
           </div>
-          <div class="token-tools">
-            <p id="token-counter" class="token-counter">0 / 0 tokens (0.00% used)</p>
-            <button type="button" id="compact-btn" class="compact-btn">Compaction</button>
+          <div id="chat-history-list" class="chat-history-list" aria-label="Chat history"></div>
+        </aside>
+
+        <section class="chat-panel">
+          <div class="chat-meta">
+            <div class="provider-meta">
+              <p class="meta-row"><strong>Provider</strong> <span id="provider-indicator">Loading...</span></p>
+              <p class="meta-row"><strong>Model</strong> <span id="model-indicator">Loading...</span></p>
+            </div>
+            <div class="token-tools">
+              <p id="token-counter" class="token-counter">0 / 0 tokens (0.00% used)</p>
+              <button type="button" id="compact-btn" class="compact-btn">Compaction</button>
+            </div>
           </div>
-        </div>
 
-        <div id="chat-thread" class="chat-thread" aria-live="polite"></div>
+          <p id="current-chat-title" class="current-chat-title">New chat</p>
 
-        <form id="chat-form" class="chat-composer" novalidate>
-          <label for="chat-input">Message</label>
-          <textarea id="chat-input" rows="3" maxlength="5000" required></textarea>
-          <div class="actions">
-            <button type="submit" id="send-btn">Send</button>
-          </div>
-        </form>
+          <div id="chat-thread" class="chat-thread" aria-live="polite"></div>
 
-        <p id="status" role="status" aria-live="polite"></p>
-      </section>
+          <form id="chat-form" class="chat-composer" novalidate>
+            <label for="chat-input">Message</label>
+            <textarea id="chat-input" rows="3" maxlength="5000" required></textarea>
+            <div class="actions">
+              <button type="submit" id="send-btn">Send</button>
+            </div>
+          </form>
+
+          <p id="status" role="status" aria-live="polite"></p>
+        </section>
+      </div>
     </main>
 
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
