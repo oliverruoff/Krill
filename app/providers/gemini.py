@@ -1,3 +1,5 @@
+"""Google Gemini provider implementation for generation and verification calls."""
+
 import asyncio
 import json
 from urllib import error, request

@@ -1,3 +1,5 @@
+"""Shared token usage helpers for updating and reading daily usage counters."""
+
 from datetime import datetime, timezone
 
 from app.config import DailyTokenUsage, Settings

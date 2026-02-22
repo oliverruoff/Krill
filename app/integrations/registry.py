@@ -1,3 +1,5 @@
+"""Registry for runtime integrations such as Telegram."""
+
 from .base import IntegrationPlugin
 from .telegram import TelegramIntegration
 

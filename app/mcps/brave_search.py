@@ -1,3 +1,5 @@
+"""Brave Search MCP plugin providing a web search tool and token verification."""
+
 import asyncio
 import json
 from urllib import error, parse, request

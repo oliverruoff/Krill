@@ -1,3 +1,5 @@
+"""Base MCP plugin types for config fields, tool specs, and plugin protocol."""
+
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field

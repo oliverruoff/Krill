@@ -1,3 +1,5 @@
+"""Telegram polling worker with owner checks and ephemeral Telegram chat sessions."""
+
 import asyncio
 import contextlib
 from datetime import datetime, timezone

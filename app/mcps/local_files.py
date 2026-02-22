@@ -1,3 +1,5 @@
+"""Local file MCP plugin for listing, globbing, grepping, and reading files."""
+
 import asyncio
 import fnmatch
 import os

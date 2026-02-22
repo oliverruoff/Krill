@@ -1,3 +1,5 @@
+"""Minimal Telegram Bot API client helpers used by the Telegram worker."""
+
 import json
 from urllib import parse, request
 

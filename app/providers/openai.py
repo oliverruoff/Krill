@@ -1,3 +1,5 @@
+"""OpenAI provider implementation for generation and credential verification."""
+
 import asyncio
 import json
 from urllib import error, request

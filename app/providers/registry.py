@@ -1,3 +1,5 @@
+"""Registry for available LLM providers and provider metadata helpers."""
+
 from .base import LLMProvider
 from .gemini import GeminiProvider
 from .openai import OpenAIProvider

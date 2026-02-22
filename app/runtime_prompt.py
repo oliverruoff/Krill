@@ -1,3 +1,5 @@
+"""Helpers for building the runtime system prompt injected into model calls."""
+
 def compose_runtime_system_prompt(bot_name: str, system_prompt: str, memory_block: str = "") -> str:
     invisible_context = (
         f"You are Krill assistant named '{bot_name}'. "

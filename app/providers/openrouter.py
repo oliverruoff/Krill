@@ -1,3 +1,5 @@
+"""OpenRouter provider implementation with model resolution and API helpers."""
+
 import asyncio
 import json
 from urllib import error, request

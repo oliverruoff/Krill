@@ -1,3 +1,5 @@
+"""Public integration registry exports consumed by API startup and validation."""
+
 from .registry import get_integration, get_integration_options, get_runtime_integrations, is_supported_integration
 
 __all__ = [

@@ -1,3 +1,5 @@
+"""Provider protocol defining the generate/verify contract for LLM backends."""
+
 from typing import Protocol
 
 

@@ -1,3 +1,8 @@
+/*
+ * Gateway client: manages chat UI, queueing/stream handling, settings sync,
+ * tool/integration panels, and header status indicators.
+ */
+
 const CHAT_TITLE_MAX_LENGTH = 24;
 const EDITABLE_CHAT_TITLE_MAX_LENGTH = 24;
 const CHAT_SYNC_INTERVAL_MS = 3000;

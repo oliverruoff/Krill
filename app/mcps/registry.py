@@ -1,3 +1,5 @@
+"""Registry of MCP plugins that can be enabled and called by orchestration."""
+
 from .base import MCPPlugin, McpConfigField, McpToolSpec
 from .brave_search import BraveSearchMCP
 from .git_ops import GitOpsMCP

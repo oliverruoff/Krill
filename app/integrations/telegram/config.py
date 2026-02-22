@@ -1,3 +1,5 @@
+"""Telegram integration config schema and verification routine."""
+
 import asyncio
 from urllib import error
 

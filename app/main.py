@@ -1,3 +1,5 @@
+"""FastAPI entrypoint exposing setup, gateway, chat, and integration APIs."""
+
 import asyncio
 import json
 from pathlib import Path

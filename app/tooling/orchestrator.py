@@ -1,3 +1,5 @@
+"""Sequential tool-orchestration loop that plans, executes tools, and finalizes output."""
+
 import asyncio
 import json
 from typing import Any, Awaitable, Callable, Sequence, TypedDict, cast

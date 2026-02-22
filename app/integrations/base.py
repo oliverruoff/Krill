@@ -1,3 +1,5 @@
+"""Base integration protocol and config field model for optional connectors."""
+
 from typing import Protocol
 
 from pydantic import BaseModel

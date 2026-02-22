@@ -1,3 +1,5 @@
+"""Telegram integration plugin wiring verify/start/stop lifecycle behavior."""
+
 from app.integrations.base import IntegrationConfigField, IntegrationPlugin
 
 from .config import CONFIG_FIELDS, verify_telegram_config

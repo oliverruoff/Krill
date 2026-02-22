@@ -1,3 +1,8 @@
+/*
+ * Setup client: handles initial provider/tool/integration configuration,
+ * advanced settings, import/export, and setup completion persistence.
+ */
+
 const form = document.getElementById("setup-form");
 const landingView = document.getElementById("setup-landing");
 const statusNode = document.getElementById("status");

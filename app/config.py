@@ -1,3 +1,5 @@
+"""Settings models and persistence helpers for the shared braindump state file."""
+
 import asyncio
 import json
 import os

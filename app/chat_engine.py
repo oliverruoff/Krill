@@ -1,3 +1,5 @@
+"""Shared chat execution engine used by Gateway SSE and Telegram integration."""
+
 from typing import Awaitable, Callable, TypedDict
 
 from app.config import Settings
@@ -40,7 +42,7 @@ async def generate_chat_response(
     bot_name: str = "",
     system_prompt: str = "",
     on_tool_step: ToolStepCallback | None = None,
-) -> tuple[ChatEngineResult, int]:
+) -> tuple[ChatEngineResult, int | None]:
     active_provider_id = provider_id.strip() if provider_id.strip() else settings.active_provider_id
     provider_config = settings.provider_configs.get(active_provider_id)
     if provider_config is None:

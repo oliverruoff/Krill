@@ -1,3 +1,5 @@
+"""Git and GitHub MCP plugin for repository operations inside workspace."""
+
 import asyncio
 import os
 import re
