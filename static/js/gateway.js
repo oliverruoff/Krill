@@ -1,5 +1,5 @@
-const CHAT_TITLE_MAX_LENGTH = 48;
-const EDITABLE_CHAT_TITLE_MAX_LENGTH = 32;
+const CHAT_TITLE_MAX_LENGTH = 24;
+const EDITABLE_CHAT_TITLE_MAX_LENGTH = 24;
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -9,6 +9,7 @@ const providerIndicator = document.getElementById("provider-indicator");
 const modelIndicator = document.getElementById("model-indicator");
 const systemTraceToggleButton = document.getElementById("system-trace-toggle");
 const tokenCounterNode = document.getElementById("token-counter");
+const tokenCounterTotalNode = document.getElementById("token-counter-total");
 const statusNode = document.getElementById("status");
 const menuButton = document.getElementById("menu-btn");
 const menuPopover = document.getElementById("menu-popover");
@@ -214,7 +215,7 @@ function updateCurrentChatTitle() {
   }
 
   const activeChat = getActiveChat();
-  currentChatTitleNode.textContent = activeChat ? normalizeChatTitle(activeChat.title) : "New chat";
+  currentChatTitleNode.textContent = activeChat ? deriveChatTitle(normalizeChatTitle(activeChat.title)) : "New chat";
 }
 
 function updateSystemTraceToggleLabel() {
@@ -784,7 +785,10 @@ function updateTokenCounter(usedTokens = state.usedTokens, tokenLimit = state.mo
     : 0;
 
   const percent = safeLimit > 0 ? ((safeUsed / safeLimit) * 100).toFixed(2) : "0.00";
-  tokenCounterNode.textContent = `${formatNumber(safeUsed)} / ${formatNumber(safeLimit)} tokens (${percent}% used) - Chat total: ${formatNumber(chatTotalTokens)}`;
+  tokenCounterNode.textContent = `${formatNumber(safeUsed)} / ${formatNumber(safeLimit)} tokens (${percent}% used)`;
+  if (tokenCounterTotalNode instanceof HTMLElement) {
+    tokenCounterTotalNode.textContent = `Chat total: ${formatNumber(chatTotalTokens)}`;
+  }
 }
 
 function getProviderById(providerId) {
