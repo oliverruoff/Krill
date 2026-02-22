@@ -43,6 +43,11 @@ class McpConfig(BaseModel):
     params: dict[str, str] = Field(default_factory=dict)
 
 
+class DailyTokenUsage(BaseModel):
+    date: str
+    tokens: int = Field(default=0, ge=0)
+
+
 class Settings(BaseModel):
     bot_name: str = Field(default="MyBot", max_length=15)
     system_prompt: str = Field(default="Talk english. Be playful, friendly and use emojis! :).", max_length=200)
@@ -54,6 +59,7 @@ class Settings(BaseModel):
     mcp_configs: dict[str, McpConfig] = Field(default_factory=dict)
     tool_max_recursion: int = Field(default=6, ge=1, le=20)
     tool_timeout_seconds: int = Field(default=45, ge=5, le=300)
+    daily_token_usage: list[DailyTokenUsage] = Field(default_factory=list)
 
 
 async def _read_text(path: Path) -> str:
@@ -275,6 +281,27 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
             "enabled": True,
             "params": {},
         }
+
+    raw_daily_token_usage = data.get("daily_token_usage")
+    normalized_daily_token_usage: list[dict[str, object]] = []
+    if isinstance(raw_daily_token_usage, list):
+        for item in raw_daily_token_usage:
+            if not isinstance(item, dict):
+                continue
+
+            date = item.get("date")
+            tokens = item.get("tokens")
+            if not isinstance(date, str) or not date.strip():
+                continue
+
+            normalized_daily_token_usage.append(
+                {
+                    "date": date.strip(),
+                    "tokens": tokens if isinstance(tokens, int) and tokens > 0 else 0,
+                }
+            )
+
+    data["daily_token_usage"] = normalized_daily_token_usage
 
     tool_max_recursion = data.get("tool_max_recursion")
     if not isinstance(tool_max_recursion, int):

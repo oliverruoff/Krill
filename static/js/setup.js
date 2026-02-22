@@ -29,6 +29,7 @@ const state = {
   providerConfigs: {},
   chats: [],
   mcpConfigs: {},
+  dailyTokenUsage: [],
   activeProviderId: "",
   toolMaxRecursion: 6,
   toolTimeoutSeconds: 45,
@@ -269,6 +270,7 @@ function createSetupSnapshot() {
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
     chats: state.chats,
     mcp_configs: state.mcpConfigs,
+    daily_token_usage: state.dailyTokenUsage,
     tool_max_recursion: maxRecursion,
     tool_timeout_seconds: timeoutSeconds,
   };
@@ -302,6 +304,7 @@ function buildPayload() {
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
     chats: state.chats,
     mcp_configs: state.mcpConfigs,
+    daily_token_usage: state.dailyTokenUsage,
     tool_max_recursion: maxRecursion,
     tool_timeout_seconds: timeoutSeconds,
   };
@@ -393,6 +396,7 @@ async function loadPage() {
     state.providerConfigs = settings.provider_configs ?? {};
     state.chats = Array.isArray(settings.chats) ? settings.chats : [];
     state.mcpConfigs = settings.mcp_configs && typeof settings.mcp_configs === "object" ? settings.mcp_configs : {};
+    state.dailyTokenUsage = Array.isArray(settings.daily_token_usage) ? settings.daily_token_usage : [];
     state.activeProviderId = settings.active_provider_id ?? "";
     state.toolMaxRecursion = Number.isFinite(Number(settings.tool_max_recursion)) ? Number(settings.tool_max_recursion) : 6;
     state.toolTimeoutSeconds = Number.isFinite(Number(settings.tool_timeout_seconds)) ? Number(settings.tool_timeout_seconds) : 45;

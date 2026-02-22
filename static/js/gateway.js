@@ -16,6 +16,7 @@ const menuButton = document.getElementById("menu-btn");
 const menuPopover = document.getElementById("menu-popover");
 const assistantTitleNode = document.getElementById("assistant-title");
 const assistantMetaNode = document.getElementById("assistant-meta");
+const dailyTokenUsageNode = document.getElementById("daily-token-usage");
 const headerProviderSelect = document.getElementById("header-provider-select");
 const headerModelSelect = document.getElementById("header-model-select");
 const compactButton = document.getElementById("compact-btn");
@@ -36,6 +37,7 @@ const state = {
   usedTokens: 0,
   lastRequestTokens: 0,
   settings: null,
+  dailyTokenUsage: [],
   mcps: [],
   mcpConfigs: {},
   chats: [],
@@ -779,6 +781,58 @@ function formatNumber(value) {
   return Number(value || 0).toLocaleString("de-DE");
 }
 
+function getTodayDateKey() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function normalizeDailyTokenUsage(rawUsage) {
+  if (!Array.isArray(rawUsage)) {
+    return [];
+  }
+
+  return rawUsage
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => {
+      const date = typeof entry.date === "string" ? entry.date.trim() : "";
+      const tokensRaw = Number(entry.tokens);
+      const tokens = Number.isFinite(tokensRaw) && tokensRaw > 0 ? Math.floor(tokensRaw) : 0;
+      return { date, tokens };
+    })
+    .filter((entry) => entry.date);
+}
+
+function updateDailyTokenUsageLabel() {
+  if (!(dailyTokenUsageNode instanceof HTMLElement)) {
+    return;
+  }
+
+  const today = getTodayDateKey();
+  const todayEntry = state.dailyTokenUsage.find((entry) => entry.date === today);
+  const tokens = todayEntry ? Number(todayEntry.tokens || 0) : 0;
+  dailyTokenUsageNode.textContent = `Today: ${formatNumber(tokens)} tokens`;
+}
+
+function addDailyTokenUsage(tokensToAdd) {
+  const tokens = Number(tokensToAdd);
+  if (!Number.isFinite(tokens) || tokens <= 0) {
+    return;
+  }
+
+  const today = getTodayDateKey();
+  const existingEntry = state.dailyTokenUsage.find((entry) => entry.date === today);
+  if (existingEntry) {
+    existingEntry.tokens = Math.max(0, Number(existingEntry.tokens || 0)) + Math.floor(tokens);
+  } else {
+    state.dailyTokenUsage.push({ date: today, tokens: Math.floor(tokens) });
+  }
+
+  updateDailyTokenUsageLabel();
+}
+
 function updateTokenCounter(usedTokens = state.usedTokens, tokenLimit = state.modelTokenLimit) {
   const safeUsed = Math.max(0, Number(usedTokens || 0));
   const safeLimit = Math.max(0, Number(tokenLimit || 0));
@@ -989,8 +1043,11 @@ async function persistChatsToSettings() {
   const nextSettings = JSON.parse(JSON.stringify(state.settings));
   nextSettings.chats = state.chats;
   nextSettings.mcp_configs = state.mcpConfigs;
+  nextSettings.daily_token_usage = state.dailyTokenUsage;
   const persisted = await persistSettings(nextSettings);
   state.settings = persisted;
+  state.dailyTokenUsage = normalizeDailyTokenUsage(persisted.daily_token_usage);
+  updateDailyTokenUsageLabel();
 }
 
 function normalizeIncomingMcpConfigs(rawConfigs) {
@@ -1039,9 +1096,12 @@ async function persistMcpConfigsToSettings() {
   const nextSettings = JSON.parse(JSON.stringify(state.settings));
   nextSettings.mcp_configs = state.mcpConfigs;
   nextSettings.chats = state.chats;
+  nextSettings.daily_token_usage = state.dailyTokenUsage;
   const persisted = await persistSettings(nextSettings);
   state.settings = persisted;
   state.mcpConfigs = normalizeIncomingMcpConfigs(persisted.mcp_configs);
+  state.dailyTokenUsage = normalizeDailyTokenUsage(persisted.daily_token_usage);
+  updateDailyTokenUsageLabel();
 }
 
 async function verifyMcpConfig(mcpId) {
@@ -1370,9 +1430,12 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
     nextSettings.active_provider_id = nextProviderId;
     nextSettings.chats = state.chats;
     nextSettings.mcp_configs = state.mcpConfigs;
+    nextSettings.daily_token_usage = state.dailyTokenUsage;
     const persisted = await persistSettings(nextSettings);
 
     state.settings = persisted;
+    state.dailyTokenUsage = normalizeDailyTokenUsage(persisted.daily_token_usage);
+    updateDailyTokenUsageLabel();
     state.activeProviderId = nextProviderId;
     state.activeModelId = nextModelId;
     state.modelTokenLimit = getModelTokenLimit(nextProviderId, nextModelId);
@@ -1474,6 +1537,7 @@ async function loadGatewayMeta() {
     state.activeModelId = activeConfig?.model ?? "";
     state.botName = typeof settings?.bot_name === "string" ? settings.bot_name.trim() : "";
     state.chats = normalizeIncomingChats(settings.chats);
+    state.dailyTokenUsage = normalizeDailyTokenUsage(settings.daily_token_usage);
     state.mcps = Array.isArray(mcps) ? mcps : [];
     state.mcpConfigs = normalizeIncomingMcpConfigs(settings.mcp_configs);
 
@@ -1491,6 +1555,7 @@ async function loadGatewayMeta() {
     renderActiveChat();
     renderMcpPanel();
     syncUsedTokensToContext();
+    updateDailyTokenUsageLabel();
     updateComposerState();
     setStatus("Gateway ready.");
   } catch (error) {
@@ -1502,6 +1567,7 @@ async function loadGatewayMeta() {
     renderEmptyChatView();
     renderMcpPanel();
     updateTokenCounter(0, 0);
+    updateDailyTokenUsageLabel();
     updateComposerState();
     setStatus(error.message, true);
   }
@@ -1693,6 +1759,7 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
   if (Number.isFinite(Number(context.usedTokens)) && Number(context.usedTokens) > 0) {
     const currentTotal = Number(chat.total_tokens_used || 0);
     chat.total_tokens_used = Math.max(0, currentTotal) + Number(context.usedTokens);
+    addDailyTokenUsage(Number(context.usedTokens));
   }
   chat.updated_at = assistantTimestamp;
 
@@ -1858,6 +1925,7 @@ async function executeQueuedJob(chat, job, runtime) {
     if (Number.isFinite(Number(context.usedTokens)) && Number(context.usedTokens) > 0) {
       const currentTotal = Number(chat.total_tokens_used || 0);
       chat.total_tokens_used = Math.max(0, currentTotal) + Number(context.usedTokens);
+      addDailyTokenUsage(Number(context.usedTokens));
     }
     chat.updated_at = errorTimestamp;
 

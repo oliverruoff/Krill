@@ -466,6 +466,11 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+.assistant-meta-subtle {
+  font-size: 0.74rem;
+  color: #8b98aa;
+}
+
 .menu-wrap {
   position: relative;
 }
