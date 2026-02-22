@@ -3,8 +3,10 @@
 import asyncio
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +14,9 @@ from pydantic import BaseModel, Field
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_BRAINDUMP_PATH = BASE_DIR / "data" / "braindump.json"
 BRAINDUMP_PATH = Path(os.getenv("KRILL_BRAINDUMP_PATH", str(DEFAULT_BRAINDUMP_PATH))).resolve()
+BRAINDUMP_BACKUP_PATH = BRAINDUMP_PATH.with_suffix(f"{BRAINDUMP_PATH.suffix}.bak")
 DATA_DIR = BRAINDUMP_PATH.parent
+_SETTINGS_IO_LOCK = asyncio.Lock()
 
 
 class ProviderConfig(BaseModel):
@@ -85,17 +89,42 @@ async def _write_text(path: Path, content: str) -> None:
     await asyncio.to_thread(path.write_text, content, encoding="utf-8")
 
 
+async def _atomic_write_text(path: Path, content: str) -> None:
+    temp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+    await _write_text(temp_path, content)
+    await asyncio.to_thread(os.replace, temp_path, path)
+
+
 async def ensure_settings_file() -> None:
     await asyncio.to_thread(DATA_DIR.mkdir, parents=True, exist_ok=True)
 
-    if not BRAINDUMP_PATH.exists():
-        await save_settings(Settings())
+    if BRAINDUMP_PATH.exists():
+        return
+
+    async with _SETTINGS_IO_LOCK:
+        if BRAINDUMP_PATH.exists():
+            return
+        defaults = _sync_active_selection(Settings())
+        payload = defaults.model_dump_json(indent=2)
+        await _atomic_write_text(BRAINDUMP_PATH, payload)
 
 
 async def load_settings() -> Settings:
     await ensure_settings_file()
-    payload = await _read_text(BRAINDUMP_PATH)
-    raw_json = json.loads(payload)
+
+    async with _SETTINGS_IO_LOCK:
+        payload = await _read_text(BRAINDUMP_PATH)
+        raw_json: object
+        try:
+            raw_json = json.loads(payload)
+        except json.JSONDecodeError:
+            await asyncio.sleep(0.05)
+            retry_payload = await _read_text(BRAINDUMP_PATH)
+            try:
+                raw_json = json.loads(retry_payload)
+            except json.JSONDecodeError:
+                raw_json = await _load_from_backup_or_defaults()
+
     raw_data = raw_json if isinstance(raw_json, dict) else {}
     normalized_data = _normalize_legacy_settings(raw_data)
     settings = Settings.model_validate(normalized_data)
@@ -108,10 +137,32 @@ async def load_settings() -> Settings:
 
 async def save_settings(settings: Settings) -> Settings:
     await asyncio.to_thread(DATA_DIR.mkdir, parents=True, exist_ok=True)
-    normalized = _sync_active_selection(settings)
-    payload = normalized.model_dump_json(indent=2)
-    await _write_text(BRAINDUMP_PATH, payload)
-    return normalized
+    async with _SETTINGS_IO_LOCK:
+        normalized = _sync_active_selection(settings)
+        payload = normalized.model_dump_json(indent=2)
+
+        if BRAINDUMP_PATH.exists():
+            try:
+                await asyncio.to_thread(shutil.copyfile, BRAINDUMP_PATH, BRAINDUMP_BACKUP_PATH)
+            except Exception:
+                pass
+
+        await _atomic_write_text(BRAINDUMP_PATH, payload)
+        return normalized
+
+
+async def _load_from_backup_or_defaults() -> object:
+    if BRAINDUMP_BACKUP_PATH.exists():
+        try:
+            backup_payload = await _read_text(BRAINDUMP_BACKUP_PATH)
+            return json.loads(backup_payload)
+        except Exception:
+            pass
+
+    defaults = _sync_active_selection(Settings())
+    defaults_payload = defaults.model_dump_json(indent=2)
+    await _atomic_write_text(BRAINDUMP_PATH, defaults_payload)
+    return defaults.model_dump()
 
 
 def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]:

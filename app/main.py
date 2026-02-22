@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Literal
 
@@ -34,6 +35,7 @@ STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(title="Krill")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+logger = logging.getLogger(__name__)
 
 
 class ModelOption(BaseModel):
@@ -336,83 +338,87 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     history = [turn.model_dump() for turn in payload.history]
 
     async def event_stream():
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-        orchestration_holder: dict[str, object] = {}
+        try:
+            queue: asyncio.Queue[str | None] = asyncio.Queue()
+            orchestration_holder: dict[str, object] = {}
 
-        async def _emit_tool_step(step: object) -> None:
-            payload: dict[str, object]
-            if isinstance(step, dict):
-                payload = {str(key): value for key, value in step.items()}
-            else:
-                payload = {"system_type": "tool_step", "content": str(step)}
-            await queue.put(_sse("tool_step", payload))
+            async def _emit_tool_step(step: object) -> None:
+                event_payload: dict[str, object]
+                if isinstance(step, dict):
+                    event_payload = {str(key): value for key, value in step.items()}
+                else:
+                    event_payload = {"system_type": "tool_step", "content": str(step)}
+                await queue.put(_sse("tool_step", event_payload))
 
-        async def run_orchestration() -> None:
-            try:
-                orchestration_holder["result"] = await generate_chat_response(
-                    settings=settings,
-                    message=payload.message,
-                    history=history,
-                    memory_block=payload.memory_block,
-                    provider_id=payload.provider_id,
-                    model=payload.model,
-                    api_key=payload.api_key,
-                    bot_name=payload.bot_name,
-                    system_prompt=payload.system_prompt,
-                    on_tool_step=_emit_tool_step,
-                )
-            except Exception as exc:
-                orchestration_holder["error"] = exc
-            finally:
-                await queue.put(None)
+            async def run_orchestration() -> None:
+                try:
+                    orchestration_holder["result"] = await generate_chat_response(
+                        settings=settings,
+                        message=payload.message,
+                        history=history,
+                        memory_block=payload.memory_block,
+                        provider_id=payload.provider_id,
+                        model=payload.model,
+                        api_key=payload.api_key,
+                        bot_name=payload.bot_name,
+                        system_prompt=payload.system_prompt,
+                        on_tool_step=_emit_tool_step,
+                    )
+                except Exception as exc:
+                    orchestration_holder["error"] = exc
+                finally:
+                    await queue.put(None)
 
-        orchestration_task = asyncio.create_task(run_orchestration())
+            orchestration_task = asyncio.create_task(run_orchestration())
 
-        while True:
-            item = await queue.get()
-            if item is None:
-                break
-            yield item
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
 
-        await orchestration_task
+            await orchestration_task
 
-        if "error" in orchestration_holder:
-            yield _sse("error", {"detail": str(orchestration_holder["error"])})
-            return
+            if "error" in orchestration_holder:
+                yield _sse("error", {"detail": str(orchestration_holder["error"])})
+                return
 
-        orchestration_payload = orchestration_holder.get("result")
-        if not (isinstance(orchestration_payload, tuple) and len(orchestration_payload) == 2):
-            yield _sse("error", {"detail": "Missing orchestration result."})
-            return
+            orchestration_payload = orchestration_holder.get("result")
+            if not (isinstance(orchestration_payload, tuple) and len(orchestration_payload) == 2):
+                yield _sse("error", {"detail": "Missing orchestration result."})
+                return
 
-        orchestration, token_limit = orchestration_payload
-        if not isinstance(orchestration, dict):
-            yield _sse("error", {"detail": "Invalid orchestration payload."})
-            return
+            orchestration, token_limit = orchestration_payload
+            if not isinstance(orchestration, dict):
+                yield _sse("error", {"detail": "Invalid orchestration payload."})
+                return
 
-        text = str(orchestration.get("text", ""))
-        used_tokens = orchestration.get("used_tokens")
-        used_mcp_tools = orchestration.get("used_mcp_tools", [])
-        system_trace_messages = orchestration.get("system_trace_messages", [])
+            text = str(orchestration.get("text", ""))
+            used_tokens = orchestration.get("used_tokens")
+            used_mcp_tools = orchestration.get("used_mcp_tools", [])
+            system_trace_messages = orchestration.get("system_trace_messages", [])
 
-        used_value = used_tokens if isinstance(used_tokens, int) else 0
-        used_percent = round((used_value / token_limit) * 100, 2) if token_limit else 0
-        yield _sse(
-            "meta",
-            {
-                "used_tokens": used_value,
-                "token_limit": token_limit,
-                "used_percent": used_percent,
-                "used_mcp_tools": used_mcp_tools,
-                "system_trace_messages": system_trace_messages,
-            },
-        )
+            used_value = used_tokens if isinstance(used_tokens, int) else 0
+            used_percent = round((used_value / token_limit) * 100, 2) if token_limit else 0
+            yield _sse(
+                "meta",
+                {
+                    "used_tokens": used_value,
+                    "token_limit": token_limit,
+                    "used_percent": used_percent,
+                    "used_mcp_tools": used_mcp_tools,
+                    "system_trace_messages": system_trace_messages,
+                },
+            )
 
-        for chunk in _chunk_text(str(text)):
-            yield _sse("token", {"text": chunk})
-            await asyncio.sleep(0.01)
+            for chunk in _chunk_text(str(text)):
+                yield _sse("token", {"text": chunk})
+                await asyncio.sleep(0.01)
 
-        yield _sse("done", {"ok": True})
+            yield _sse("done", {"ok": True})
+        except Exception as exc:
+            logger.exception("Unhandled chat stream error")
+            yield _sse("error", {"detail": f"Chat stream failed: {exc}"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -519,7 +525,7 @@ def _is_setup_complete(settings: Settings) -> bool:
 
 
 def _sse(event_name: str, payload: dict[str, object]) -> str:
-    return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
+    return f"event: {event_name}\ndata: {json.dumps(payload, default=str)}\n\n"
 
 
 def _compaction_system_prompt() -> str:

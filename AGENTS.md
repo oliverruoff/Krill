@@ -1,92 +1,96 @@
 # AGENTS.md
-Practical guidance for coding agents working in `Krill`.
+Operational guide for agentic coding tools working in `Krill`.
 
-## 1) Project Overview
+## 1) Project Snapshot
 - Stack: Python 3.11+, FastAPI, Uvicorn, Pydantic, vanilla HTML/CSS/JS.
 - Entrypoint: `app/main.py`.
-- Persistence: single state file `data/braindump.json`.
-- Product shape: setup UI + gateway UI + provider registry + tool (MCP) orchestration.
+- Core persisted state: `data/braindump.json`.
+- Product: setup flow + gateway chat UI + provider/tool orchestration + optional integrations.
 
-## 2) Important Paths
-- `app/main.py`: API routes, SSE chat stream, settings validation.
-- `app/config.py`: Pydantic models + legacy normalization + save/load.
-- `app/providers/`: provider interface + implementations (`openai`, `gemini`, `openrouter`).
-- `app/mcps/`: tool plugins (`brave_search`, `git_ops`, `local_files`) + registry.
-- `app/tooling/orchestrator.py`: recursive sequential tool orchestration.
-- `static/setup.html`, `static/js/setup.js`: setup and advanced settings.
-- `static/gateway.html`, `static/js/gateway.js`: multi-chat gateway and live orchestration UI.
-- `static/css/style.css`: shared UI styling.
+## 2) Architecture Map
+- `app/main.py`: FastAPI routes, SSE chat endpoint, settings and integration APIs.
+- `app/config.py`: settings models, normalization, robust file load/save.
+- `app/chat_engine.py`: shared chat execution path used by Gateway and Telegram.
+- `app/runtime_prompt.py`: system prompt composition helper.
+- `app/usage.py`: shared daily token usage helpers.
+- `app/providers/`: LLM provider protocol + registry + provider implementations.
+- `app/mcps/`: tool plugin protocol + registry + tools (`brave_search`, `git_ops`, `local_files`).
+- `app/tooling/orchestrator.py`: recursive tool-calling loop (`generate_with_tools`).
+- `app/integrations/`: integration protocol + registry.
+- `app/integrations/telegram/`: Telegram integration config/client/worker/plugin.
+- `static/js/setup.js`: setup page behavior.
+- `static/js/gateway.js`: gateway UI, queueing, streaming, settings sync.
 
-## 3) External Agent Rule Files
+## 3) External Rule Files
 - `.cursorrules`: not present.
 - `.cursor/rules/`: not present.
 - `.github/copilot-instructions.md`: not present.
-- Therefore, this `AGENTS.md` is the canonical in-repo agent guide.
+- Treat this file as the canonical in-repo agent guide.
 
-## 4) Build / Run Commands
+## 4) Setup / Run Commands
 Run from repo root: `C:\Users\olive\Documents\develop\Krill`
 
-Create venv:
+Create virtual environment:
 ```bash
 python -m venv .venv
 ```
 
-Install deps (PowerShell):
+Install dependencies (PowerShell):
 ```bash
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Install deps (macOS/Linux):
+Install dependencies (macOS/Linux):
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run app:
+Run app locally:
 ```bash
 uvicorn app.main:app --reload --port 8055
 ```
 
-Backend compile sanity check:
-```bash
-python -m compileall app
-```
-
-Frontend JS syntax checks:
-```bash
-node --check static/js/setup.js
-node --check static/js/gateway.js
-```
-
-Docker:
+Docker (optional):
 ```bash
 docker build -t krill:latest .
 docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
 
-## 5) Lint / Format / Test Commands
-Current repository state:
-- No committed lint config (`ruff`, `flake8`, etc.)
-- No committed formatter config (`black`, `prettier`, etc.)
-- No committed `tests/` directory yet
+## 5) Build / Lint / Test Commands
+Current repo state:
+- No dedicated lint tool config committed (`ruff`, `flake8`, `eslint`, etc.).
+- No formatter config committed (`black`, `prettier`, etc.).
+- No committed test suite directory at the moment.
 
-If tests are added, use pytest:
+Backend sanity check:
+```bash
+python -m compileall app
+```
+
+Frontend syntax checks:
+```bash
+node --check static/js/setup.js
+node --check static/js/gateway.js
+```
+
+If tests are added, use `pytest`:
 ```bash
 pytest
 ```
 
-Single test file:
+Run a single test file:
 ```bash
 pytest tests/test_api.py
 ```
 
-Single test function (important pattern):
+Run a single test function (important):
 ```bash
 pytest tests/test_api.py::test_chat_stream_returns_sse
 ```
 
-Useful options:
+Useful focused options:
 ```bash
 pytest -k settings
 pytest -x
@@ -97,58 +101,61 @@ pytest -q
 
 ### Python
 - Use explicit imports; no wildcard imports.
-- Prefer `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants.
-- Type hints are expected on new/changed functions.
-- Keep helpers focused and side effects obvious.
-- Keep async I/O non-blocking (`asyncio.to_thread` for blocking file operations).
-- Do not silently swallow exceptions; return actionable `HTTPException` details.
+- Naming: `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants.
+- Add type hints to new or edited functions whenever practical.
+- Keep modules cohesive and avoid hidden side effects.
+- Use module docstrings (already standard in this repo).
 
-### FastAPI / Pydantic
-- Define explicit request/response models.
-- Put constraints/defaults in `Field(...)`.
-- Preserve backward compatibility through normalization in `app/config.py`.
-- Validate IDs against registries (providers/MCPs) where applicable.
+### Formatting
+- Preserve existing style in each file.
+- Keep line lengths readable; avoid dense one-liners.
+- Do not introduce new formatting tools unless requested.
 
-### Frontend (Vanilla JS)
-- Prefer `const`; use `let` only for reassignment.
-- Keep functions small and composable.
-- Keep API payload shape aligned with backend models.
+### Types and Data Models
+- Prefer explicit Pydantic models for API inputs/outputs.
+- Put constraints/defaults in `Field(...)` where relevant.
+- Normalize persisted fields in `app/config.py` when adding/changing schema.
+
+### Naming and Semantics
+- Provider IDs, MCP IDs, integration IDs are lowercase strings.
+- Keep route/model names explicit and aligned (`/api/integrations/status` -> `IntegrationStatusResponse`).
+
+## 7) Error Handling Conventions
+- Fail fast on invalid state, but return actionable detail.
+- For API validation/state issues, use `HTTPException` with clear `detail`.
+- Preserve SSE contract: `tool_step`, `meta`, `token`, `done`, `error`.
+- In streaming paths, prefer graceful `error` events over uncaught crashes.
+- Log unexpected backend exceptions with context.
+
+## 8) Persistence and State Rules
+- `data/braindump.json` is the source of truth for core app settings/state.
+- Use `load_settings()` / `save_settings()` helpers; do not bypass them.
+- Settings I/O is atomic and locked; keep that behavior intact.
+- Any new persisted field requires normalization support in `_normalize_legacy_settings`.
+- Telegram chat sessions are intentionally ephemeral and must not be written to `settings.chats`.
+- Telegram persisted state is limited (owner binding + update offset + integration config).
+
+## 9) Chat Flow Rules
+- Shared chat execution must go through `app/chat_engine.py`.
+- Keep orchestration logic centralized in `generate_with_tools(...)`.
+- If chat behavior changes, update shared engine first, then channel adapters if needed.
+- Gateway and Telegram should share execution behavior but keep channel state isolated.
+
+## 10) Frontend Rules
+- Vanilla JS only; avoid introducing frameworks.
+- Keep state updates explicit and predictable.
 - Preserve accessibility attributes and semantic structure.
-- Avoid framework-like abstractions; follow existing style.
+- Keep integration status polling separate from chat state sync.
 
-### CSS / HTML
-- Reuse existing classes/variables before adding new primitives.
-- Keep visual changes subtle and consistent with current UI language.
-- Maintain responsive behavior (desktop + mobile).
+## 11) Security and Secrets
+- Never commit real API keys, tokens, or private keys.
+- Avoid logging secret values from provider/integration config.
+- Be especially careful with Git MCP SSH key paths/content.
 
-## 7) Naming / Architecture Conventions
-- Providers are registered once in `app/providers/registry.py`.
-- Tools (MCPs) are registered once in `app/mcps/registry.py`.
-- Orchestrator performs sequential recursive tool steps; do not bypass it for normal chat flows.
-- Runtime state is persisted via settings API to `braindump.json`.
-
-## 8) Error Handling Conventions
-- Fail fast on invalid inputs/state.
-- Emit clear user-facing messages for recoverable failures.
-- Keep hard tool errors explicit (`MCP hard error: ...`) unless changing behavior is requested.
-- Preserve existing SSE event contract unless explicitly changing it.
-
-## 9) Persistence Rules
-- `data/braindump.json` is the source of truth.
-- Never remove existing keys without migration/normalization support.
-- Any new persisted field must be normalized in `_normalize_legacy_settings`.
-- Keep setup save path from dropping unrelated state (chats, mcp configs, daily usage, etc.).
-
-## 10) Security / Secrets
-- Do not commit real secrets.
-- Be careful when logging token/key fields from `provider_configs` or MCP params.
-- Git MCP intentionally handles sensitive key material; avoid printing private key content.
-
-## 11) Agent Workflow Checklist
-- Read nearby code before editing.
-- Keep diffs minimal and scoped to request.
-- Do not revert unrelated user changes.
+## 12) Agent Execution Checklist
+- Read relevant modules before editing.
+- Keep diffs minimal and scoped to user request.
+- Do not revert unrelated local changes.
 - After backend edits: `python -m compileall app`.
-- After frontend JS edits: `node --check` on changed files.
+- After frontend JS edits: `node --check` on changed JS files.
 - Update `README.md` when user-facing behavior or architecture changes.
-- Prefer incremental, verifiable changes over broad rewrites.

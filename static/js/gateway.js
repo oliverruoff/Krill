@@ -131,6 +131,53 @@ function setStatus(message, isError = false) {
   statusNode.className = isError ? "error" : "ok";
 }
 
+function normalizeErrorMessage(error, fallback = "Request failed.") {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "Request was aborted.";
+  }
+  if (typeof error?.message === "string" && error.message.trim()) {
+    return error.message.trim();
+  }
+  return fallback;
+}
+
+async function buildHttpErrorDetail(response, fallback = "Request failed.") {
+  const statusPart = Number.isFinite(Number(response?.status))
+    ? `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`
+    : "HTTP error";
+
+  let rawBody = "";
+  try {
+    rawBody = await response.text();
+  } catch (error) {
+    rawBody = "";
+  }
+
+  let detail = "";
+  if (rawBody.trim()) {
+    try {
+      const parsed = JSON.parse(rawBody);
+      if (typeof parsed?.detail === "string" && parsed.detail.trim()) {
+        detail = parsed.detail.trim();
+      } else if (typeof parsed?.error === "string" && parsed.error.trim()) {
+        detail = parsed.error.trim();
+      } else if (typeof parsed?.message === "string" && parsed.message.trim()) {
+        detail = parsed.message.trim();
+      } else {
+        detail = rawBody.trim();
+      }
+    } catch (error) {
+      detail = rawBody.trim();
+    }
+  }
+
+  const compactDetail = detail.length > 400 ? `${detail.slice(0, 400)}...` : detail;
+  if (compactDetail) {
+    return `${fallback} ${statusPart}. ${compactDetail}`;
+  }
+  return `${fallback} ${statusPart}.`;
+}
+
 function showToast(message) {
   if (!(toastNode instanceof HTMLElement)) {
     const fallbackToast = document.createElement("div");
@@ -1883,7 +1930,8 @@ function processSseBlock(block, context) {
   try {
     payload = JSON.parse(data);
   } catch (error) {
-    return { done: false, hasError: true, errorMessage: "Invalid stream payload." };
+    const preview = data.length > 160 ? `${data.slice(0, 160)}...` : data;
+    return { done: false, hasError: true, errorMessage: `Invalid stream payload: ${preview}` };
   }
 
   if (eventName === "token") {
@@ -2118,18 +2166,13 @@ async function executeQueuedJob(chat, job, runtime) {
       }),
     });
 
-    if (!response.ok || !response.body) {
-      let detail = "Chat request failed.";
-      try {
-        const errorBody = await response.json();
-        if (typeof errorBody.detail === "string") {
-          detail = errorBody.detail;
-        }
-      } catch (error) {
-        detail = "Chat request failed.";
-      }
-
+    if (!response.ok) {
+      const detail = await buildHttpErrorDetail(response, "Chat request failed.");
       throw new Error(detail);
+    }
+
+    if (!response.body) {
+      throw new Error("Chat request failed. HTTP 200 but response body stream was empty.");
     }
 
     const reader = response.body.getReader();
@@ -2176,7 +2219,15 @@ async function executeQueuedJob(chat, job, runtime) {
       return;
     }
 
-    const hardErrorText = typeof error?.message === "string" && error.message ? error.message : "Hard error.";
+    const hardErrorText = normalizeErrorMessage(error, "Hard error.");
+    console.error("Gateway chat request failed", {
+      chatId: chat.id,
+      requestId: job.requestId,
+      providerId: job.snapshot.providerId,
+      model: job.snapshot.model,
+      messagePreview: typeof job.message === "string" ? job.message.slice(0, 160) : "",
+      error: hardErrorText,
+    });
     if (assistantMessage.content) {
       assistantMessage.content = `${assistantMessage.content}\n\nHard error: ${hardErrorText}`;
     } else {
