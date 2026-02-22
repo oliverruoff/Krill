@@ -1,5 +1,7 @@
 ![Krill](static/img/krill_banner.png)
 
+[![Build and Publish Docker Image](https://github.com/oliverruoff/Krill/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/oliverruoff/Krill/actions/workflows/docker-publish.yml)
+
 # Krill
 Hi, I am **Krill** - your local AI gateway and tool-using coding companion.
 
