@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .chat_engine import generate_chat_response
 from .config import BRAINDUMP_PATH, IntegrationConfig, McpConfig, Settings, ensure_settings_file, load_settings, save_settings
 from .integrations import (
     get_integration,
@@ -23,9 +24,7 @@ from .mcps.git_ops import (
     verify_github_ssh_access,
 )
 from .mcps import get_mcp, get_mcp_options, is_supported_mcp
-from .providers import get_provider, get_provider_model_limit, get_provider_options, is_supported_provider
-from .runtime_prompt import compose_runtime_system_prompt
-from .tooling import generate_with_tools
+from .providers import get_provider, get_provider_options, is_supported_provider
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -332,27 +331,7 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     settings = await load_settings()
     if not _is_setup_complete(settings):
         raise HTTPException(status_code=422, detail="Setup is not complete.")
-
-    active_provider_id = payload.provider_id.strip() if payload.provider_id.strip() else settings.active_provider_id
-    provider_config = settings.provider_configs.get(active_provider_id)
-
-    if provider_config is None:
-        raise HTTPException(status_code=422, detail="Active provider is not configured.")
-
-    provider = get_provider(active_provider_id)
-    if provider is None:
-        raise HTTPException(status_code=422, detail="Active provider is unavailable.")
-
-    model_id = payload.model.strip() if payload.model.strip() else provider_config.model
-    api_key = payload.api_key if payload.api_key.strip() else provider_config.api_key
-
-    token_limit = get_provider_model_limit(active_provider_id, model_id)
     history = [turn.model_dump() for turn in payload.history]
-    runtime_system_prompt = _compose_runtime_system_prompt_from_values(
-        bot_name=payload.bot_name.strip() if payload.bot_name.strip() else settings.bot_name,
-        system_prompt=payload.system_prompt.strip() if payload.system_prompt.strip() else settings.system_prompt,
-        memory_block=payload.memory_block,
-    )
 
     async def event_stream():
         queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -368,16 +347,16 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
 
         async def run_orchestration() -> None:
             try:
-                orchestration_holder["result"] = await generate_with_tools(
-                    provider=provider,
+                orchestration_holder["result"] = await generate_chat_response(
                     settings=settings,
-                    prompt=payload.message,
-                    system_prompt=runtime_system_prompt,
-                    model=model_id,
-                    api_key=api_key,
+                    message=payload.message,
                     history=history,
-                    max_tool_recursion=settings.tool_max_recursion,
-                    tool_timeout_seconds=settings.tool_timeout_seconds,
+                    memory_block=payload.memory_block,
+                    provider_id=payload.provider_id,
+                    model=payload.model,
+                    api_key=payload.api_key,
+                    bot_name=payload.bot_name,
+                    system_prompt=payload.system_prompt,
                     on_tool_step=_emit_tool_step,
                 )
             except Exception as exc:
@@ -399,12 +378,17 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
             yield _sse("error", {"detail": str(orchestration_holder["error"])})
             return
 
-        orchestration = orchestration_holder.get("result")
-        if not isinstance(orchestration, dict):
+        orchestration_payload = orchestration_holder.get("result")
+        if not (isinstance(orchestration_payload, tuple) and len(orchestration_payload) == 2):
             yield _sse("error", {"detail": "Missing orchestration result."})
             return
 
-        text = orchestration.get("text", "")
+        orchestration, token_limit = orchestration_payload
+        if not isinstance(orchestration, dict):
+            yield _sse("error", {"detail": "Invalid orchestration payload."})
+            return
+
+        text = str(orchestration.get("text", ""))
         used_tokens = orchestration.get("used_tokens")
         used_mcp_tools = orchestration.get("used_mcp_tools", [])
         system_trace_messages = orchestration.get("system_trace_messages", [])
@@ -535,14 +519,6 @@ def _is_setup_complete(settings: Settings) -> bool:
 
 def _sse(event_name: str, payload: dict[str, object]) -> str:
     return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
-
-
-def _compose_runtime_system_prompt(settings: Settings, memory_block: str = "") -> str:
-    return _compose_runtime_system_prompt_from_values(settings.bot_name, settings.system_prompt, memory_block)
-
-
-def _compose_runtime_system_prompt_from_values(bot_name: str, system_prompt: str, memory_block: str = "") -> str:
-    return compose_runtime_system_prompt(bot_name=bot_name, system_prompt=system_prompt, memory_block=memory_block)
 
 
 def _compaction_system_prompt() -> str:

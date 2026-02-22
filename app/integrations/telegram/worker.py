@@ -4,10 +4,9 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from app.config import ChatMessage, ChatSession, DailyTokenUsage, IntegrationConfig, Settings, load_settings, save_settings
-from app.providers import get_provider
-from app.runtime_prompt import compose_runtime_system_prompt
-from app.tooling import generate_with_tools
+from app.chat_engine import generate_chat_response
+from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, load_settings, save_settings
+from app.usage import add_daily_usage, get_today_token_usage
 
 from .client import telegram_get_me, telegram_get_updates, telegram_send_message
 
@@ -182,7 +181,7 @@ class TelegramBridgeWorker:
             active = _get_active_chat(self._telegram_chats, self._active_chat_id)
             self._active_chat_id = active.id if active is not None else ""
             chat_tokens = active.total_tokens_used if active is not None else 0
-            daily_tokens = _today_token_usage(settings)
+            daily_tokens = get_today_token_usage(settings)
             return f"Usage\nChat tokens: {chat_tokens}\nToday tokens: {daily_tokens}"
 
         if command == "help":
@@ -236,66 +235,35 @@ class TelegramBridgeWorker:
         user_timestamp = _timestamp()
         active_chat.messages.append(ChatMessage(role="user", content=prompt, timestamp=user_timestamp))
 
-        provider_id = settings.active_provider_id.strip()
-        provider_config = settings.provider_configs.get(provider_id)
-        if provider_config is None:
-            return "Active provider is not configured."
-
-        provider = get_provider(provider_id)
-        if provider is None:
-            return "Active provider is unavailable."
-
         history = [
             {"role": message.role, "content": message.content}
             for message in active_chat.messages
             if message.role in {"user", "assistant"} and message.content.strip()
         ]
 
-        runtime_system_prompt = compose_runtime_system_prompt(settings.bot_name, settings.system_prompt, active_chat.memory_block)
-
         try:
-            orchestration = await generate_with_tools(
-                provider=provider,
+            engine_result, _ = await generate_chat_response(
                 settings=settings,
-                prompt=prompt,
-                system_prompt=runtime_system_prompt,
-                model=provider_config.model,
-                api_key=provider_config.api_key,
+                message=prompt,
                 history=history,
-                max_tool_recursion=settings.tool_max_recursion,
-                tool_timeout_seconds=settings.tool_timeout_seconds,
+                memory_block=active_chat.memory_block,
             )
-            text_response = str(orchestration.get("text", "")).strip()
-            used_tokens = orchestration.get("used_tokens")
-            used_tools = orchestration.get("used_mcp_tools", [])
-            trace_messages = orchestration.get("system_trace_messages", [])
+            text_response = engine_result["text"]
+            used_tokens = engine_result["used_tokens"]
+            used_tools = engine_result["used_mcp_tools"]
+            trace_messages = engine_result["system_trace_messages"]
         except Exception as exc:
             text_response = f"Hard error: {exc}"
             used_tokens = None
             used_tools = []
             trace_messages = []
 
-        normalized_tool_usage: list[dict[str, str]] = []
-        for entry in used_tools:
-            if not isinstance(entry, dict):
-                continue
-            normalized_tool_usage.append(
-                {
-                    "mcp_id": str(entry.get("mcp_id", "")),
-                    "mcp_label": str(entry.get("mcp_label", "")),
-                    "tool_id": str(entry.get("tool_id", "")),
-                    "tool_label": str(entry.get("tool_label", "")),
-                }
-            )
-
         final_timestamp = _timestamp()
         for entry in trace_messages:
-            if not isinstance(entry, dict):
-                continue
-            content = entry.get("content")
+            content = entry.get("content") if isinstance(entry, dict) else None
             if not isinstance(content, str) or not content.strip():
                 continue
-            system_type = entry.get("system_type")
+            system_type = entry.get("system_type") if isinstance(entry, dict) else None
             active_chat.messages.append(
                 ChatMessage(
                     role="system",
@@ -310,14 +278,24 @@ class TelegramBridgeWorker:
                 role="assistant",
                 content=text_response,
                 timestamp=final_timestamp,
-                tool_usage=normalized_tool_usage,
+                tool_usage=[
+                    {
+                        "mcp_id": str(entry.get("mcp_id", "")),
+                        "mcp_label": str(entry.get("mcp_label", "")),
+                        "tool_id": str(entry.get("tool_id", "")),
+                        "tool_label": str(entry.get("tool_label", "")),
+                    }
+                    for entry in used_tools
+                    if isinstance(entry, dict)
+                ],
                 status="done",
             )
         )
 
         if isinstance(used_tokens, int) and used_tokens > 0:
             active_chat.total_tokens_used = max(0, active_chat.total_tokens_used) + used_tokens
-            await _add_daily_usage(used_tokens)
+            add_daily_usage(settings, used_tokens)
+            await save_settings(settings)
 
         return text_response
 
@@ -456,28 +434,6 @@ def _is_group_message_addressed_to_bot(message: dict[str, Any], bot_username: st
                 return True
 
     return False
-
-
-async def _add_daily_usage(tokens_to_add: int) -> None:
-    if tokens_to_add <= 0:
-        return
-    settings = await load_settings()
-    date_key = datetime.now(timezone.utc).date().isoformat()
-    for entry in settings.daily_token_usage:
-        if entry.date == date_key:
-            entry.tokens += tokens_to_add
-            await save_settings(settings)
-            return
-    settings.daily_token_usage.append(DailyTokenUsage(date=date_key, tokens=tokens_to_add))
-    await save_settings(settings)
-
-
-def _today_token_usage(settings: Settings) -> int:
-    date_key = datetime.now(timezone.utc).date().isoformat()
-    for entry in settings.daily_token_usage:
-        if entry.date == date_key:
-            return max(0, int(entry.tokens))
-    return 0
 
 
 def _chunk_telegram_text(text: str, max_len: int = 3500) -> list[str]:

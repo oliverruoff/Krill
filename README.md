@@ -98,6 +98,29 @@ Advanced controls (setup -> Advanced Settings):
 
 Core chat endpoint: `POST /api/chat/stream`
 
+Gateway and Telegram both use the shared chat execution module `app/chat_engine.py` (`generate_chat_response(...)`).
+
+Exact message workflow (Gateway):
+
+1. User sends a message in Gateway (`static/js/gateway.js`)
+2. Gateway posts `POST /api/chat/stream` with message, chat history, and memory block
+3. `app/main.py` calls shared engine `generate_chat_response(...)`
+4. Shared engine composes runtime system prompt via `compose_runtime_system_prompt(...)` in `app/runtime_prompt.py`
+5. Composed prompt includes bot identity (`bot_name`), configured `system_prompt`, and optional `memory_block`
+6. Shared engine calls orchestrator `generate_with_tools(...)`
+7. SSE streams back `tool_step`, `meta`, `token`, then `done` (or `error`)
+8. Gateway finalizes assistant message, tool usage, and token counters, then persists Gateway chat state
+
+Exact message workflow (Telegram):
+
+1. Telegram worker (`app/integrations/telegram/worker.py`) receives bot update
+2. Owner and mention/reply rules are enforced
+3. Telegram message is added to Telegram's in-memory chat session (ephemeral)
+4. Worker calls shared engine `generate_chat_response(...)`
+5. Shared engine uses the same runtime system prompt composition and `generate_with_tools(...)` path as Gateway
+6. Worker appends assistant result to Telegram in-memory chat and replies via Telegram Bot API
+7. Telegram chat history is not written to Gateway chats or `braindump.json`
+
 SSE events include:
 
 - `tool_step` (live system progress)
