@@ -1,5 +1,6 @@
 const CHAT_TITLE_MAX_LENGTH = 24;
 const EDITABLE_CHAT_TITLE_MAX_LENGTH = 24;
+const CHAT_SYNC_INTERVAL_MS = 3000;
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -17,6 +18,7 @@ const menuPopover = document.getElementById("menu-popover");
 const assistantTitleNode = document.getElementById("assistant-title");
 const assistantMetaNode = document.getElementById("assistant-meta");
 const dailyTokenUsageNode = document.getElementById("daily-token-usage");
+const telegramStatusNode = document.getElementById("telegram-status");
 const headerProviderSelect = document.getElementById("header-provider-select");
 const headerModelSelect = document.getElementById("header-model-select");
 const compactButton = document.getElementById("compact-btn");
@@ -24,6 +26,7 @@ const currentChatTitleNode = document.getElementById("current-chat-title");
 const chatHistoryList = document.getElementById("chat-history-list");
 const newChatButton = document.getElementById("new-chat-btn");
 const mcpList = document.getElementById("mcp-list");
+const integrationList = document.getElementById("integration-list");
 let toastNode = document.getElementById("toast");
 
 const state = {
@@ -40,6 +43,8 @@ const state = {
   dailyTokenUsage: [],
   mcps: [],
   mcpConfigs: {},
+  integrations: [],
+  integrationConfigs: {},
   chats: [],
   activeChatId: "",
   chatRuntimes: {},
@@ -48,6 +53,12 @@ const state = {
   suppressSwitcherEvents: false,
   toastTimerId: null,
   compactionBubble: null,
+  chatSyncTimerId: null,
+  chatSyncInFlight: false,
+  lastChatStateSignature: "",
+  telegramEnabled: false,
+  telegramTokenConfigured: false,
+  telegramOwnerUserId: "",
 };
 
 function getChatRuntime(chatId) {
@@ -533,6 +544,9 @@ function activateChat(chatId) {
   renderActiveChat();
   syncUsedTokensToContext();
   updateComposerState();
+  persistChatsToSettings().catch((error) => {
+    setStatus(`Active chat changed locally, but save failed: ${error.message}`, true);
+  });
 }
 
 function startNewChat() {
@@ -547,6 +561,9 @@ function startNewChat() {
   updateTokenCounter(0, state.modelTokenLimit);
   setStatus("New chat ready. Send a first message to create it.");
   updateComposerState();
+  persistChatsToSettings().catch((error) => {
+    setStatus(`New chat context set locally, but save failed: ${error.message}`, true);
+  });
   chatInput.focus();
 }
 
@@ -816,6 +833,37 @@ function updateDailyTokenUsageLabel() {
   dailyTokenUsageNode.textContent = `Today: ${formatNumber(tokens)} tokens`;
 }
 
+function updateTelegramStatusLabel() {
+  if (!(telegramStatusNode instanceof HTMLElement)) {
+    return;
+  }
+
+  if (!state.telegramEnabled) {
+    telegramStatusNode.textContent = "Telegram: disabled";
+    return;
+  }
+
+  if (!state.telegramTokenConfigured) {
+    telegramStatusNode.textContent = "Telegram: enabled, token missing";
+    return;
+  }
+
+  if (!state.telegramOwnerUserId) {
+    telegramStatusNode.textContent = "Telegram: waiting for first owner message";
+    return;
+  }
+
+  telegramStatusNode.textContent = "Telegram: connected";
+}
+
+function syncTelegramFlagsFromIntegrationConfig() {
+  const telegramConfig = getIntegrationConfig("telegram");
+  state.telegramEnabled = Boolean(telegramConfig.enabled);
+  state.telegramTokenConfigured = Boolean(
+    typeof telegramConfig.params?.bot_token === "string" && telegramConfig.params.bot_token.trim(),
+  );
+}
+
 function addDailyTokenUsage(tokensToAdd) {
   const tokens = Number(tokensToAdd);
   if (!Number.isFinite(tokens) || tokens <= 0) {
@@ -1042,11 +1090,17 @@ async function persistChatsToSettings() {
 
   const nextSettings = JSON.parse(JSON.stringify(state.settings));
   nextSettings.chats = state.chats;
+  nextSettings.active_chat_id = state.activeChatId;
   nextSettings.mcp_configs = state.mcpConfigs;
+  nextSettings.integration_configs = state.integrationConfigs;
   nextSettings.daily_token_usage = state.dailyTokenUsage;
   const persisted = await persistSettings(nextSettings);
   state.settings = persisted;
+  if (typeof persisted.active_chat_id === "string") {
+    state.activeChatId = persisted.active_chat_id;
+  }
   state.dailyTokenUsage = normalizeDailyTokenUsage(persisted.daily_token_usage);
+  refreshLocalChatStateSignature();
   updateDailyTokenUsageLabel();
 }
 
@@ -1095,13 +1149,22 @@ async function persistMcpConfigsToSettings() {
 
   const nextSettings = JSON.parse(JSON.stringify(state.settings));
   nextSettings.mcp_configs = state.mcpConfigs;
+  nextSettings.integration_configs = state.integrationConfigs;
   nextSettings.chats = state.chats;
+  nextSettings.active_chat_id = state.activeChatId;
   nextSettings.daily_token_usage = state.dailyTokenUsage;
   const persisted = await persistSettings(nextSettings);
   state.settings = persisted;
+  if (typeof persisted.active_chat_id === "string") {
+    state.activeChatId = persisted.active_chat_id;
+  }
   state.mcpConfigs = normalizeIncomingMcpConfigs(persisted.mcp_configs);
+  state.integrationConfigs = normalizeIncomingMcpConfigs(persisted.integration_configs);
+  syncTelegramFlagsFromIntegrationConfig();
   state.dailyTokenUsage = normalizeDailyTokenUsage(persisted.daily_token_usage);
+  refreshLocalChatStateSignature();
   updateDailyTokenUsageLabel();
+  updateTelegramStatusLabel();
 }
 
 async function verifyMcpConfig(mcpId) {
@@ -1128,6 +1191,33 @@ async function verifyMcpConfig(mcpId) {
 
     throw new Error(detail);
   }
+}
+
+async function verifyIntegrationConfig(integrationId) {
+  const config = getIntegrationConfig(integrationId);
+  const response = await fetch("/api/integrations/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      integration_id: integrationId,
+      params: config.params,
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = "Integration verification failed.";
+    try {
+      const payload = await response.json();
+      if (typeof payload.detail === "string" && payload.detail) {
+        detail = payload.detail;
+      }
+    } catch (error) {
+      detail = "Integration verification failed.";
+    }
+    throw new Error(detail);
+  }
+
+  return response.json();
 }
 
 async function fetchGitSshKey() {
@@ -1175,33 +1265,34 @@ async function verifyGitSshAccess() {
   }
 }
 
-function renderMcpPanel() {
-  if (!(mcpList instanceof HTMLElement)) {
+function renderConfigPanel(container, items, getConfig, options) {
+  if (!(container instanceof HTMLElement)) {
     return;
   }
 
-  mcpList.innerHTML = "";
-  if (!Array.isArray(state.mcps) || state.mcps.length === 0) {
+  container.innerHTML = "";
+  if (!Array.isArray(items) || items.length === 0) {
     const emptyNode = document.createElement("p");
     emptyNode.className = "chat-history-empty";
-    emptyNode.textContent = "No tools available.";
-    mcpList.appendChild(emptyNode);
+    emptyNode.textContent = options.emptyLabel;
+    container.appendChild(emptyNode);
     return;
   }
 
-  state.mcps.forEach((mcp) => {
+  items.forEach((item) => {
     const card = document.createElement("div");
     card.className = "mcp-card";
-    card.dataset.mcpId = mcp.id;
+    card.dataset.configKind = options.kind;
+    card.dataset.configId = item.id;
 
-    const config = getMcpConfig(mcp.id);
+    const config = getConfig(item.id);
 
     const titleRow = document.createElement("div");
     titleRow.className = "mcp-title-row";
 
     const title = document.createElement("p");
     title.className = "mcp-title";
-    title.textContent = mcp.label;
+    title.textContent = item.label;
 
     const toggleLabel = document.createElement("label");
     toggleLabel.className = "mcp-toggle";
@@ -1210,7 +1301,8 @@ function renderMcpPanel() {
     toggleInput.type = "checkbox";
     toggleInput.checked = Boolean(config.enabled);
     toggleInput.dataset.action = "toggle";
-    toggleInput.dataset.mcpId = mcp.id;
+    toggleInput.dataset.configKind = options.kind;
+    toggleInput.dataset.configId = item.id;
 
     const toggleText = document.createElement("span");
     toggleText.textContent = "Enabled";
@@ -1223,12 +1315,12 @@ function renderMcpPanel() {
 
     const description = document.createElement("p");
     description.className = "mcp-description";
-    description.textContent = typeof mcp.description === "string" ? mcp.description : "";
+    description.textContent = typeof item.description === "string" ? item.description : "";
 
     card.appendChild(titleRow);
     card.appendChild(description);
 
-    const fields = Array.isArray(mcp.config_fields) ? mcp.config_fields : [];
+    const fields = Array.isArray(item.config_fields) ? item.config_fields : [];
     fields.forEach((field) => {
       const fieldId = typeof field.id === "string" ? field.id : "";
       if (!fieldId) {
@@ -1240,15 +1332,16 @@ function renderMcpPanel() {
 
       const fieldLabel = document.createElement("label");
       fieldLabel.textContent = field.label || fieldId;
-      fieldLabel.setAttribute("for", `mcp-${mcp.id}-${fieldId}`);
+      fieldLabel.setAttribute("for", `${options.kind}-${item.id}-${fieldId}`);
 
       const fieldInput = document.createElement("input");
-      fieldInput.id = `mcp-${mcp.id}-${fieldId}`;
+      fieldInput.id = `${options.kind}-${item.id}-${fieldId}`;
       fieldInput.type = field.type === "password" ? "password" : "text";
       fieldInput.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
       fieldInput.placeholder = typeof field.placeholder === "string" ? field.placeholder : "";
       fieldInput.dataset.action = "param";
-      fieldInput.dataset.mcpId = mcp.id;
+      fieldInput.dataset.configKind = options.kind;
+      fieldInput.dataset.configId = item.id;
       fieldInput.dataset.fieldId = fieldId;
 
       fieldWrapper.appendChild(fieldLabel);
@@ -1259,46 +1352,63 @@ function renderMcpPanel() {
     const actions = document.createElement("div");
     actions.className = "mcp-card-actions";
 
-    if (mcp.id === "git_ops") {
+    if (options.kind === "mcp" && item.id === "git_ops") {
       const sshKeyButton = document.createElement("button");
       sshKeyButton.type = "button";
       sshKeyButton.className = "mcp-link-btn";
       sshKeyButton.textContent = "SSH key";
       sshKeyButton.dataset.action = "ssh-key";
-      sshKeyButton.dataset.mcpId = mcp.id;
+      sshKeyButton.dataset.configKind = options.kind;
+      sshKeyButton.dataset.configId = item.id;
 
       const verifyButton = document.createElement("button");
       verifyButton.type = "button";
       verifyButton.className = "mcp-link-btn";
       verifyButton.textContent = "Verify";
       verifyButton.dataset.action = "verify-ssh";
-      verifyButton.dataset.mcpId = mcp.id;
+      verifyButton.dataset.configKind = options.kind;
+      verifyButton.dataset.configId = item.id;
 
       actions.appendChild(sshKeyButton);
       actions.appendChild(verifyButton);
-    } else {
+      card.appendChild(actions);
+    } else if (!(options.kind === "mcp" && item.id === "local_files")) {
       const saveButton = document.createElement("button");
       saveButton.type = "button";
       saveButton.className = "mcp-link-btn";
       saveButton.textContent = "Save";
       saveButton.dataset.action = "save";
-      saveButton.dataset.mcpId = mcp.id;
+      saveButton.dataset.configKind = options.kind;
+      saveButton.dataset.configId = item.id;
 
       const verifyButton = document.createElement("button");
       verifyButton.type = "button";
       verifyButton.className = "mcp-link-btn";
       verifyButton.textContent = "Verify";
       verifyButton.dataset.action = "verify";
-      verifyButton.dataset.mcpId = mcp.id;
+      verifyButton.dataset.configKind = options.kind;
+      verifyButton.dataset.configId = item.id;
 
       actions.appendChild(saveButton);
       actions.appendChild(verifyButton);
-    }
-
-    if (mcp.id !== "local_files") {
       card.appendChild(actions);
     }
-    mcpList.appendChild(card);
+
+    container.appendChild(card);
+  });
+}
+
+function renderMcpPanel() {
+  renderConfigPanel(mcpList, state.mcps, getMcpConfig, {
+    kind: "mcp",
+    emptyLabel: "No tools available.",
+  });
+}
+
+function renderIntegrationPanel() {
+  renderConfigPanel(integrationList, state.integrations, getIntegrationConfig, {
+    kind: "integration",
+    emptyLabel: "No integrations available.",
   });
 }
 
@@ -1429,7 +1539,9 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
     nextProviderConfig.model = nextModelId;
     nextSettings.active_provider_id = nextProviderId;
     nextSettings.chats = state.chats;
+    nextSettings.active_chat_id = state.activeChatId;
     nextSettings.mcp_configs = state.mcpConfigs;
+    nextSettings.integration_configs = state.integrationConfigs;
     nextSettings.daily_token_usage = state.dailyTokenUsage;
     const persisted = await persistSettings(nextSettings);
 
@@ -1514,19 +1626,21 @@ function normalizeIncomingChats(rawChats) {
 
 async function loadGatewayMeta() {
   try {
-    const [providersResponse, settingsResponse, mcpsResponse] = await Promise.all([
+    const [providersResponse, settingsResponse, mcpsResponse, integrationsResponse] = await Promise.all([
       fetch("/api/providers"),
       fetch("/api/settings"),
       fetch("/api/mcps"),
+      fetch("/api/integrations"),
     ]);
 
-    if (!providersResponse.ok || !settingsResponse.ok || !mcpsResponse.ok) {
+    if (!providersResponse.ok || !settingsResponse.ok || !mcpsResponse.ok || !integrationsResponse.ok) {
       throw new Error("Failed to load gateway metadata.");
     }
 
     const providers = await providersResponse.json();
     const settings = await settingsResponse.json();
     const mcps = await mcpsResponse.json();
+    const integrations = await integrationsResponse.json();
 
     const activeProvider = providers.find((provider) => provider.id === settings.active_provider_id);
     const activeConfig = settings.provider_configs?.[settings.active_provider_id];
@@ -1539,14 +1653,23 @@ async function loadGatewayMeta() {
     state.chats = normalizeIncomingChats(settings.chats);
     state.dailyTokenUsage = normalizeDailyTokenUsage(settings.daily_token_usage);
     state.mcps = Array.isArray(mcps) ? mcps : [];
+    state.integrations = Array.isArray(integrations) ? integrations : [];
     state.mcpConfigs = normalizeIncomingMcpConfigs(settings.mcp_configs);
+    state.integrationConfigs = normalizeIncomingMcpConfigs(settings.integration_configs);
+    syncTelegramFlagsFromIntegrationConfig();
+    state.telegramOwnerUserId = typeof settings?.telegram_state?.owner_user_id === "string"
+      ? settings.telegram_state.owner_user_id
+      : "";
 
     state.providerLabel = activeProvider?.label ?? settings.active_provider_id ?? "";
     state.modelLabel = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.label ?? activeConfig?.model ?? "";
     state.modelTokenLimit = getModelTokenLimit(state.activeProviderId, state.activeModelId);
 
     const sortedChats = sortChatsByLatestMessage(state.chats);
-    state.activeChatId = sortedChats[0]?.id ?? "";
+    const persistedActiveChatId = typeof settings.active_chat_id === "string" ? settings.active_chat_id : "";
+    state.activeChatId = state.chats.some((chat) => chat.id === persistedActiveChatId)
+      ? persistedActiveChatId
+      : (sortedChats[0]?.id ?? "");
 
     syncSwitcherControls();
     updateMetaIndicators();
@@ -1554,8 +1677,12 @@ async function loadGatewayMeta() {
     renderChatHistory();
     renderActiveChat();
     renderMcpPanel();
+    renderIntegrationPanel();
     syncUsedTokensToContext();
     updateDailyTokenUsageLabel();
+    updateTelegramStatusLabel();
+    refreshLocalChatStateSignature();
+    startChatStateSync();
     updateComposerState();
     setStatus("Gateway ready.");
   } catch (error) {
@@ -1566,11 +1693,96 @@ async function loadGatewayMeta() {
     renderChatHistory();
     renderEmptyChatView();
     renderMcpPanel();
+    renderIntegrationPanel();
     updateTokenCounter(0, 0);
     updateDailyTokenUsageLabel();
+    updateTelegramStatusLabel();
+    startChatStateSync();
     updateComposerState();
     setStatus(error.message, true);
   }
+}
+
+function buildChatStateSignature(payload) {
+  const chats = Array.isArray(payload?.chats) ? payload.chats : [];
+  const activeChatId = typeof payload?.active_chat_id === "string" ? payload.active_chat_id : "";
+  const dailyTokenUsage = Array.isArray(payload?.daily_token_usage) ? payload.daily_token_usage : [];
+  const telegramState = payload?.telegram_state && typeof payload.telegram_state === "object" ? payload.telegram_state : {};
+  const telegramEnabled = Boolean(payload?.telegram_enabled);
+  const telegramTokenConfigured = Boolean(payload?.telegram_token_configured);
+  return JSON.stringify({ chats, activeChatId, dailyTokenUsage, telegramState, telegramEnabled, telegramTokenConfigured });
+}
+
+function refreshLocalChatStateSignature() {
+  state.lastChatStateSignature = buildChatStateSignature({
+    chats: state.chats,
+    active_chat_id: state.activeChatId,
+    daily_token_usage: state.dailyTokenUsage,
+    telegram_state: { owner_user_id: state.telegramOwnerUserId },
+    telegram_enabled: state.telegramEnabled,
+    telegram_token_configured: state.telegramTokenConfigured,
+  });
+}
+
+function applyRemoteChatState(payload) {
+  const incomingChats = normalizeIncomingChats(payload?.chats);
+  const incomingActiveChatId = typeof payload?.active_chat_id === "string" ? payload.active_chat_id : "";
+  const incomingDailyUsage = normalizeDailyTokenUsage(payload?.daily_token_usage);
+
+  state.chats = incomingChats;
+  state.dailyTokenUsage = incomingDailyUsage;
+  state.telegramEnabled = Boolean(payload?.telegram_enabled);
+  state.telegramTokenConfigured = Boolean(payload?.telegram_token_configured);
+  state.telegramOwnerUserId = typeof payload?.telegram_state?.owner_user_id === "string"
+    ? payload.telegram_state.owner_user_id
+    : "";
+  updateDailyTokenUsageLabel();
+  updateTelegramStatusLabel();
+
+  if (state.chats.some((chat) => chat.id === incomingActiveChatId)) {
+    state.activeChatId = incomingActiveChatId;
+  } else {
+    const sorted = sortChatsByLatestMessage(state.chats);
+    state.activeChatId = sorted[0]?.id ?? "";
+  }
+
+  renderChatHistory();
+  renderActiveChat();
+  syncUsedTokensToContext();
+  updateComposerState();
+}
+
+async function syncRemoteChatState() {
+  if (state.chatSyncInFlight || state.isCompacting || state.isSwitching) {
+    return;
+  }
+
+  state.chatSyncInFlight = true;
+  try {
+    const response = await fetch("/api/chat/state", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    const signature = buildChatStateSignature(payload);
+    if (signature === state.lastChatStateSignature) {
+      return;
+    }
+
+    state.lastChatStateSignature = signature;
+    applyRemoteChatState(payload);
+  } catch (error) {
+    // Keep sync best-effort and silent.
+  } finally {
+    state.chatSyncInFlight = false;
+  }
+}
+
+function startChatStateSync() {
+  if (state.chatSyncTimerId) {
+    window.clearInterval(state.chatSyncTimerId);
+  }
+  state.chatSyncTimerId = window.setInterval(syncRemoteChatState, CHAT_SYNC_INTERVAL_MS);
 }
 
 function toggleMenu(forceOpen) {
@@ -2156,6 +2368,27 @@ function ensureMcpConfig(mcpId) {
   return state.mcpConfigs[mcpId];
 }
 
+function ensureIntegrationConfig(integrationId) {
+  if (!state.integrationConfigs[integrationId] || typeof state.integrationConfigs[integrationId] !== "object") {
+    state.integrationConfigs[integrationId] = { enabled: false, params: {} };
+  }
+
+  if (!state.integrationConfigs[integrationId].params || typeof state.integrationConfigs[integrationId].params !== "object") {
+    state.integrationConfigs[integrationId].params = {};
+  }
+
+  return state.integrationConfigs[integrationId];
+}
+
+function getIntegrationConfig(integrationId) {
+  const config = state.integrationConfigs[integrationId];
+  if (config && typeof config === "object") {
+    return config;
+  }
+
+  return { enabled: false, params: {} };
+}
+
 function handleMcpInputChange(event) {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) {
@@ -2163,14 +2396,19 @@ function handleMcpInputChange(event) {
   }
 
   const action = target.dataset.action;
-  const mcpId = target.dataset.mcpId;
-  if (!action || !mcpId) {
+  const configKind = target.dataset.configKind;
+  const configId = target.dataset.configId;
+  if (!action || !configKind || !configId) {
     return;
   }
 
-  const config = ensureMcpConfig(mcpId);
+  const config = configKind === "integration" ? ensureIntegrationConfig(configId) : ensureMcpConfig(configId);
   if (action === "toggle") {
     config.enabled = target.checked;
+    if (configKind === "integration" && configId === "telegram") {
+      syncTelegramFlagsFromIntegrationConfig();
+      updateTelegramStatusLabel();
+    }
     return;
   }
 
@@ -2180,6 +2418,10 @@ function handleMcpInputChange(event) {
       return;
     }
     config.params[fieldId] = target.value;
+    if (configKind === "integration" && configId === "telegram") {
+      syncTelegramFlagsFromIntegrationConfig();
+      updateTelegramStatusLabel();
+    }
   }
 }
 
@@ -2189,21 +2431,22 @@ async function handleMcpActionClick(event) {
     return;
   }
 
-  const button = target.closest("button[data-action][data-mcp-id]");
+  const button = target.closest("button[data-action][data-config-kind][data-config-id]");
   if (!(button instanceof HTMLButtonElement)) {
     return;
   }
 
   const action = button.dataset.action;
-  const mcpId = button.dataset.mcpId;
-  if (!action || !mcpId) {
+  const configKind = button.dataset.configKind;
+  const configId = button.dataset.configId;
+  if (!action || !configKind || !configId) {
     return;
   }
 
   try {
     if (action === "save") {
       await persistMcpConfigsToSettings();
-      setStatus("Tool settings saved.");
+      setStatus(configKind === "integration" ? "Integration settings saved." : "Tool settings saved.");
       return;
     }
 
@@ -2220,8 +2463,13 @@ async function handleMcpActionClick(event) {
     }
 
     if (action === "verify") {
-      await verifyMcpConfig(mcpId);
-      setStatus("Tool verified.");
+      if (configKind === "integration") {
+        await verifyIntegrationConfig(configId);
+        setStatus("Integration verified.");
+      } else {
+        await verifyMcpConfig(configId);
+        setStatus("Tool verified.");
+      }
       return;
     }
   } catch (error) {
@@ -2317,6 +2565,11 @@ if (mcpList instanceof HTMLElement) {
   mcpList.addEventListener("click", handleMcpActionClick);
 }
 
+if (integrationList instanceof HTMLElement) {
+  integrationList.addEventListener("input", handleMcpInputChange);
+  integrationList.addEventListener("click", handleMcpActionClick);
+}
+
 chatHistoryList.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof Node)) {
@@ -2364,4 +2617,10 @@ chatHistoryList.addEventListener("click", (event) => {
 });
 
 chatForm.addEventListener("submit", sendMessage);
+window.addEventListener("beforeunload", () => {
+  if (state.chatSyncTimerId) {
+    window.clearInterval(state.chatSyncTimerId);
+    state.chatSyncTimerId = null;
+  }
+});
 window.addEventListener("load", loadGatewayMeta);

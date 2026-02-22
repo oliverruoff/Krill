@@ -558,9 +558,16 @@ button:disabled {
   box-shadow: var(--shadow);
   padding: 0.8rem;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
   gap: 0.65rem;
   min-height: 0;
+}
+
+.panel-section {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.42rem;
 }
 
 .chat-history-header {

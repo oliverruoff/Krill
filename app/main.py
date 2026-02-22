@@ -8,7 +8,13 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .config import BRAINDUMP_PATH, McpConfig, Settings, ensure_settings_file, load_settings, save_settings
+from .config import BRAINDUMP_PATH, IntegrationConfig, McpConfig, Settings, ensure_settings_file, load_settings, save_settings
+from .integrations import (
+    get_integration,
+    get_integration_options,
+    get_runtime_integrations,
+    is_supported_integration,
+)
 from .mcps.git_ops import (
     SSH_PRIVATE_PARAM,
     SSH_PUBLIC_PARAM,
@@ -62,6 +68,16 @@ class VerifyMcpResponse(BaseModel):
     detail: str
 
 
+class VerifyIntegrationRequest(BaseModel):
+    integration_id: str
+    params: dict[str, str] = Field(default_factory=dict)
+
+
+class VerifyIntegrationResponse(BaseModel):
+    ok: bool
+    detail: str
+
+
 class GitSshKeyResponse(BaseModel):
     public_key: str
 
@@ -99,9 +115,26 @@ class CompactChatResponse(BaseModel):
     used_tokens: int | None = None
 
 
+class ChatStateResponse(BaseModel):
+    chats: list[dict[str, object]]
+    active_chat_id: str
+    daily_token_usage: list[dict[str, object]]
+    telegram_state: dict[str, object]
+    telegram_enabled: bool
+    telegram_token_configured: bool
+
+
 @app.on_event("startup")
 async def startup_event() -> None:
     await ensure_settings_file()
+    for integration in get_runtime_integrations():
+        integration.start()
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    for integration in get_runtime_integrations():
+        await integration.stop()
 
 
 @app.get("/", response_class=FileResponse)
@@ -140,6 +173,22 @@ async def download_braindump() -> FileResponse:
 @app.get("/api/settings", response_model=Settings)
 async def get_settings() -> Settings:
     return await load_settings()
+
+
+@app.get("/api/chat/state", response_model=ChatStateResponse)
+async def get_chat_state() -> ChatStateResponse:
+    settings = await load_settings()
+    telegram_config = settings.integration_configs.get("telegram") or IntegrationConfig()
+    bot_token = telegram_config.params.get("bot_token", "")
+    token_configured = isinstance(bot_token, str) and bool(bot_token.strip())
+    return ChatStateResponse(
+        chats=[chat.model_dump() for chat in settings.chats],
+        active_chat_id=settings.active_chat_id,
+        daily_token_usage=[entry.model_dump() for entry in settings.daily_token_usage],
+        telegram_state=settings.telegram_state.model_dump(),
+        telegram_enabled=bool(telegram_config.enabled),
+        telegram_token_configured=token_configured,
+    )
 
 
 @app.get("/api/providers", response_model=list[ProviderOption])
@@ -198,6 +247,27 @@ async def verify_mcp(payload: VerifyMcpRequest) -> VerifyMcpResponse:
         raise HTTPException(status_code=422, detail=detail)
 
     return VerifyMcpResponse(ok=True, detail=detail)
+
+
+@app.get("/api/integrations")
+async def get_integrations() -> list[dict[str, object]]:
+    return get_integration_options()
+
+
+@app.post("/api/integrations/verify", response_model=VerifyIntegrationResponse)
+async def verify_integration(payload: VerifyIntegrationRequest) -> VerifyIntegrationResponse:
+    if not is_supported_integration(payload.integration_id):
+        raise HTTPException(status_code=422, detail="Unsupported integration.")
+
+    integration = get_integration(payload.integration_id)
+    if integration is None:
+        raise HTTPException(status_code=422, detail="Integration not found.")
+
+    ok, detail = await integration.verify(payload.params)
+    if not ok:
+        raise HTTPException(status_code=422, detail=detail)
+
+    return VerifyIntegrationResponse(ok=True, detail=detail)
 
 
 @app.get("/api/mcps/git/ssh-key", response_model=GitSshKeyResponse)
@@ -398,6 +468,7 @@ def _validate_provider_configs(settings: Settings) -> None:
 def _validate_settings_payload(settings: Settings) -> None:
     _validate_provider_configs(settings)
     _validate_mcp_configs(settings)
+    _validate_integration_configs(settings)
 
     if settings.setup_completed and not _can_complete_setup(settings):
         raise HTTPException(
@@ -431,6 +502,12 @@ def _validate_mcp_configs(settings: Settings) -> None:
         mcp = get_mcp(mcp_id)
         if mcp is None:
             raise HTTPException(status_code=422, detail=f"MCP unavailable: {mcp_id}")
+
+
+def _validate_integration_configs(settings: Settings) -> None:
+    for integration_id in settings.integration_configs.keys():
+        if not is_supported_integration(integration_id):
+            raise HTTPException(status_code=422, detail=f"Unsupported integration: {integration_id}")
 
 
 def _is_setup_complete(settings: Settings) -> bool:

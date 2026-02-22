@@ -15,6 +15,8 @@ Think of me as the compact, practical sibling: I keep your data in one place, ru
   - Brave Search (web search)
   - Git Operations (clone, status, branch, commit, pull/push, PR via `gh`)
   - Local Files (directory listing, glob, grep/content search, file reads)
+- Use integrations for chat ingress channels:
+  - Telegram (bot token based Telegram chat ingress)
 - Let Krill orchestrate multi-step tool flows automatically (sequential recursive tool calls)
 - See live tool/system trace messages while execution runs
 - Stop running tool chains and clear queued work for the active chat
@@ -56,6 +58,18 @@ Current tools:
 - `brave_search`
 - `git_ops`
 - `local_files` (enabled by default)
+
+Current integrations:
+
+- `telegram`
+
+Telegram integration notes:
+
+- configure only the bot token in Gateway -> Integrations
+- first Telegram sender is auto-bound as owner
+- owner can use private chats and group chats
+- in group chats, Krill responds only to explicit mentions/replies to the bot
+- non-owner messages are silently ignored
 
 ### 4) Orchestrator (reason + act loop)
 
@@ -146,6 +160,8 @@ docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 - `POST /api/providers/verify` -> provider credential/model verification
 - `GET /api/mcps` -> available tools metadata
 - `POST /api/mcps/verify` -> tool verification (when applicable)
+- `GET /api/integrations` -> available integration metadata
+- `POST /api/integrations/verify` -> integration verification
 - `GET /api/mcps/git/ssh-key` -> generate/load Git SSH public key
 - `POST /api/mcps/git/verify-ssh` -> verify GitHub SSH access
 - `GET /api/settings` -> load settings
@@ -155,3 +171,4 @@ docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 - `GET /api/braindump/download` -> download full state
 - `POST /api/chat/stream` -> streaming chat + tool orchestration
 - `POST /api/chat/compact` -> compact memory block
+- `GET /api/chat/state` -> chat list + active chat id for near-real-time sync

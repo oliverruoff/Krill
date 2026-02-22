@@ -43,9 +43,19 @@ class McpConfig(BaseModel):
     params: dict[str, str] = Field(default_factory=dict)
 
 
+class IntegrationConfig(BaseModel):
+    enabled: bool = False
+    params: dict[str, str] = Field(default_factory=dict)
+
+
 class DailyTokenUsage(BaseModel):
     date: str
     tokens: int = Field(default=0, ge=0)
+
+
+class TelegramState(BaseModel):
+    owner_user_id: str = ""
+    last_update_id: int = Field(default=0, ge=0)
 
 
 class Settings(BaseModel):
@@ -57,9 +67,12 @@ class Settings(BaseModel):
     provider_configs: dict[str, ProviderConfig] = Field(default_factory=dict)
     chats: list[ChatSession] = Field(default_factory=list)
     mcp_configs: dict[str, McpConfig] = Field(default_factory=dict)
+    integration_configs: dict[str, IntegrationConfig] = Field(default_factory=dict)
     tool_max_recursion: int = Field(default=6, ge=1, le=20)
     tool_timeout_seconds: int = Field(default=45, ge=5, le=300)
     daily_token_usage: list[DailyTokenUsage] = Field(default_factory=list)
+    active_chat_id: str = ""
+    telegram_state: TelegramState = Field(default_factory=TelegramState)
 
 
 async def _read_text(path: Path) -> str:
@@ -282,6 +295,30 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
             "params": {},
         }
 
+    raw_integration_configs = data.get("integration_configs")
+    normalized_integration_configs: dict[str, dict[str, object]] = {}
+    if isinstance(raw_integration_configs, dict):
+        for integration_id, raw_config in raw_integration_configs.items():
+            if not isinstance(integration_id, str) or not isinstance(raw_config, dict):
+                continue
+
+            enabled = raw_config.get("enabled")
+            params = raw_config.get("params")
+            normalized_params: dict[str, str] = {}
+
+            if isinstance(params, dict):
+                for key, value in params.items():
+                    if not isinstance(key, str):
+                        continue
+                    normalized_params[key] = str(value) if value is not None else ""
+
+            normalized_integration_configs[integration_id] = {
+                "enabled": bool(enabled),
+                "params": normalized_params,
+            }
+
+    data["integration_configs"] = normalized_integration_configs
+
     raw_daily_token_usage = data.get("daily_token_usage")
     normalized_daily_token_usage: list[dict[str, object]] = []
     if isinstance(raw_daily_token_usage, list):
@@ -302,6 +339,27 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
             )
 
     data["daily_token_usage"] = normalized_daily_token_usage
+
+    active_chat_id = data.get("active_chat_id")
+    if not isinstance(active_chat_id, str):
+        active_chat_id = ""
+    data["active_chat_id"] = active_chat_id.strip()
+
+    raw_telegram_state = data.get("telegram_state")
+    owner_user_id = ""
+    last_update_id = 0
+    if isinstance(raw_telegram_state, dict):
+        raw_owner = raw_telegram_state.get("owner_user_id")
+        raw_last_update = raw_telegram_state.get("last_update_id")
+        if isinstance(raw_owner, str):
+            owner_user_id = raw_owner.strip()
+        if isinstance(raw_last_update, int) and raw_last_update >= 0:
+            last_update_id = raw_last_update
+
+    data["telegram_state"] = {
+        "owner_user_id": owner_user_id,
+        "last_update_id": last_update_id,
+    }
 
     tool_max_recursion = data.get("tool_max_recursion")
     if not isinstance(tool_max_recursion, int):
@@ -332,9 +390,17 @@ def _sync_active_selection(settings: Settings) -> Settings:
         if active_config is not None:
             active_model_id = active_config.model.strip()
 
+    chat_ids = {chat.id for chat in settings.chats if isinstance(chat.id, str) and chat.id.strip()}
+    active_chat_id = settings.active_chat_id.strip() if isinstance(settings.active_chat_id, str) else ""
+    if active_chat_id and active_chat_id not in chat_ids:
+        active_chat_id = ""
+    if not active_chat_id and settings.chats:
+        active_chat_id = settings.chats[0].id
+
     return settings.model_copy(
         update={
             "active_provider_id": active_provider_id,
             "active_model_id": active_model_id,
+            "active_chat_id": active_chat_id,
         }
     )
