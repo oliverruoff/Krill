@@ -677,6 +677,7 @@ button:disabled {
   background: #fcfdff;
   padding: 0.38rem 0.42rem;
   position: relative;
+  cursor: pointer;
 }
 
 .chat-history-item:hover {

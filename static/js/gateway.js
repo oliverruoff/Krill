@@ -1852,32 +1852,43 @@ chatHistoryList.addEventListener("click", (event) => {
   }
 
   const actionButton = target instanceof HTMLElement ? target.closest("button[data-chat-id][data-action]") : null;
-  if (!(actionButton instanceof HTMLButtonElement)) {
-    return;
-  }
-
-  const chatId = actionButton.dataset.chatId;
-  const action = actionButton.dataset.action;
-  if (!chatId || !action) {
-    return;
-  }
-
-  if (action === "open") {
-    if (chatId === state.activeChatId) {
+  if (actionButton instanceof HTMLButtonElement) {
+    const chatId = actionButton.dataset.chatId;
+    const action = actionButton.dataset.action;
+    if (!chatId || !action) {
       return;
     }
-    activateChat(chatId);
+
+    if (action === "delete") {
+      deleteChat(chatId);
+      return;
+    }
+
+    if (action === "edit") {
+      editChatTitle(chatId);
+      return;
+    }
+
+    if (action === "open") {
+      if (chatId === state.activeChatId) {
+        return;
+      }
+      activateChat(chatId);
+      return;
+    }
+  }
+
+  const chatCard = target instanceof HTMLElement ? target.closest(".chat-history-item[data-chat-id]") : null;
+  if (!(chatCard instanceof HTMLElement)) {
     return;
   }
 
-  if (action === "delete") {
-    deleteChat(chatId);
+  const chatId = chatCard.dataset.chatId;
+  if (!chatId || chatId === state.activeChatId) {
     return;
   }
 
-  if (action === "edit") {
-    editChatTitle(chatId);
-  }
+  activateChat(chatId);
 });
 
 chatForm.addEventListener("submit", sendMessage);
