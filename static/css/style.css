@@ -757,6 +757,12 @@ button:disabled {
   color: #8695ab;
 }
 
+.chat-history-queue-badge {
+  margin: 0.04rem 0 0;
+  font-size: 0.68rem;
+  color: #70819a;
+}
+
 .chat-meta {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -990,6 +996,13 @@ button:disabled {
   background: #f5f8fc;
   color: #5a687c;
   font-size: 0.86rem;
+}
+
+.chat-message.assistant.status-queued .chat-bubble,
+.chat-message.assistant.status-processing .chat-bubble {
+  background: #f7f9fc;
+  border-style: dashed;
+  border-color: #cfd8e6;
 }
 
 .tool-usage-note {

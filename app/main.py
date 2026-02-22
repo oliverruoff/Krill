@@ -64,6 +64,11 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=5000)
     history: list[ChatTurn] = Field(default_factory=list)
     memory_block: str = Field(default="", max_length=8000)
+    provider_id: str = ""
+    model: str = ""
+    api_key: str = ""
+    bot_name: str = Field(default="", max_length=30)
+    system_prompt: str = Field(default="", max_length=1000)
 
 
 class CompactChatRequest(BaseModel):
@@ -191,7 +196,7 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     if not _is_setup_complete(settings):
         raise HTTPException(status_code=422, detail="Setup is not complete.")
 
-    active_provider_id = settings.active_provider_id
+    active_provider_id = payload.provider_id.strip() if payload.provider_id.strip() else settings.active_provider_id
     provider_config = settings.provider_configs.get(active_provider_id)
 
     if provider_config is None:
@@ -201,8 +206,16 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     if provider is None:
         raise HTTPException(status_code=422, detail="Active provider is unavailable.")
 
-    token_limit = get_provider_model_limit(active_provider_id, provider_config.model)
+    model_id = payload.model.strip() if payload.model.strip() else provider_config.model
+    api_key = payload.api_key if payload.api_key.strip() else provider_config.api_key
+
+    token_limit = get_provider_model_limit(active_provider_id, model_id)
     history = [turn.model_dump() for turn in payload.history]
+    runtime_system_prompt = _compose_runtime_system_prompt_from_values(
+        bot_name=payload.bot_name.strip() if payload.bot_name.strip() else settings.bot_name,
+        system_prompt=payload.system_prompt.strip() if payload.system_prompt.strip() else settings.system_prompt,
+        memory_block=payload.memory_block,
+    )
 
     async def event_stream():
         try:
@@ -210,9 +223,9 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
                 provider=provider,
                 settings=settings,
                 prompt=payload.message,
-                system_prompt=_compose_runtime_system_prompt(settings, payload.memory_block),
-                model=provider_config.model,
-                api_key=provider_config.api_key,
+                system_prompt=runtime_system_prompt,
+                model=model_id,
+                api_key=api_key,
                 history=history,
             )
             text = orchestration["text"]
@@ -349,9 +362,13 @@ def _sse(event_name: str, payload: dict[str, object]) -> str:
 
 
 def _compose_runtime_system_prompt(settings: Settings, memory_block: str = "") -> str:
+    return _compose_runtime_system_prompt_from_values(settings.bot_name, settings.system_prompt, memory_block)
+
+
+def _compose_runtime_system_prompt_from_values(bot_name: str, system_prompt: str, memory_block: str = "") -> str:
     invisible_context = (
-        f"You are Krill assistant named '{settings.bot_name}'. "
-        f"This is the system prompt your user provided: {settings.system_prompt}"
+        f"You are Krill assistant named '{bot_name}'. "
+        f"This is the system prompt your user provided: {system_prompt}"
     )
 
     if memory_block.strip():

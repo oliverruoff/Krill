@@ -38,15 +38,56 @@ const state = {
   mcpConfigs: {},
   chats: [],
   activeChatId: "",
-  pendingToolUsage: [],
-  pendingSystemTrace: [],
+  chatRuntimes: {},
   isCompacting: false,
   isSwitching: false,
-  isSending: false,
   suppressSwitcherEvents: false,
   toastTimerId: null,
   compactionBubble: null,
 };
+
+function getChatRuntime(chatId) {
+  if (!chatId) {
+    return null;
+  }
+
+  if (!state.chatRuntimes[chatId] || typeof state.chatRuntimes[chatId] !== "object") {
+    state.chatRuntimes[chatId] = {
+      processing: false,
+      queue: [],
+      cancelledRequestIds: new Set(),
+      activeRequestId: "",
+    };
+  }
+
+  return state.chatRuntimes[chatId];
+}
+
+function removeChatRuntime(chatId) {
+  const runtime = state.chatRuntimes[chatId];
+  if (!runtime) {
+    return;
+  }
+
+  runtime.queue.forEach((job) => {
+    if (job && typeof job.requestId === "string") {
+      runtime.cancelledRequestIds.add(job.requestId);
+    }
+  });
+
+  runtime.queue = [];
+  if (runtime.activeRequestId) {
+    runtime.cancelledRequestIds.add(runtime.activeRequestId);
+  }
+}
+
+function isChatBusy(chatId) {
+  const runtime = state.chatRuntimes[chatId];
+  if (!runtime) {
+    return false;
+  }
+  return Boolean(runtime.processing) || (Array.isArray(runtime.queue) && runtime.queue.length > 0);
+}
 
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
@@ -205,6 +246,7 @@ function createChatEntry(firstMessage) {
 function toApiHistory(messages) {
   return messages
     .filter((turn) => turn && (turn.role === "user" || turn.role === "assistant"))
+    .filter((turn) => typeof turn.content === "string" && turn.content.trim())
     .map((turn) => ({ role: turn.role, content: turn.content }));
 }
 
@@ -215,13 +257,21 @@ function setHistoryControlsDisabled(disabled) {
 
   const buttons = chatHistoryList.querySelectorAll("button[data-chat-id]");
   buttons.forEach((button) => {
-    button.disabled = disabled;
+    const action = button.dataset.action;
+    if (action === "delete" || action === "edit") {
+      button.disabled = disabled;
+      return;
+    }
+    button.disabled = false;
   });
 }
 
-function addMessage(role, text = "", timestamp = "") {
+function addMessage(role, text = "", timestamp = "", status = "") {
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message ${role}`;
+  if (status) {
+    wrapper.classList.add(`status-${status}`);
+  }
 
   const title = document.createElement("p");
   title.className = "chat-role";
@@ -232,7 +282,12 @@ function addMessage(role, text = "", timestamp = "") {
   bubble.className = "chat-bubble";
 
   if (role === "assistant") {
-    bubble.innerHTML = renderMarkdown(text);
+    if ((status === "queued" || status === "processing") && !text) {
+      const label = status === "queued" ? "Queued" : "Processing";
+      bubble.innerHTML = `<span class="compaction-loading">${label} <span class="typing-dots" aria-label="${label}"><span></span><span></span><span></span></span></span>`;
+    } else {
+      bubble.innerHTML = renderMarkdown(text);
+    }
   } else {
     bubble.textContent = text;
   }
@@ -305,7 +360,7 @@ function renderActiveChat() {
       return;
     }
 
-    const bubble = addMessage(turn.role, String(turn.content ?? ""), String(turn.timestamp ?? ""));
+    const bubble = addMessage(turn.role, String(turn.content ?? ""), String(turn.timestamp ?? ""), String(turn.status ?? ""));
     if (turn.role === "assistant") {
       const wrapper = bubble.parentElement;
       if (wrapper instanceof HTMLElement) {
@@ -344,7 +399,7 @@ function renderChatHistory() {
     selectButton.className = "chat-history-main";
     selectButton.dataset.chatId = chat.id;
     selectButton.dataset.action = "open";
-    selectButton.disabled = state.isSending || state.isSwitching || state.isCompacting;
+    selectButton.disabled = false;
 
     const titleNode = document.createElement("p");
     titleNode.className = "chat-history-title";
@@ -353,10 +408,27 @@ function renderChatHistory() {
     const timeNode = document.createElement("p");
     timeNode.className = "chat-history-time";
     const latestTimestamp = getLatestChatTimestamp(chat);
+    const runtime = getChatRuntime(chat.id);
+    const queuedCount = runtime && Array.isArray(runtime.queue) ? runtime.queue.length : 0;
     timeNode.textContent = latestTimestamp ? formatMessageTimestamp(latestTimestamp) : "No messages yet";
+
+    const queueBadgeNode = document.createElement("p");
+    queueBadgeNode.className = "chat-history-queue-badge";
+    if (runtime && runtime.processing && queuedCount > 0) {
+      queueBadgeNode.textContent = `${queuedCount} queued`;
+    } else if (runtime && runtime.processing) {
+      queueBadgeNode.textContent = "processing";
+    } else if (queuedCount > 0) {
+      queueBadgeNode.textContent = `${queuedCount} queued`;
+    } else {
+      queueBadgeNode.textContent = "";
+    }
 
     selectButton.appendChild(titleNode);
     selectButton.appendChild(timeNode);
+    if (queueBadgeNode.textContent) {
+      selectButton.appendChild(queueBadgeNode);
+    }
 
     const actionsNode = document.createElement("div");
     actionsNode.className = "chat-history-actions";
@@ -366,7 +438,7 @@ function renderChatHistory() {
     editButton.className = "chat-history-action-btn";
     editButton.dataset.chatId = chat.id;
     editButton.dataset.action = "edit";
-    editButton.disabled = state.isSending || state.isSwitching || state.isCompacting;
+    editButton.disabled = state.isSwitching || state.isCompacting;
     editButton.setAttribute("aria-label", "Edit chat title");
     editButton.textContent = "✎";
 
@@ -375,7 +447,7 @@ function renderChatHistory() {
     deleteButton.className = "chat-history-action-btn danger";
     deleteButton.dataset.chatId = chat.id;
     deleteButton.dataset.action = "delete";
-    deleteButton.disabled = state.isSending || state.isSwitching || state.isCompacting;
+    deleteButton.disabled = state.isSwitching || state.isCompacting;
     deleteButton.setAttribute("aria-label", "Delete chat");
     deleteButton.textContent = "×";
 
@@ -394,6 +466,8 @@ async function deleteChat(chatId) {
     return;
   }
 
+  removeChatRuntime(chatId);
+
   state.chats.splice(index, 1);
 
   if (state.activeChatId === chatId) {
@@ -405,6 +479,7 @@ async function deleteChat(chatId) {
   renderChatHistory();
   renderActiveChat();
   syncUsedTokensToContext();
+  updateComposerState();
 
   try {
     await persistChatsToSettings();
@@ -448,10 +523,11 @@ function activateChat(chatId) {
   renderChatHistory();
   renderActiveChat();
   syncUsedTokensToContext();
+  updateComposerState();
 }
 
 function startNewChat() {
-  if (state.isSending || state.isSwitching || state.isCompacting) {
+  if (state.isSwitching || state.isCompacting) {
     return;
   }
 
@@ -461,6 +537,7 @@ function startNewChat() {
   renderActiveChat();
   updateTokenCounter(0, state.modelTokenLimit);
   setStatus("New chat ready. Send a first message to create it.");
+  updateComposerState();
   chatInput.focus();
 }
 
@@ -1138,13 +1215,16 @@ async function compactHistoryForLimit(chat, targetTokenLimit, reasonLabel) {
 
     chat.memory_block = typeof payload.memory_block === "string" ? payload.memory_block : chat.memory_block;
     chat.updated_at = createTimestamp();
-    state.lastRequestTokens = estimateContextTokens(chat.messages, chat.memory_block);
+    if (state.activeChatId === chat.id) {
+      state.lastRequestTokens = estimateContextTokens(chat.messages, chat.memory_block);
+    }
   } finally {
     clearCompactionProgressBubble();
     state.isCompacting = false;
-    setSwitchersDisabled(state.isSwitching || state.isSending);
-    setCompactButtonDisabled(state.isSwitching || state.isSending);
-    setHistoryControlsDisabled(state.isSwitching || state.isSending);
+    setSwitchersDisabled(state.isSwitching);
+    setCompactButtonDisabled(state.isSwitching);
+    setHistoryControlsDisabled(state.isSwitching);
+    updateComposerState();
   }
 }
 
@@ -1235,9 +1315,10 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
     setStatus(hardErrorText, true);
   } finally {
     state.isSwitching = false;
-    setSwitchersDisabled(state.isSending || state.isCompacting);
-    setCompactButtonDisabled(state.isSending || state.isCompacting);
-    setHistoryControlsDisabled(state.isSending || state.isCompacting);
+    setSwitchersDisabled(state.isCompacting);
+    setCompactButtonDisabled(state.isCompacting);
+    setHistoryControlsDisabled(state.isCompacting);
+    updateComposerState();
   }
 }
 
@@ -1266,6 +1347,8 @@ function normalizeIncomingChats(rawChats) {
             timestamp: typeof message.timestamp === "string" ? message.timestamp : createTimestamp(),
             system_type: typeof message.system_type === "string" ? message.system_type : "",
             tool_usage: normalizeToolUsage(message.tool_usage),
+            request_id: typeof message.request_id === "string" ? message.request_id : "",
+            status: typeof message.status === "string" ? message.status : "",
           }))
       : [];
 
@@ -1331,6 +1414,7 @@ async function loadGatewayMeta() {
     renderActiveChat();
     renderMcpPanel();
     syncUsedTokensToContext();
+    updateComposerState();
     setStatus("Gateway ready.");
   } catch (error) {
     updateMetaIndicators();
@@ -1341,6 +1425,7 @@ async function loadGatewayMeta() {
     renderEmptyChatView();
     renderMcpPanel();
     updateTokenCounter(0, 0);
+    updateComposerState();
     setStatus(error.message, true);
   }
 }
@@ -1351,16 +1436,18 @@ function toggleMenu(forceOpen) {
   menuButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
 }
 
-function setSendingState(isSending) {
-  state.isSending = isSending;
-  sendButton.disabled = isSending;
-  chatInput.disabled = isSending;
-  setSwitchersDisabled(isSending || state.isSwitching || state.isCompacting);
-  setCompactButtonDisabled(isSending || state.isSwitching || state.isCompacting);
-  setHistoryControlsDisabled(isSending || state.isSwitching || state.isCompacting);
+function updateComposerState() {
+  const activeChatId = state.activeChatId;
+  const runtime = activeChatId ? getChatRuntime(activeChatId) : null;
+  const isBusy = Boolean(runtime?.processing);
+  sendButton.disabled = false;
+  chatInput.disabled = false;
+  setSwitchersDisabled(state.isSwitching || state.isCompacting);
+  setCompactButtonDisabled(state.isSwitching || state.isCompacting || isBusy);
+  setHistoryControlsDisabled(state.isSwitching || state.isCompacting);
 }
 
-function processSseBlock(block, assistantBubble) {
+function processSseBlock(block, context) {
   const lines = block.split("\n");
   let eventName = "message";
   let data = "";
@@ -1388,27 +1475,26 @@ function processSseBlock(block, assistantBubble) {
   }
 
   if (eventName === "token") {
-    if (assistantBubble.classList.contains("is-loading")) {
-      setAssistantLoading(assistantBubble, false);
+    context.assistantMessage.content = `${context.assistantMessage.content || ""}${payload.text ?? ""}`;
+    context.assistantMessage.status = "processing";
+    if (state.activeChatId === context.chatId) {
+      renderActiveChat();
     }
-
-    const currentText = assistantBubble.dataset.rawText ?? "";
-    const nextText = `${currentText}${payload.text ?? ""}`;
-    assistantBubble.dataset.rawText = nextText;
-    assistantBubble.innerHTML = renderMarkdown(nextText);
-    chatThread.scrollTop = chatThread.scrollHeight;
     return { done: false, hasError: false };
   }
 
   if (eventName === "meta") {
     const requestUsedTokens = Number(payload.used_tokens ?? 0);
     if (Number.isFinite(requestUsedTokens) && requestUsedTokens > 0) {
-      state.lastRequestTokens = requestUsedTokens;
-      syncUsedTokensToContext();
+      context.usedTokens = requestUsedTokens;
+      if (state.activeChatId === context.chatId) {
+        state.lastRequestTokens = requestUsedTokens;
+        syncUsedTokensToContext();
+      }
     }
 
-    state.pendingToolUsage = normalizeToolUsage(payload.used_mcp_tools);
-    state.pendingSystemTrace = Array.isArray(payload.system_trace_messages)
+    context.toolUsage = normalizeToolUsage(payload.used_mcp_tools);
+    context.systemTrace = Array.isArray(payload.system_trace_messages)
       ? payload.system_trace_messages
           .filter((entry) => entry && typeof entry === "object")
           .map((entry) => ({
@@ -1418,19 +1504,17 @@ function processSseBlock(block, assistantBubble) {
           .filter((entry) => entry.content)
       : [];
 
-    if (payload.token_limit) {
+    if (payload.token_limit && state.activeChatId === context.chatId) {
       updateTokenCounter(state.usedTokens, payload.token_limit ?? state.modelTokenLimit);
     }
     return { done: false, hasError: false };
   }
 
   if (eventName === "done") {
-    setAssistantLoading(assistantBubble, false);
     return { done: true, hasError: false };
   }
 
   if (eventName === "error") {
-    setAssistantLoading(assistantBubble, false);
     return {
       done: true,
       hasError: true,
@@ -1466,38 +1550,39 @@ function appendSystemTraceMessages(chat, traceMessages, timestamp) {
   });
 }
 
-async function finalizeSuccessfulResponse(chatId, assistantBubble) {
-  const chat = state.chats.find((entry) => entry.id === chatId);
-  if (!chat) {
+async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
+  if (!chat || !assistantMessage) {
     return;
   }
 
   const assistantTimestamp = createTimestamp();
-  appendSystemTraceMessages(chat, state.pendingSystemTrace, assistantTimestamp);
+  appendSystemTraceMessages(chat, context.systemTrace, assistantTimestamp);
 
-  chat.messages.push({
-    role: "assistant",
-    content: assistantBubble.dataset.rawText ?? "",
-    timestamp: assistantTimestamp,
-    system_type: "",
-    tool_usage: state.pendingToolUsage,
-  });
-  if (Number.isFinite(Number(state.lastRequestTokens)) && Number(state.lastRequestTokens) > 0) {
+  assistantMessage.timestamp = assistantTimestamp;
+  assistantMessage.status = "done";
+  assistantMessage.tool_usage = context.toolUsage;
+  if (Number.isFinite(Number(context.usedTokens)) && Number(context.usedTokens) > 0) {
     const currentTotal = Number(chat.total_tokens_used || 0);
-    chat.total_tokens_used = Math.max(0, currentTotal) + Number(state.lastRequestTokens);
+    chat.total_tokens_used = Math.max(0, currentTotal) + Number(context.usedTokens);
   }
   chat.updated_at = assistantTimestamp;
-  state.pendingToolUsage = [];
-  state.pendingSystemTrace = [];
+
+  if (state.activeChatId === chat.id) {
+    state.lastRequestTokens = Number.isFinite(Number(context.usedTokens)) ? Number(context.usedTokens) : 0;
+  }
 
   const compactResult = await maybeAutoCompact(chat, "ongoing chat", state.modelTokenLimit);
   if (!compactResult.ok) {
     return;
   }
 
-  renderActiveChat();
+  if (state.activeChatId === chat.id) {
+    renderActiveChat();
+  }
   renderChatHistory();
-  syncUsedTokensToContext();
+  if (state.activeChatId === chat.id) {
+    syncUsedTokensToContext();
+  }
 
   try {
     await persistChatsToSettings();
@@ -1514,64 +1599,57 @@ async function finalizeSuccessfulResponse(chatId, assistantBubble) {
   setStatus("Response complete.");
 }
 
-async function sendMessage(event) {
-  event.preventDefault();
+function buildQueueSnapshot(chat) {
+  const activeProviderId = state.activeProviderId;
+  const providerConfig = state.settings?.provider_configs?.[activeProviderId] ?? null;
+  return {
+    history: toApiHistory(chat.messages),
+    memoryBlock: chat.memory_block || "",
+    providerId: activeProviderId,
+    model: providerConfig?.model ?? "",
+    apiKey: providerConfig?.api_key ?? "",
+    botName: state.settings?.bot_name ?? "",
+    systemPrompt: state.settings?.system_prompt ?? "",
+  };
+}
 
-  const message = chatInput.value.trim();
-  if (!message) {
-    setStatus("Please enter a message.", true);
+function findMessageByRequestId(chat, requestId) {
+  return chat.messages.find((message) => message.request_id === requestId) ?? null;
+}
+
+async function executeQueuedJob(chat, job, runtime) {
+  const assistantMessage = findMessageByRequestId(chat, job.requestId);
+  if (!assistantMessage) {
     return;
   }
 
-  const existingChat = getActiveChat();
-  const requestHistory = existingChat ? toApiHistory(existingChat.messages) : [];
-  const requestMemoryBlock = existingChat?.memory_block || "";
-
-  let chat = existingChat;
-  if (!chat) {
-    chat = createChatEntry(message);
-    state.chats.push(chat);
-    state.activeChatId = chat.id;
-    updateCurrentChatTitle();
-    updateSystemTraceToggleLabel();
-    renderChatHistory();
+  assistantMessage.status = "processing";
+  const context = {
+    chatId: chat.id,
+    assistantMessage,
+    usedTokens: 0,
+    toolUsage: [],
+    systemTrace: [],
+  };
+  if (state.activeChatId === chat.id) {
+    renderActiveChat();
+    setStatus("Processing...");
   }
-
-  const userTimestamp = createTimestamp();
-  chat.messages.push({
-    role: "user",
-    content: message,
-    timestamp: userTimestamp,
-  });
-  chat.updated_at = userTimestamp;
-
   renderChatHistory();
-  setSendingState(true);
-  setStatus("Sending...");
-  state.pendingToolUsage = [];
-  state.pendingSystemTrace = [];
-  state.lastRequestTokens = 0;
-
-  addMessage("user", message, userTimestamp);
-  const assistantBubble = addMessage("assistant", "");
-  assistantBubble.dataset.rawText = "";
-  setAssistantLoading(assistantBubble, true);
-  chatInput.value = "";
-
-  try {
-    await persistChatsToSettings();
-  } catch (error) {
-    setStatus(`Message sent, but chat history was not saved yet: ${error.message}`, true);
-  }
 
   try {
     const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        message,
-        history: requestHistory,
-        memory_block: requestMemoryBlock,
+        message: job.message,
+        history: job.snapshot.history,
+        memory_block: job.snapshot.memoryBlock,
+        provider_id: job.snapshot.providerId,
+        model: job.snapshot.model,
+        api_key: job.snapshot.apiKey,
+        bot_name: job.snapshot.botName,
+        system_prompt: job.snapshot.systemPrompt,
       }),
     });
 
@@ -1599,79 +1677,193 @@ async function sendMessage(event) {
         break;
       }
 
+      if (runtime.cancelledRequestIds.has(job.requestId)) {
+        return;
+      }
+
       buffer += decoder.decode(value, { stream: true });
       const blocks = buffer.split("\n\n");
       buffer = blocks.pop() ?? "";
 
       for (const block of blocks) {
-        const result = processSseBlock(block, assistantBubble);
+        const result = processSseBlock(block, context);
         if (result.hasError) {
           throw new Error(result.errorMessage);
         }
 
         if (result.done) {
-          await finalizeSuccessfulResponse(chat.id, assistantBubble);
-          setSendingState(false);
-          return;
+          break;
         }
       }
     }
 
-    await finalizeSuccessfulResponse(chat.id, assistantBubble);
-  } catch (error) {
-    setAssistantLoading(assistantBubble, false);
-    const hardErrorText = typeof error?.message === "string" && error.message ? error.message : "Hard error.";
-
-    if (assistantBubble.dataset.rawText) {
-      assistantBubble.dataset.rawText = `${assistantBubble.dataset.rawText}\n\nHard error: ${hardErrorText}`;
-    } else {
-      assistantBubble.dataset.rawText = hardErrorText;
+    if (runtime.cancelledRequestIds.has(job.requestId)) {
+      return;
     }
-    assistantBubble.innerHTML = renderMarkdown(assistantBubble.dataset.rawText);
+
+    await finalizeSuccessfulResponse(chat, assistantMessage, context);
+  } catch (error) {
+    if (runtime.cancelledRequestIds.has(job.requestId)) {
+      return;
+    }
+
+    const hardErrorText = typeof error?.message === "string" && error.message ? error.message : "Hard error.";
+    if (assistantMessage.content) {
+      assistantMessage.content = `${assistantMessage.content}\n\nHard error: ${hardErrorText}`;
+    } else {
+      assistantMessage.content = hardErrorText;
+    }
 
     const errorTimestamp = createTimestamp();
-    appendSystemTraceMessages(chat, state.pendingSystemTrace, errorTimestamp);
-    chat.messages.push({
-      role: "assistant",
-      content: assistantBubble.dataset.rawText,
-      timestamp: errorTimestamp,
-      system_type: "",
-      tool_usage: state.pendingToolUsage,
-    });
-    if (Number.isFinite(Number(state.lastRequestTokens)) && Number(state.lastRequestTokens) > 0) {
+    appendSystemTraceMessages(chat, context.systemTrace, errorTimestamp);
+    assistantMessage.timestamp = errorTimestamp;
+    assistantMessage.status = "error";
+    assistantMessage.tool_usage = context.toolUsage;
+    if (Number.isFinite(Number(context.usedTokens)) && Number(context.usedTokens) > 0) {
       const currentTotal = Number(chat.total_tokens_used || 0);
-      chat.total_tokens_used = Math.max(0, currentTotal) + Number(state.lastRequestTokens);
+      chat.total_tokens_used = Math.max(0, currentTotal) + Number(context.usedTokens);
     }
     chat.updated_at = errorTimestamp;
-    state.pendingToolUsage = [];
-    state.pendingSystemTrace = [];
 
-    renderActiveChat();
+    if (state.activeChatId === chat.id) {
+      state.lastRequestTokens = Number.isFinite(Number(context.usedTokens)) ? Number(context.usedTokens) : 0;
+      renderActiveChat();
+      syncUsedTokensToContext();
+    }
     renderChatHistory();
-    syncUsedTokensToContext();
+    setStatus(hardErrorText, true);
+
     try {
       await persistChatsToSettings();
     } catch (persistError) {
       setStatus(`Response failed and save failed: ${persistError.message}`, true);
-      return;
     }
-
-    setStatus(hardErrorText, true);
-  } finally {
-    setSendingState(false);
-    syncUsedTokensToContext();
-    chatInput.focus();
   }
 }
 
+async function processChatQueue(chatId) {
+  const runtime = getChatRuntime(chatId);
+  if (!runtime || runtime.processing) {
+    return;
+  }
+
+  runtime.processing = true;
+  while (runtime.queue.length > 0) {
+    const job = runtime.queue.shift();
+    if (!job || runtime.cancelledRequestIds.has(job.requestId)) {
+      continue;
+    }
+
+    const chat = state.chats.find((entry) => entry.id === chatId);
+    if (!chat) {
+      runtime.cancelledRequestIds.add(job.requestId);
+      continue;
+    }
+
+    runtime.activeRequestId = job.requestId;
+    await executeQueuedJob(chat, job, runtime);
+    runtime.activeRequestId = "";
+
+    try {
+      await persistChatsToSettings();
+    } catch (error) {
+      setStatus(`Queued response save failed: ${error.message}`, true);
+    }
+  }
+
+  runtime.processing = false;
+  renderChatHistory();
+  if (state.activeChatId === chatId) {
+    updateComposerState();
+  }
+}
+
+async function sendMessage(event) {
+  event.preventDefault();
+
+  if (state.isSwitching || state.isCompacting) {
+    setStatus("Please wait for current gateway operation to finish.", true);
+    return;
+  }
+
+  const message = chatInput.value.trim();
+  if (!message) {
+    setStatus("Please enter a message.", true);
+    return;
+  }
+
+  let chat = getActiveChat();
+  if (!chat) {
+    chat = createChatEntry(message);
+    state.chats.push(chat);
+    state.activeChatId = chat.id;
+    updateCurrentChatTitle();
+    updateSystemTraceToggleLabel();
+  }
+
+  const snapshot = buildQueueSnapshot(chat);
+  const requestId = createChatId();
+  const timestamp = createTimestamp();
+  chat.messages.push({
+    role: "user",
+    content: message,
+    timestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: "",
+    status: "",
+  });
+  chat.messages.push({
+    role: "assistant",
+    content: "",
+    timestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: requestId,
+    status: "queued",
+  });
+  chat.updated_at = timestamp;
+
+  const runtime = getChatRuntime(chat.id);
+  runtime.queue.push({
+    requestId,
+    queuedAt: timestamp,
+    message,
+    snapshot,
+  });
+
+  chatInput.value = "";
+  if (state.activeChatId === chat.id) {
+    renderActiveChat();
+  }
+  renderChatHistory();
+  updateComposerState();
+  setStatus("Queued.");
+
+  try {
+    await persistChatsToSettings();
+  } catch (error) {
+    setStatus(`Message queued, but save failed: ${error.message}`, true);
+  }
+
+  processChatQueue(chat.id);
+  chatInput.focus();
+}
+
 async function triggerManualCompaction() {
-  if (state.isCompacting || state.isSwitching || sendButton.disabled) {
+  if (state.isCompacting || state.isSwitching) {
     return;
   }
 
   const activeChat = getActiveChat();
   if (!activeChat) {
     setStatus("No active chat to compact.", true);
+    return;
+  }
+
+  const runtime = getChatRuntime(activeChat.id);
+  if (runtime?.processing) {
+    setStatus("Cannot compact while this chat is processing queued messages.", true);
     return;
   }
 

@@ -20,10 +20,12 @@ class ProviderConfig(BaseModel):
 
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
-    content: str = Field(default="", max_length=30000)
+    content: str = Field(default="", max_length=200000)
     timestamp: str = ""
     system_type: str = ""
     tool_usage: list[dict[str, str]] = Field(default_factory=list)
+    request_id: str = ""
+    status: str = ""
 
 
 class ChatSession(BaseModel):
@@ -170,6 +172,8 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
                     timestamp = raw_message.get("timestamp")
                     system_type = raw_message.get("system_type")
                     raw_tool_usage = raw_message.get("tool_usage")
+                    request_id = raw_message.get("request_id")
+                    status = raw_message.get("status")
 
                     if role not in {"user", "assistant", "system"}:
                         continue
@@ -182,6 +186,12 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
 
                     if not isinstance(system_type, str):
                         system_type = ""
+
+                    if not isinstance(request_id, str):
+                        request_id = ""
+
+                    if not isinstance(status, str):
+                        status = ""
 
                     tool_usage: list[dict[str, str]] = []
                     if isinstance(raw_tool_usage, list):
@@ -213,6 +223,8 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
                             "timestamp": timestamp,
                             "system_type": system_type,
                             "tool_usage": tool_usage,
+                            "request_id": request_id,
+                            "status": status,
                         }
                     )
 
