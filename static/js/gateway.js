@@ -1,4 +1,5 @@
 const CHAT_TITLE_MAX_LENGTH = 48;
+const EDITABLE_CHAT_TITLE_MAX_LENGTH = 32;
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -105,6 +106,19 @@ function deriveChatTitle(firstMessage) {
   }
 
   return `${normalized.slice(0, CHAT_TITLE_MAX_LENGTH).trimEnd()}...`;
+}
+
+function normalizeEditedChatTitle(rawTitle) {
+  const normalized = String(rawTitle || "").trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return "New chat";
+  }
+
+  if (normalized.length <= EDITABLE_CHAT_TITLE_MAX_LENGTH) {
+    return normalized;
+  }
+
+  return normalized.slice(0, EDITABLE_CHAT_TITLE_MAX_LENGTH).trimEnd();
 }
 
 function createChatId() {
@@ -251,14 +265,19 @@ function renderChatHistory() {
   }
 
   sortedChats.forEach((chat) => {
-    const item = document.createElement("button");
-    item.type = "button";
+    const item = document.createElement("div");
     item.className = "chat-history-item";
     if (chat.id === state.activeChatId) {
       item.classList.add("active");
     }
     item.dataset.chatId = chat.id;
-    item.disabled = state.isSending || state.isSwitching || state.isCompacting;
+
+    const selectButton = document.createElement("button");
+    selectButton.type = "button";
+    selectButton.className = "chat-history-main";
+    selectButton.dataset.chatId = chat.id;
+    selectButton.dataset.action = "open";
+    selectButton.disabled = state.isSending || state.isSwitching || state.isCompacting;
 
     const titleNode = document.createElement("p");
     titleNode.className = "chat-history-title";
@@ -269,10 +288,91 @@ function renderChatHistory() {
     const latestTimestamp = getLatestChatTimestamp(chat);
     timeNode.textContent = latestTimestamp ? formatMessageTimestamp(latestTimestamp) : "No messages yet";
 
-    item.appendChild(titleNode);
-    item.appendChild(timeNode);
+    selectButton.appendChild(titleNode);
+    selectButton.appendChild(timeNode);
+
+    const actionsNode = document.createElement("div");
+    actionsNode.className = "chat-history-actions";
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "chat-history-action-btn";
+    editButton.dataset.chatId = chat.id;
+    editButton.dataset.action = "edit";
+    editButton.disabled = state.isSending || state.isSwitching || state.isCompacting;
+    editButton.setAttribute("aria-label", "Edit chat title");
+    editButton.textContent = "✎";
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "chat-history-action-btn danger";
+    deleteButton.dataset.chatId = chat.id;
+    deleteButton.dataset.action = "delete";
+    deleteButton.disabled = state.isSending || state.isSwitching || state.isCompacting;
+    deleteButton.setAttribute("aria-label", "Delete chat");
+    deleteButton.textContent = "×";
+
+    actionsNode.appendChild(deleteButton);
+    actionsNode.appendChild(editButton);
+
+    item.appendChild(selectButton);
+    item.appendChild(actionsNode);
     chatHistoryList.appendChild(item);
   });
+}
+
+async function deleteChat(chatId) {
+  const index = state.chats.findIndex((chat) => chat.id === chatId);
+  if (index === -1) {
+    return;
+  }
+
+  state.chats.splice(index, 1);
+
+  if (state.activeChatId === chatId) {
+    const nextActiveChat = sortChatsByLatestMessage(state.chats)[0] ?? null;
+    state.activeChatId = nextActiveChat?.id ?? "";
+    state.lastRequestTokens = 0;
+  }
+
+  renderChatHistory();
+  renderActiveChat();
+  syncUsedTokensToContext();
+
+  try {
+    await persistChatsToSettings();
+    setStatus("Chat deleted.");
+  } catch (error) {
+    setStatus(`Chat deleted locally, but save failed: ${error.message}`, true);
+  }
+}
+
+async function editChatTitle(chatId) {
+  const chat = state.chats.find((entry) => entry.id === chatId);
+  if (!chat) {
+    return;
+  }
+
+  const nextTitleRaw = window.prompt(
+    `Edit chat title (max ${EDITABLE_CHAT_TITLE_MAX_LENGTH} characters):`,
+    normalizeChatTitle(chat.title),
+  );
+
+  if (nextTitleRaw === null) {
+    return;
+  }
+
+  chat.title = normalizeEditedChatTitle(nextTitleRaw);
+  chat.updated_at = createTimestamp();
+  renderChatHistory();
+  updateCurrentChatTitle();
+
+  try {
+    await persistChatsToSettings();
+    setStatus("Chat title updated.");
+  } catch (error) {
+    setStatus(`Title updated locally, but save failed: ${error.message}`, true);
+  }
 }
 
 function activateChat(chatId) {
@@ -1299,17 +1399,33 @@ chatHistoryList.addEventListener("click", (event) => {
     return;
   }
 
-  const item = target instanceof HTMLElement ? target.closest("button[data-chat-id]") : null;
-  if (!(item instanceof HTMLButtonElement)) {
+  const actionButton = target instanceof HTMLElement ? target.closest("button[data-chat-id][data-action]") : null;
+  if (!(actionButton instanceof HTMLButtonElement)) {
     return;
   }
 
-  const chatId = item.dataset.chatId;
-  if (!chatId || chatId === state.activeChatId) {
+  const chatId = actionButton.dataset.chatId;
+  const action = actionButton.dataset.action;
+  if (!chatId || !action) {
     return;
   }
 
-  activateChat(chatId);
+  if (action === "open") {
+    if (chatId === state.activeChatId) {
+      return;
+    }
+    activateChat(chatId);
+    return;
+  }
+
+  if (action === "delete") {
+    deleteChat(chatId);
+    return;
+  }
+
+  if (action === "edit") {
+    editChatTitle(chatId);
+  }
 });
 
 chatForm.addEventListener("submit", sendMessage);
