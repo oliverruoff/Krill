@@ -163,6 +163,8 @@ class TelegramBridgeWorker:
             active_chat = _create_chat_entry(prompt)
             settings.chats.append(active_chat)
             settings.active_chat_id = active_chat.id
+        elif not active_chat.messages and active_chat.title.strip().lower() == "new chat":
+            active_chat.title = _derive_chat_title(prompt)
 
         user_timestamp = _timestamp()
         active_chat.messages.append(ChatMessage(role="user", content=prompt, timestamp=user_timestamp))
