@@ -185,7 +185,7 @@ async def get_chat_state() -> ChatStateResponse:
         chats=[chat.model_dump() for chat in settings.chats],
         active_chat_id=settings.active_chat_id,
         daily_token_usage=[entry.model_dump() for entry in settings.daily_token_usage],
-        telegram_state=settings.telegram_state.model_dump(),
+        telegram_state={"owner_user_id": settings.telegram_state.owner_user_id},
         telegram_enabled=bool(telegram_config.enabled),
         telegram_token_configured=token_configured,
     )

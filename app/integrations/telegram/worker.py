@@ -11,10 +11,18 @@ from app.tooling import generate_with_tools
 from .client import telegram_get_me, telegram_get_updates, telegram_send_message
 
 
+TELEGRAM_POLL_TIMEOUT_SECONDS = 25
+TELEGRAM_DRAIN_BATCH_TIMEOUT_SECONDS = 0
+TELEGRAM_DRAIN_MAX_BATCHES = 40
+TELEGRAM_UPDATES_PER_CYCLE = 5
+
+
 class TelegramBridgeWorker:
     def __init__(self) -> None:
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
+        self._bridge_active = False
+        self._last_token = ""
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -37,8 +45,16 @@ class TelegramBridgeWorker:
                 settings = await load_settings()
                 token = _get_bot_token(settings)
                 if not _bridge_is_enabled(settings, token):
+                    self._bridge_active = False
+                    self._last_token = ""
                     await asyncio.sleep(2)
                     continue
+
+                if not self._bridge_active or token != self._last_token:
+                    await self._drain_pending_updates(token, settings.telegram_state.last_update_id + 1)
+                    self._bridge_active = True
+                    self._last_token = token
+                    settings = await load_settings()
 
                 bot_me = await asyncio.to_thread(telegram_get_me, token)
                 bot_result = bot_me.get("result") if isinstance(bot_me, dict) else {}
@@ -46,12 +62,12 @@ class TelegramBridgeWorker:
                 bot_id = int(bot_result.get("id", 0)) if isinstance(bot_result, dict) else 0
 
                 offset = settings.telegram_state.last_update_id + 1
-                updates_payload = await asyncio.to_thread(telegram_get_updates, token, offset, 25)
+                updates_payload = await asyncio.to_thread(telegram_get_updates, token, offset, TELEGRAM_POLL_TIMEOUT_SECONDS)
                 updates = updates_payload.get("result") if isinstance(updates_payload, dict) else []
                 if not isinstance(updates, list) or not updates:
                     continue
 
-                for update in updates:
+                for update in updates[:TELEGRAM_UPDATES_PER_CYCLE]:
                     if not isinstance(update, dict):
                         continue
 
@@ -70,6 +86,34 @@ class TelegramBridgeWorker:
                 raise
             except Exception:
                 await asyncio.sleep(2)
+
+    async def _drain_pending_updates(self, token: str, offset: int) -> None:
+        next_offset = max(1, offset)
+        highest_seen = 0
+
+        for _ in range(TELEGRAM_DRAIN_MAX_BATCHES):
+            payload = await asyncio.to_thread(
+                telegram_get_updates,
+                token,
+                next_offset,
+                TELEGRAM_DRAIN_BATCH_TIMEOUT_SECONDS,
+            )
+            updates = payload.get("result") if isinstance(payload, dict) else []
+            if not isinstance(updates, list) or not updates:
+                break
+
+            for update in updates:
+                if not isinstance(update, dict):
+                    continue
+                update_id = update.get("update_id")
+                if isinstance(update_id, int):
+                    highest_seen = max(highest_seen, update_id)
+
+            if highest_seen > 0:
+                next_offset = highest_seen + 1
+
+        if highest_seen > 0:
+            await self._store_last_update_id(highest_seen)
 
     async def _store_last_update_id(self, update_id: int) -> None:
         settings = await load_settings()
@@ -90,6 +134,9 @@ class TelegramBridgeWorker:
             return
 
         settings = await load_settings()
+        if not _bridge_is_enabled(settings, _get_bot_token(settings)):
+            return
+
         owner_user_id = settings.telegram_state.owner_user_id.strip()
         if not owner_user_id:
             settings.telegram_state.owner_user_id = str(sender_id)

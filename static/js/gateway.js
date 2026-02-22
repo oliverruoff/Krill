@@ -109,6 +109,15 @@ function isChatBusy(chatId) {
   return Boolean(runtime.processing) || (Array.isArray(runtime.queue) && runtime.queue.length > 0);
 }
 
+function isAnyChatBusy() {
+  return Object.values(state.chatRuntimes).some((runtime) => {
+    if (!runtime || typeof runtime !== "object") {
+      return false;
+    }
+    return Boolean(runtime.processing) || (Array.isArray(runtime.queue) && runtime.queue.length > 0);
+  });
+}
+
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.className = isError ? "error" : "ok";
@@ -554,7 +563,10 @@ function startNewChat() {
     return;
   }
 
-  state.activeChatId = "";
+  const chat = createChatEntry("");
+  chat.title = "New chat";
+  state.chats.push(chat);
+  state.activeChatId = chat.id;
   state.lastRequestTokens = 0;
   renderChatHistory();
   renderActiveChat();
@@ -854,6 +866,15 @@ function updateTelegramStatusLabel() {
   }
 
   telegramStatusNode.textContent = "Telegram: connected";
+}
+
+function applyTelegramStatusFromPayload(payload) {
+  state.telegramEnabled = Boolean(payload?.telegram_enabled);
+  state.telegramTokenConfigured = Boolean(payload?.telegram_token_configured);
+  state.telegramOwnerUserId = typeof payload?.telegram_state?.owner_user_id === "string"
+    ? payload.telegram_state.owner_user_id
+    : "";
+  updateTelegramStatusLabel();
 }
 
 function syncTelegramFlagsFromIntegrationConfig() {
@@ -1707,10 +1728,10 @@ function buildChatStateSignature(payload) {
   const chats = Array.isArray(payload?.chats) ? payload.chats : [];
   const activeChatId = typeof payload?.active_chat_id === "string" ? payload.active_chat_id : "";
   const dailyTokenUsage = Array.isArray(payload?.daily_token_usage) ? payload.daily_token_usage : [];
-  const telegramState = payload?.telegram_state && typeof payload.telegram_state === "object" ? payload.telegram_state : {};
+  const telegramOwnerUserId = typeof payload?.telegram_state?.owner_user_id === "string" ? payload.telegram_state.owner_user_id : "";
   const telegramEnabled = Boolean(payload?.telegram_enabled);
   const telegramTokenConfigured = Boolean(payload?.telegram_token_configured);
-  return JSON.stringify({ chats, activeChatId, dailyTokenUsage, telegramState, telegramEnabled, telegramTokenConfigured });
+  return JSON.stringify({ chats, activeChatId, dailyTokenUsage, telegramOwnerUserId, telegramEnabled, telegramTokenConfigured });
 }
 
 function refreshLocalChatStateSignature() {
@@ -1731,13 +1752,8 @@ function applyRemoteChatState(payload) {
 
   state.chats = incomingChats;
   state.dailyTokenUsage = incomingDailyUsage;
-  state.telegramEnabled = Boolean(payload?.telegram_enabled);
-  state.telegramTokenConfigured = Boolean(payload?.telegram_token_configured);
-  state.telegramOwnerUserId = typeof payload?.telegram_state?.owner_user_id === "string"
-    ? payload.telegram_state.owner_user_id
-    : "";
+  applyTelegramStatusFromPayload(payload);
   updateDailyTokenUsageLabel();
-  updateTelegramStatusLabel();
 
   if (state.chats.some((chat) => chat.id === incomingActiveChatId)) {
     state.activeChatId = incomingActiveChatId;
@@ -1764,6 +1780,12 @@ async function syncRemoteChatState() {
       return;
     }
     const payload = await response.json();
+    applyTelegramStatusFromPayload(payload);
+
+    if (isAnyChatBusy()) {
+      return;
+    }
+
     const signature = buildChatStateSignature(payload);
     if (signature === state.lastChatStateSignature) {
       return;
@@ -2166,33 +2188,36 @@ async function processChatQueue(chatId) {
   }
 
   runtime.processing = true;
-  while (runtime.queue.length > 0) {
-    const job = runtime.queue.shift();
-    if (!job || runtime.cancelledRequestIds.has(job.requestId)) {
-      continue;
-    }
+  try {
+    while (runtime.queue.length > 0) {
+      const job = runtime.queue.shift();
+      if (!job || runtime.cancelledRequestIds.has(job.requestId)) {
+        continue;
+      }
 
-    const chat = state.chats.find((entry) => entry.id === chatId);
-    if (!chat) {
-      runtime.cancelledRequestIds.add(job.requestId);
-      continue;
-    }
+      const chat = state.chats.find((entry) => entry.id === chatId);
+      if (!chat) {
+        runtime.cancelledRequestIds.add(job.requestId);
+        continue;
+      }
 
-    runtime.activeRequestId = job.requestId;
-    await executeQueuedJob(chat, job, runtime);
+      runtime.activeRequestId = job.requestId;
+      await executeQueuedJob(chat, job, runtime);
+      runtime.activeRequestId = "";
+
+      try {
+        await persistChatsToSettings();
+      } catch (error) {
+        setStatus(`Queued response save failed: ${error.message}`, true);
+      }
+    }
+  } finally {
+    runtime.processing = false;
     runtime.activeRequestId = "";
-
-    try {
-      await persistChatsToSettings();
-    } catch (error) {
-      setStatus(`Queued response save failed: ${error.message}`, true);
+    renderChatHistory();
+    if (state.activeChatId === chatId) {
+      updateComposerState();
     }
-  }
-
-  runtime.processing = false;
-  renderChatHistory();
-  if (state.activeChatId === chatId) {
-    updateComposerState();
   }
 }
 
@@ -2217,6 +2242,8 @@ async function sendMessage(event) {
     state.activeChatId = chat.id;
     updateCurrentChatTitle();
     updateSystemTraceToggleLabel();
+  } else if ((!Array.isArray(chat.messages) || chat.messages.length === 0) && normalizeChatTitle(chat.title).toLowerCase() === "new chat") {
+    chat.title = deriveChatTitle(message);
   }
 
   const snapshot = buildQueueSnapshot(chat);
@@ -2258,13 +2285,14 @@ async function sendMessage(event) {
   updateComposerState();
   setStatus("Queued.");
 
+  processChatQueue(chat.id);
+
   try {
     await persistChatsToSettings();
   } catch (error) {
     setStatus(`Message queued, but save failed: ${error.message}`, true);
   }
 
-  processChatQueue(chat.id);
   chatInput.focus();
 }
 
