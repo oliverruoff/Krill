@@ -269,41 +269,78 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     )
 
     async def event_stream():
-        try:
-            orchestration = await generate_with_tools(
-                provider=provider,
-                settings=settings,
-                prompt=payload.message,
-                system_prompt=runtime_system_prompt,
-                model=model_id,
-                api_key=api_key,
-                history=history,
-            )
-            text = orchestration["text"]
-            used_tokens = orchestration["used_tokens"]
-            used_mcp_tools = orchestration["used_mcp_tools"]
-            system_trace_messages = orchestration["system_trace_messages"]
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        orchestration_holder: dict[str, object] = {}
 
-            used_value = used_tokens if isinstance(used_tokens, int) else 0
-            used_percent = round((used_value / token_limit) * 100, 2) if token_limit else 0
-            yield _sse(
-                "meta",
-                {
-                    "used_tokens": used_value,
-                    "token_limit": token_limit,
-                    "used_percent": used_percent,
-                    "used_mcp_tools": used_mcp_tools,
-                    "system_trace_messages": system_trace_messages,
-                },
-            )
+        async def _emit_tool_step(step: object) -> None:
+            payload: dict[str, object]
+            if isinstance(step, dict):
+                payload = {str(key): value for key, value in step.items()}
+            else:
+                payload = {"system_type": "tool_step", "content": str(step)}
+            await queue.put(_sse("tool_step", payload))
 
-            for chunk in _chunk_text(text):
-                yield _sse("token", {"text": chunk})
-                await asyncio.sleep(0.01)
+        async def run_orchestration() -> None:
+            try:
+                orchestration_holder["result"] = await generate_with_tools(
+                    provider=provider,
+                    settings=settings,
+                    prompt=payload.message,
+                    system_prompt=runtime_system_prompt,
+                    model=model_id,
+                    api_key=api_key,
+                    history=history,
+                    max_tool_recursion=settings.tool_max_recursion,
+                    tool_timeout_seconds=settings.tool_timeout_seconds,
+                    on_tool_step=_emit_tool_step,
+                )
+            except Exception as exc:
+                orchestration_holder["error"] = exc
+            finally:
+                await queue.put(None)
 
-            yield _sse("done", {"ok": True})
-        except Exception as exc:
-            yield _sse("error", {"detail": str(exc)})
+        orchestration_task = asyncio.create_task(run_orchestration())
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+
+        await orchestration_task
+
+        if "error" in orchestration_holder:
+            yield _sse("error", {"detail": str(orchestration_holder["error"])})
+            return
+
+        orchestration = orchestration_holder.get("result")
+        if not isinstance(orchestration, dict):
+            yield _sse("error", {"detail": "Missing orchestration result."})
+            return
+
+        text = orchestration.get("text", "")
+        used_tokens = orchestration.get("used_tokens")
+        used_mcp_tools = orchestration.get("used_mcp_tools", [])
+        system_trace_messages = orchestration.get("system_trace_messages", [])
+
+        used_value = used_tokens if isinstance(used_tokens, int) else 0
+        used_percent = round((used_value / token_limit) * 100, 2) if token_limit else 0
+        yield _sse(
+            "meta",
+            {
+                "used_tokens": used_value,
+                "token_limit": token_limit,
+                "used_percent": used_percent,
+                "used_mcp_tools": used_mcp_tools,
+                "system_trace_messages": system_trace_messages,
+            },
+        )
+
+        for chunk in _chunk_text(str(text)):
+            yield _sse("token", {"text": chunk})
+            await asyncio.sleep(0.01)
+
+        yield _sse("done", {"ok": True})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

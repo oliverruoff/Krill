@@ -74,6 +74,15 @@
           <label for="active_provider_select">Active Provider</label>
           <select id="active_provider_select"></select>
 
+          <details class="advanced-settings">
+            <summary>Advanced Settings</summary>
+            <label for="tool_max_recursion">Max tool recursion</label>
+            <input id="tool_max_recursion" type="number" min="1" max="20" value="6" />
+
+            <label for="tool_timeout_seconds">Tool timeout (seconds)</label>
+            <input id="tool_timeout_seconds" type="number" min="5" max="300" value="45" />
+          </details>
+
           <div class="actions">
             <button type="submit" id="complete-btn">Apply and Back to Gateway</button>
             <button type="button" id="cancel-btn" class="secondary">Cancel</button>

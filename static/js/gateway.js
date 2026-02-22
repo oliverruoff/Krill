@@ -4,6 +4,7 @@ const EDITABLE_CHAT_TITLE_MAX_LENGTH = 24;
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const sendButton = document.getElementById("send-btn");
+const stopButton = document.getElementById("stop-btn");
 const chatThread = document.getElementById("chat-thread");
 const providerIndicator = document.getElementById("provider-indicator");
 const modelIndicator = document.getElementById("model-indicator");
@@ -58,6 +59,7 @@ function getChatRuntime(chatId) {
       queue: [],
       cancelledRequestIds: new Set(),
       activeRequestId: "",
+      abortController: null,
     };
   }
 
@@ -79,6 +81,10 @@ function removeChatRuntime(chatId) {
   runtime.queue = [];
   if (runtime.activeRequestId) {
     runtime.cancelledRequestIds.add(runtime.activeRequestId);
+  }
+
+  if (runtime.abortController instanceof AbortController) {
+    runtime.abortController.abort();
   }
 }
 
@@ -330,7 +336,7 @@ function renderToolUsageLine(wrapper, toolUsage) {
     const toolLabel = entry.tool_label || entry.tool_id;
     return `${mcpLabel} (${toolLabel})`;
   });
-  usageNode.textContent = `Used MCP${labels.length > 1 ? "s" : ""}: ${labels.join(", ")}`;
+  usageNode.textContent = `used Tools: ${labels.join(", ")}`;
   wrapper.appendChild(usageNode);
 }
 
@@ -1050,14 +1056,14 @@ async function verifyMcpConfig(mcpId) {
   });
 
   if (!response.ok) {
-    let detail = "MCP verification failed.";
+    let detail = "Tool verification failed.";
     try {
       const payload = await response.json();
       if (typeof payload.detail === "string" && payload.detail) {
         detail = payload.detail;
       }
     } catch (error) {
-      detail = "MCP verification failed.";
+      detail = "Tool verification failed.";
     }
 
     throw new Error(detail);
@@ -1118,7 +1124,7 @@ function renderMcpPanel() {
   if (!Array.isArray(state.mcps) || state.mcps.length === 0) {
     const emptyNode = document.createElement("p");
     emptyNode.className = "chat-history-empty";
-    emptyNode.textContent = "No MCPs available.";
+    emptyNode.textContent = "No tools available.";
     mcpList.appendChild(emptyNode);
     return;
   }
@@ -1513,6 +1519,9 @@ function updateComposerState() {
   const isBusy = Boolean(runtime?.processing);
   sendButton.disabled = false;
   chatInput.disabled = false;
+  if (stopButton instanceof HTMLButtonElement) {
+    stopButton.disabled = !isBusy;
+  }
   setSwitchersDisabled(state.isSwitching || state.isCompacting);
   setCompactButtonDisabled(state.isSwitching || state.isCompacting || isBusy);
   setHistoryControlsDisabled(state.isSwitching || state.isCompacting);
@@ -1565,7 +1574,7 @@ function processSseBlock(block, context) {
     }
 
     context.toolUsage = normalizeToolUsage(payload.used_mcp_tools);
-    context.systemTrace = Array.isArray(payload.system_trace_messages)
+    const metaTrace = Array.isArray(payload.system_trace_messages)
       ? payload.system_trace_messages
           .filter((entry) => entry && typeof entry === "object")
           .map((entry) => ({
@@ -1574,9 +1583,45 @@ function processSseBlock(block, context) {
           }))
           .filter((entry) => entry.content)
       : [];
+    if (metaTrace.length > 0) {
+      const merged = [...context.systemTrace];
+      metaTrace.forEach((entry) => {
+        const exists = merged.some((item) => item.system_type === entry.system_type && item.content === entry.content);
+        if (!exists) {
+          merged.push(entry);
+        }
+      });
+      context.systemTrace = merged;
+    }
 
     if (payload.token_limit && state.activeChatId === context.chatId) {
       updateTokenCounter(state.usedTokens, payload.token_limit ?? state.modelTokenLimit);
+    }
+    return { done: false, hasError: false };
+  }
+
+  if (eventName === "tool_step") {
+    const entry = {
+      system_type: typeof payload.system_type === "string" ? payload.system_type : "tool_step",
+      content: typeof payload.content === "string" ? payload.content : "",
+    };
+
+    if (entry.content) {
+      const duplicate = context.systemTrace.some(
+        (item) => item.system_type === entry.system_type && item.content === entry.content,
+      );
+      if (!duplicate) {
+        context.systemTrace.push(entry);
+        const chat = state.chats.find((entryChat) => entryChat.id === context.chatId);
+        if (chat) {
+          appendSystemTraceMessages(chat, [entry], createTimestamp(), context.requestId);
+          chat.updated_at = createTimestamp();
+          if (state.activeChatId === context.chatId) {
+            renderActiveChat();
+          }
+          renderChatHistory();
+        }
+      }
     }
     return { done: false, hasError: false };
   }
@@ -1596,7 +1641,7 @@ function processSseBlock(block, context) {
   return { done: false, hasError: false };
 }
 
-function appendSystemTraceMessages(chat, traceMessages, timestamp) {
+function appendSystemTraceMessages(chat, traceMessages, timestamp, requestId = "") {
   if (!Array.isArray(traceMessages) || traceMessages.length === 0) {
     return;
   }
@@ -1611,12 +1656,25 @@ function appendSystemTraceMessages(chat, traceMessages, timestamp) {
       return;
     }
 
+    const duplicate = chat.messages.some(
+      (message) =>
+        message.role === "system" &&
+        message.request_id === requestId &&
+        message.system_type === (typeof entry.system_type === "string" ? entry.system_type : "orchestrator") &&
+        message.content === content,
+    );
+    if (duplicate) {
+      return;
+    }
+
     chat.messages.push({
       role: "system",
       content,
       timestamp,
       system_type: typeof entry.system_type === "string" ? entry.system_type : "orchestrator",
       tool_usage: [],
+      request_id: requestId,
+      status: "",
     });
   });
 }
@@ -1627,7 +1685,7 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
   }
 
   const assistantTimestamp = createTimestamp();
-  appendSystemTraceMessages(chat, context.systemTrace, assistantTimestamp);
+  appendSystemTraceMessages(chat, context.systemTrace, assistantTimestamp, context.requestId);
 
   assistantMessage.timestamp = assistantTimestamp;
   assistantMessage.status = "done";
@@ -1697,6 +1755,7 @@ async function executeQueuedJob(chat, job, runtime) {
   assistantMessage.status = "processing";
   const context = {
     chatId: chat.id,
+    requestId: job.requestId,
     assistantMessage,
     usedTokens: 0,
     toolUsage: [],
@@ -1709,9 +1768,11 @@ async function executeQueuedJob(chat, job, runtime) {
   renderChatHistory();
 
   try {
+    runtime.abortController = new AbortController();
     const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: runtime.abortController.signal,
       body: JSON.stringify({
         message: job.message,
         history: job.snapshot.history,
@@ -1778,6 +1839,10 @@ async function executeQueuedJob(chat, job, runtime) {
       return;
     }
 
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return;
+    }
+
     const hardErrorText = typeof error?.message === "string" && error.message ? error.message : "Hard error.";
     if (assistantMessage.content) {
       assistantMessage.content = `${assistantMessage.content}\n\nHard error: ${hardErrorText}`;
@@ -1786,7 +1851,7 @@ async function executeQueuedJob(chat, job, runtime) {
     }
 
     const errorTimestamp = createTimestamp();
-    appendSystemTraceMessages(chat, context.systemTrace, errorTimestamp);
+    appendSystemTraceMessages(chat, context.systemTrace, errorTimestamp, context.requestId);
     assistantMessage.timestamp = errorTimestamp;
     assistantMessage.status = "error";
     assistantMessage.tool_usage = context.toolUsage;
@@ -1809,6 +1874,8 @@ async function executeQueuedJob(chat, job, runtime) {
     } catch (persistError) {
       setStatus(`Response failed and save failed: ${persistError.message}`, true);
     }
+  } finally {
+    runtime.abortController = null;
   }
 }
 
@@ -1951,6 +2018,64 @@ async function triggerManualCompaction() {
   }
 }
 
+async function stopActiveChatExecution() {
+  const activeChat = getActiveChat();
+  if (!activeChat) {
+    return;
+  }
+
+  const runtime = getChatRuntime(activeChat.id);
+  if (!runtime) {
+    return;
+  }
+
+  runtime.queue.forEach((job) => {
+    if (job && typeof job.requestId === "string") {
+      runtime.cancelledRequestIds.add(job.requestId);
+    }
+  });
+  runtime.queue = [];
+
+  if (runtime.activeRequestId) {
+    runtime.cancelledRequestIds.add(runtime.activeRequestId);
+  }
+
+  if (runtime.abortController instanceof AbortController) {
+    runtime.abortController.abort();
+  }
+
+  const now = createTimestamp();
+  activeChat.messages.forEach((message) => {
+    if (message.role !== "assistant") {
+      return;
+    }
+    if (message.status === "queued" || message.status === "processing") {
+      message.status = "error";
+      message.content = message.content ? `${message.content}\n\nExecution interrupted by user.` : "Execution interrupted by user.";
+      message.timestamp = now;
+    }
+  });
+
+  appendSystemTraceMessages(
+    activeChat,
+    [{ system_type: "tool_interrupt", content: "Execution interrupted by user." }],
+    now,
+    runtime.activeRequestId || "",
+  );
+  activeChat.updated_at = now;
+
+  renderActiveChat();
+  renderChatHistory();
+  updateComposerState();
+  setStatus("Execution stopped. Queued messages were cleared.", true);
+
+  try {
+    await persistChatsToSettings();
+  } catch (error) {
+    setStatus(`Execution stopped, but save failed: ${error.message}`, true);
+  }
+}
+
 function ensureMcpConfig(mcpId) {
   if (!state.mcpConfigs[mcpId] || typeof state.mcpConfigs[mcpId] !== "object") {
     state.mcpConfigs[mcpId] = { enabled: false, params: {} };
@@ -2010,7 +2135,7 @@ async function handleMcpActionClick(event) {
   try {
     if (action === "save") {
       await persistMcpConfigsToSettings();
-      setStatus("MCP settings saved.");
+      setStatus("Tool settings saved.");
       return;
     }
 
@@ -2028,7 +2153,7 @@ async function handleMcpActionClick(event) {
 
     if (action === "verify") {
       await verifyMcpConfig(mcpId);
-      setStatus("MCP verified.");
+      setStatus("Tool verified.");
       return;
     }
   } catch (error) {
@@ -2109,6 +2234,10 @@ if (compactButton instanceof HTMLButtonElement) {
 
 if (newChatButton instanceof HTMLButtonElement) {
   newChatButton.addEventListener("click", startNewChat);
+}
+
+if (stopButton instanceof HTMLButtonElement) {
+  stopButton.addEventListener("click", stopActiveChatExecution);
 }
 
 if (systemTraceToggleButton instanceof HTMLButtonElement) {

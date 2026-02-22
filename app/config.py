@@ -52,6 +52,8 @@ class Settings(BaseModel):
     provider_configs: dict[str, ProviderConfig] = Field(default_factory=dict)
     chats: list[ChatSession] = Field(default_factory=list)
     mcp_configs: dict[str, McpConfig] = Field(default_factory=dict)
+    tool_max_recursion: int = Field(default=6, ge=1, le=20)
+    tool_timeout_seconds: int = Field(default=45, ge=5, le=300)
 
 
 async def _read_text(path: Path) -> str:
@@ -273,6 +275,16 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
             "enabled": True,
             "params": {},
         }
+
+    tool_max_recursion = data.get("tool_max_recursion")
+    if not isinstance(tool_max_recursion, int):
+        tool_max_recursion = 6
+    data["tool_max_recursion"] = max(1, min(20, tool_max_recursion))
+
+    tool_timeout_seconds = data.get("tool_timeout_seconds")
+    if not isinstance(tool_timeout_seconds, int):
+        tool_timeout_seconds = 45
+    data["tool_timeout_seconds"] = max(5, min(300, tool_timeout_seconds))
 
     return data
 

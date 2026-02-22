@@ -18,6 +18,8 @@ const fields = {
   providerApiKey: document.getElementById("provider_api_key"),
   providerList: document.getElementById("provider-list"),
   activeProviderSelect: document.getElementById("active_provider_select"),
+  toolMaxRecursion: document.getElementById("tool_max_recursion"),
+  toolTimeoutSeconds: document.getElementById("tool_timeout_seconds"),
   addProviderButton: document.getElementById("add-provider-btn"),
   completeButton: document.getElementById("complete-btn"),
 };
@@ -28,6 +30,8 @@ const state = {
   chats: [],
   mcpConfigs: {},
   activeProviderId: "",
+  toolMaxRecursion: 6,
+  toolTimeoutSeconds: 45,
   setupCompleted: false,
   initialSetupSnapshot: "",
   toastTimerId: null,
@@ -256,6 +260,8 @@ function normalizeProviderConfigs(providerConfigs) {
 }
 
 function createSetupSnapshot() {
+  const maxRecursion = clampInteger(fields.toolMaxRecursion.value, 1, 20, state.toolMaxRecursion || 6);
+  const timeoutSeconds = clampInteger(fields.toolTimeoutSeconds.value, 5, 300, state.toolTimeoutSeconds || 45);
   const snapshot = {
     bot_name: fields.botName.value,
     system_prompt: fields.systemPrompt.value,
@@ -263,6 +269,8 @@ function createSetupSnapshot() {
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
     chats: state.chats,
     mcp_configs: state.mcpConfigs,
+    tool_max_recursion: maxRecursion,
+    tool_timeout_seconds: timeoutSeconds,
   };
 
   return JSON.stringify(snapshot);
@@ -272,7 +280,20 @@ function hasUnsavedChanges() {
   return createSetupSnapshot() !== state.initialSetupSnapshot;
 }
 
+function clampInteger(value, min, max, fallback) {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, parsed));
+}
+
 function buildPayload() {
+  const maxRecursion = clampInteger(fields.toolMaxRecursion.value, 1, 20, 6);
+  const timeoutSeconds = clampInteger(fields.toolTimeoutSeconds.value, 5, 300, 45);
+  fields.toolMaxRecursion.value = String(maxRecursion);
+  fields.toolTimeoutSeconds.value = String(timeoutSeconds);
+
   return {
     bot_name: fields.botName.value,
     system_prompt: fields.systemPrompt.value,
@@ -281,6 +302,8 @@ function buildPayload() {
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
     chats: state.chats,
     mcp_configs: state.mcpConfigs,
+    tool_max_recursion: maxRecursion,
+    tool_timeout_seconds: timeoutSeconds,
   };
 }
 
@@ -371,6 +394,10 @@ async function loadPage() {
     state.chats = Array.isArray(settings.chats) ? settings.chats : [];
     state.mcpConfigs = settings.mcp_configs && typeof settings.mcp_configs === "object" ? settings.mcp_configs : {};
     state.activeProviderId = settings.active_provider_id ?? "";
+    state.toolMaxRecursion = Number.isFinite(Number(settings.tool_max_recursion)) ? Number(settings.tool_max_recursion) : 6;
+    state.toolTimeoutSeconds = Number.isFinite(Number(settings.tool_timeout_seconds)) ? Number(settings.tool_timeout_seconds) : 45;
+    fields.toolMaxRecursion.value = String(Math.max(1, Math.min(20, state.toolMaxRecursion)));
+    fields.toolTimeoutSeconds.value = String(Math.max(5, Math.min(300, state.toolTimeoutSeconds)));
     state.setupCompleted = settings.setup_completed ?? false;
 
     renderProviderOptions();
