@@ -33,7 +33,7 @@ class ChatSession(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list)
     memory_block: str = Field(default="", max_length=8000)
     total_tokens_used: int = Field(default=0, ge=0)
-    collapse_system_trace: bool = False
+    collapse_system_trace: bool = True
 
 
 class McpConfig(BaseModel):
@@ -226,7 +226,7 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
                     "messages": messages,
                     "memory_block": memory_block if isinstance(memory_block, str) else "",
                     "total_tokens_used": total_tokens,
-                    "collapse_system_trace": bool(collapse_system_trace),
+                    "collapse_system_trace": collapse_system_trace if isinstance(collapse_system_trace, bool) else True,
                 }
             )
 

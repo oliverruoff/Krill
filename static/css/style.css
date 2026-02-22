@@ -804,6 +804,13 @@ button:disabled {
   color: #3c4e66;
 }
 
+.trace-toggle-btn:disabled {
+  background: transparent;
+  color: #a7b2c3;
+  cursor: default;
+  opacity: 1;
+}
+
 .chat-meta .subtitle {
   margin: 0;
 }

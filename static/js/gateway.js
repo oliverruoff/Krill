@@ -196,7 +196,7 @@ function createChatEntry(firstMessage) {
     messages: [],
     memory_block: "",
     total_tokens_used: 0,
-    collapse_system_trace: false,
+    collapse_system_trace: true,
     created_at: timestamp,
     updated_at: timestamp,
   };
@@ -1279,7 +1279,8 @@ function normalizeIncomingChats(rawChats) {
         Number.isFinite(Number(rawChat.total_tokens_used)) && Number(rawChat.total_tokens_used) > 0
           ? Number(rawChat.total_tokens_used)
           : 0,
-      collapse_system_trace: Boolean(rawChat.collapse_system_trace),
+      collapse_system_trace:
+        typeof rawChat.collapse_system_trace === "boolean" ? rawChat.collapse_system_trace : true,
       created_at: typeof rawChat.created_at === "string" ? rawChat.created_at : "",
       updated_at: typeof rawChat.updated_at === "string" ? rawChat.updated_at : "",
     });
