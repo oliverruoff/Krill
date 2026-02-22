@@ -80,6 +80,23 @@ class LocalFilesMCP(MCPPlugin):
                 },
             ),
             McpToolSpec(
+                id="grep",
+                label="Grep",
+                description="Greps file contents with regex and returns matching lines.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "minLength": 1},
+                        "base_path": {"type": "string"},
+                        "include": {"type": "string"},
+                        "max_results": {"type": "integer", "minimum": 1, "maximum": 5000},
+                        "include_excluded": {"type": "boolean"},
+                        "case_insensitive": {"type": "boolean"},
+                    },
+                    "required": ["pattern"],
+                },
+            ),
+            McpToolSpec(
                 id="read_file",
                 label="Read File",
                 description="Reads a text file with optional line window.",
@@ -121,7 +138,7 @@ class LocalFilesMCP(MCPPlugin):
                 "results": results,
             }
 
-        if tool_id == "search_content":
+        if tool_id == "search_content" or tool_id == "grep":
             pattern = _required_str(arguments, "pattern")
             base_path = _resolve_base_path(_optional_str(arguments, "base_path", str(BASE_DIR)))
             include = _optional_str(arguments, "include", "")
