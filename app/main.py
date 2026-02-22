@@ -9,7 +9,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import BRAINDUMP_PATH, Settings, ensure_settings_file, load_settings, save_settings
+from .mcps import get_mcp, get_mcp_options, is_supported_mcp
 from .providers import get_provider, get_provider_model_limit, get_provider_options, is_supported_provider
+from .tooling import generate_with_tools
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -39,6 +41,16 @@ class VerifyProviderRequest(BaseModel):
 
 
 class VerifyProviderResponse(BaseModel):
+    ok: bool
+    detail: str
+
+
+class VerifyMcpRequest(BaseModel):
+    mcp_id: str
+    params: dict[str, str] = Field(default_factory=dict)
+
+
+class VerifyMcpResponse(BaseModel):
     ok: bool
     detail: str
 
@@ -146,6 +158,27 @@ async def verify_provider(payload: VerifyProviderRequest) -> VerifyProviderRespo
     return VerifyProviderResponse(ok=True, detail=detail)
 
 
+@app.get("/api/mcps")
+async def get_mcps() -> list[dict[str, object]]:
+    return get_mcp_options()
+
+
+@app.post("/api/mcps/verify", response_model=VerifyMcpResponse)
+async def verify_mcp(payload: VerifyMcpRequest) -> VerifyMcpResponse:
+    if not is_supported_mcp(payload.mcp_id):
+        raise HTTPException(status_code=422, detail="Unsupported MCP.")
+
+    mcp = get_mcp(payload.mcp_id)
+    if mcp is None:
+        raise HTTPException(status_code=422, detail="MCP not found.")
+
+    ok, detail = await mcp.verify(payload.params)
+    if not ok:
+        raise HTTPException(status_code=422, detail=detail)
+
+    return VerifyMcpResponse(ok=True, detail=detail)
+
+
 @app.post("/api/reset", response_model=Settings)
 async def reset_settings() -> Settings:
     defaults = Settings()
@@ -173,25 +206,32 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
 
     async def event_stream():
         try:
-            text, used_tokens = await provider.generate(
+            orchestration = await generate_with_tools(
+                provider=provider,
+                settings=settings,
                 prompt=payload.message,
                 system_prompt=_compose_runtime_system_prompt(settings, payload.memory_block),
                 model=provider_config.model,
                 api_key=provider_config.api_key,
                 history=history,
             )
+            text = orchestration["text"]
+            used_tokens = orchestration["used_tokens"]
+            used_mcp_tools = orchestration["used_mcp_tools"]
+            system_trace_messages = orchestration["system_trace_messages"]
 
-            if token_limit is not None:
-                used_value = used_tokens if isinstance(used_tokens, int) else 0
-                used_percent = round((used_value / token_limit) * 100, 2)
-                yield _sse(
-                    "meta",
-                    {
-                        "used_tokens": used_value,
-                        "token_limit": token_limit,
-                        "used_percent": used_percent,
-                    },
-                )
+            used_value = used_tokens if isinstance(used_tokens, int) else 0
+            used_percent = round((used_value / token_limit) * 100, 2) if token_limit else 0
+            yield _sse(
+                "meta",
+                {
+                    "used_tokens": used_value,
+                    "token_limit": token_limit,
+                    "used_percent": used_percent,
+                    "used_mcp_tools": used_mcp_tools,
+                    "system_trace_messages": system_trace_messages,
+                },
+            )
 
             for chunk in _chunk_text(text):
                 yield _sse("token", {"text": chunk})
@@ -256,6 +296,7 @@ def _validate_provider_configs(settings: Settings) -> None:
 
 def _validate_settings_payload(settings: Settings) -> None:
     _validate_provider_configs(settings)
+    _validate_mcp_configs(settings)
 
     if settings.setup_completed and not _can_complete_setup(settings):
         raise HTTPException(
@@ -279,6 +320,21 @@ def _can_complete_setup(settings: Settings) -> bool:
         return False
 
     return True
+
+
+def _validate_mcp_configs(settings: Settings) -> None:
+    for mcp_id, mcp_config in settings.mcp_configs.items():
+        if not is_supported_mcp(mcp_id):
+            raise HTTPException(status_code=422, detail=f"Unsupported MCP: {mcp_id}")
+
+        mcp = get_mcp(mcp_id)
+        if mcp is None:
+            raise HTTPException(status_code=422, detail=f"MCP unavailable: {mcp_id}")
+
+        field_ids = {field.id for field in mcp.config_fields}
+        for key in mcp_config.params.keys():
+            if key not in field_ids:
+                raise HTTPException(status_code=422, detail=f"Unsupported config field '{key}' for MCP '{mcp_id}'.")
 
 
 def _is_setup_complete(settings: Settings) -> bool:

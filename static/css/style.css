@@ -525,7 +525,7 @@ button:disabled {
   box-shadow: var(--shadow);
   padding: 0.8rem;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 0.65rem;
   min-height: 0;
 }
@@ -562,10 +562,106 @@ button:disabled {
 
 .chat-history-list {
   min-height: 0;
+  max-height: 100%;
   overflow-y: auto;
   display: grid;
   align-content: start;
   gap: 0.45rem;
+}
+
+.mcp-panel {
+  border-top: 1px solid var(--border);
+  padding-top: 0.55rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.mcp-header h3 {
+  margin: 0;
+  font-size: 0.86rem;
+}
+
+.mcp-list {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.mcp-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fcfdff;
+  padding: 0.45rem;
+  display: grid;
+  gap: 0.32rem;
+}
+
+.mcp-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.mcp-title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.mcp-toggle {
+  margin: 0;
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  font-size: 0.72rem;
+  color: #6d7b91;
+}
+
+.mcp-toggle input {
+  width: auto;
+  margin: 0;
+}
+
+.mcp-description {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #6d7b91;
+}
+
+.mcp-field {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.mcp-field label {
+  font-size: 0.72rem;
+}
+
+.mcp-field input {
+  padding: 0.34rem 0.45rem;
+  border-radius: 8px;
+  font-size: 0.74rem;
+}
+
+.mcp-card-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.mcp-link-btn {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #6d7b91;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.mcp-link-btn:hover {
+  background: transparent;
+  color: #2f4057;
 }
 
 .chat-history-empty {
@@ -688,6 +784,24 @@ button:disabled {
   margin: 0;
   color: var(--text);
   font-size: 0.95rem;
+}
+
+.trace-toggle-btn {
+  margin: 0.1rem 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #7f8da2;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.trace-toggle-btn:hover {
+  background: transparent;
+  color: #3c4e66;
 }
 
 .chat-meta .subtitle {
@@ -842,6 +956,10 @@ button:disabled {
   justify-self: end;
 }
 
+.chat-message.system {
+  max-width: 100%;
+}
+
 .chat-role {
   margin: 0 0 0.2rem;
   font-size: 0.78rem;
@@ -856,6 +974,20 @@ button:disabled {
   white-space: pre-wrap;
   word-break: break-word;
   background: #fff;
+}
+
+.chat-message.system .chat-bubble {
+  border-style: dashed;
+  border-color: #ccd6e4;
+  background: #f5f8fc;
+  color: #5a687c;
+  font-size: 0.86rem;
+}
+
+.tool-usage-note {
+  margin: 0.24rem 0 0;
+  font-size: 0.73rem;
+  color: #8a99ad;
 }
 
 .chat-bubble.is-loading {

@@ -19,9 +19,11 @@ class ProviderConfig(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str = Field(default="", max_length=5000)
+    role: Literal["user", "assistant", "system"]
+    content: str = Field(default="", max_length=30000)
     timestamp: str = ""
+    system_type: str = ""
+    tool_usage: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ChatSession(BaseModel):
@@ -30,6 +32,13 @@ class ChatSession(BaseModel):
     type: Literal["normal"] = "normal"
     messages: list[ChatMessage] = Field(default_factory=list)
     memory_block: str = Field(default="", max_length=8000)
+    total_tokens_used: int = Field(default=0, ge=0)
+    collapse_system_trace: bool = False
+
+
+class McpConfig(BaseModel):
+    enabled: bool = False
+    params: dict[str, str] = Field(default_factory=dict)
 
 
 class Settings(BaseModel):
@@ -40,6 +49,7 @@ class Settings(BaseModel):
     active_model_id: str = ""
     provider_configs: dict[str, ProviderConfig] = Field(default_factory=dict)
     chats: list[ChatSession] = Field(default_factory=list)
+    mcp_configs: dict[str, McpConfig] = Field(default_factory=dict)
 
 
 async def _read_text(path: Path) -> str:
@@ -143,11 +153,13 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
             chat_title = raw_chat.get("title")
             raw_messages = raw_chat.get("messages")
             memory_block = raw_chat.get("memory_block")
+            total_tokens_used = raw_chat.get("total_tokens_used")
+            collapse_system_trace = raw_chat.get("collapse_system_trace")
 
             if not isinstance(chat_id, str) or not chat_id.strip():
                 continue
 
-            messages: list[dict[str, str]] = []
+            messages: list[dict[str, object]] = []
             if isinstance(raw_messages, list):
                 for raw_message in raw_messages:
                     if not isinstance(raw_message, dict):
@@ -156,8 +168,10 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
                     role = raw_message.get("role")
                     content = raw_message.get("content")
                     timestamp = raw_message.get("timestamp")
+                    system_type = raw_message.get("system_type")
+                    raw_tool_usage = raw_message.get("tool_usage")
 
-                    if role not in {"user", "assistant"}:
+                    if role not in {"user", "assistant", "system"}:
                         continue
 
                     if not isinstance(content, str):
@@ -166,13 +180,43 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
                     if not isinstance(timestamp, str):
                         timestamp = ""
 
+                    if not isinstance(system_type, str):
+                        system_type = ""
+
+                    tool_usage: list[dict[str, str]] = []
+                    if isinstance(raw_tool_usage, list):
+                        for tool_entry in raw_tool_usage:
+                            if not isinstance(tool_entry, dict):
+                                continue
+
+                            mcp_id = tool_entry.get("mcp_id")
+                            mcp_label = tool_entry.get("mcp_label")
+                            tool_id = tool_entry.get("tool_id")
+                            tool_label = tool_entry.get("tool_label")
+
+                            if not isinstance(mcp_id, str) or not isinstance(tool_id, str):
+                                continue
+
+                            tool_usage.append(
+                                {
+                                    "mcp_id": mcp_id,
+                                    "mcp_label": mcp_label if isinstance(mcp_label, str) else "",
+                                    "tool_id": tool_id,
+                                    "tool_label": tool_label if isinstance(tool_label, str) else "",
+                                }
+                            )
+
                     messages.append(
                         {
                             "role": role,
                             "content": content,
                             "timestamp": timestamp,
+                            "system_type": system_type,
+                            "tool_usage": tool_usage,
                         }
                     )
+
+            total_tokens = total_tokens_used if isinstance(total_tokens_used, int) and total_tokens_used > 0 else 0
 
             normalized_chats.append(
                 {
@@ -181,10 +225,36 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
                     "type": "normal",
                     "messages": messages,
                     "memory_block": memory_block if isinstance(memory_block, str) else "",
+                    "total_tokens_used": total_tokens,
+                    "collapse_system_trace": bool(collapse_system_trace),
                 }
             )
 
     data["chats"] = normalized_chats
+
+    raw_mcp_configs = data.get("mcp_configs")
+    normalized_mcp_configs: dict[str, dict[str, object]] = {}
+    if isinstance(raw_mcp_configs, dict):
+        for mcp_id, raw_config in raw_mcp_configs.items():
+            if not isinstance(mcp_id, str) or not isinstance(raw_config, dict):
+                continue
+
+            enabled = raw_config.get("enabled")
+            params = raw_config.get("params")
+            normalized_params: dict[str, str] = {}
+
+            if isinstance(params, dict):
+                for key, value in params.items():
+                    if not isinstance(key, str):
+                        continue
+                    normalized_params[key] = str(value) if value is not None else ""
+
+            normalized_mcp_configs[mcp_id] = {
+                "enabled": bool(enabled),
+                "params": normalized_params,
+            }
+
+    data["mcp_configs"] = normalized_mcp_configs
 
     return data
 

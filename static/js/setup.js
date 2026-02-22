@@ -26,6 +26,7 @@ const state = {
   providers: [],
   providerConfigs: {},
   chats: [],
+  mcpConfigs: {},
   activeProviderId: "",
   setupCompleted: false,
   initialSetupSnapshot: "",
@@ -261,6 +262,7 @@ function createSetupSnapshot() {
     active_provider_id: fields.activeProviderSelect.value || "",
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
     chats: state.chats,
+    mcp_configs: state.mcpConfigs,
   };
 
   return JSON.stringify(snapshot);
@@ -278,6 +280,7 @@ function buildPayload() {
     active_provider_id: fields.activeProviderSelect.value,
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
     chats: state.chats,
+    mcp_configs: state.mcpConfigs,
   };
 }
 
@@ -366,6 +369,7 @@ async function loadPage() {
 
     state.providerConfigs = settings.provider_configs ?? {};
     state.chats = Array.isArray(settings.chats) ? settings.chats : [];
+    state.mcpConfigs = settings.mcp_configs && typeof settings.mcp_configs === "object" ? settings.mcp_configs : {};
     state.activeProviderId = settings.active_provider_id ?? "";
     state.setupCompleted = settings.setup_completed ?? false;
 

@@ -7,6 +7,7 @@ const sendButton = document.getElementById("send-btn");
 const chatThread = document.getElementById("chat-thread");
 const providerIndicator = document.getElementById("provider-indicator");
 const modelIndicator = document.getElementById("model-indicator");
+const systemTraceToggleButton = document.getElementById("system-trace-toggle");
 const tokenCounterNode = document.getElementById("token-counter");
 const statusNode = document.getElementById("status");
 const menuButton = document.getElementById("menu-btn");
@@ -19,6 +20,7 @@ const compactButton = document.getElementById("compact-btn");
 const currentChatTitleNode = document.getElementById("current-chat-title");
 const chatHistoryList = document.getElementById("chat-history-list");
 const newChatButton = document.getElementById("new-chat-btn");
+const mcpList = document.getElementById("mcp-list");
 let toastNode = document.getElementById("toast");
 
 const state = {
@@ -32,8 +34,12 @@ const state = {
   usedTokens: 0,
   lastRequestTokens: 0,
   settings: null,
+  mcps: [],
+  mcpConfigs: {},
   chats: [],
   activeChatId: "",
+  pendingToolUsage: [],
+  pendingSystemTrace: [],
   isCompacting: false,
   isSwitching: false,
   isSending: false,
@@ -170,6 +176,17 @@ function updateCurrentChatTitle() {
   currentChatTitleNode.textContent = activeChat ? normalizeChatTitle(activeChat.title) : "New chat";
 }
 
+function updateSystemTraceToggleLabel() {
+  if (!(systemTraceToggleButton instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const activeChat = getActiveChat();
+  const isCollapsed = Boolean(activeChat?.collapse_system_trace);
+  systemTraceToggleButton.textContent = isCollapsed ? "Show system trace" : "Hide system trace";
+  systemTraceToggleButton.disabled = !activeChat;
+}
+
 function createChatEntry(firstMessage) {
   const timestamp = createTimestamp();
   return {
@@ -178,13 +195,17 @@ function createChatEntry(firstMessage) {
     type: "normal",
     messages: [],
     memory_block: "",
+    total_tokens_used: 0,
+    collapse_system_trace: false,
     created_at: timestamp,
     updated_at: timestamp,
   };
 }
 
 function toApiHistory(messages) {
-  return messages.map((turn) => ({ role: turn.role, content: turn.content }));
+  return messages
+    .filter((turn) => turn && (turn.role === "user" || turn.role === "assistant"))
+    .map((turn) => ({ role: turn.role, content: turn.content }));
 }
 
 function setHistoryControlsDisabled(disabled) {
@@ -204,7 +225,7 @@ function addMessage(role, text = "", timestamp = "") {
 
   const title = document.createElement("p");
   title.className = "chat-role";
-  const roleLabel = role === "user" ? "You" : state.botName || "Krill";
+  const roleLabel = role === "user" ? "You" : role === "system" ? "System" : state.botName || "Krill";
   title.textContent = `${roleLabel} - ${formatMessageTimestamp(timestamp)}`;
 
   const bubble = document.createElement("div");
@@ -224,6 +245,39 @@ function addMessage(role, text = "", timestamp = "") {
   return bubble;
 }
 
+function normalizeToolUsage(toolUsage) {
+  if (!Array.isArray(toolUsage)) {
+    return [];
+  }
+
+  return toolUsage
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => ({
+      mcp_id: typeof entry.mcp_id === "string" ? entry.mcp_id : "",
+      mcp_label: typeof entry.mcp_label === "string" ? entry.mcp_label : "",
+      tool_id: typeof entry.tool_id === "string" ? entry.tool_id : "",
+      tool_label: typeof entry.tool_label === "string" ? entry.tool_label : "",
+    }))
+    .filter((entry) => entry.mcp_id && entry.tool_id);
+}
+
+function renderToolUsageLine(wrapper, toolUsage) {
+  const normalized = normalizeToolUsage(toolUsage);
+  if (normalized.length === 0) {
+    return;
+  }
+
+  const usageNode = document.createElement("p");
+  usageNode.className = "tool-usage-note";
+  const labels = normalized.map((entry) => {
+    const mcpLabel = entry.mcp_label || entry.mcp_id;
+    const toolLabel = entry.tool_label || entry.tool_id;
+    return `${mcpLabel} (${toolLabel})`;
+  });
+  usageNode.textContent = `Used MCP${labels.length > 1 ? "s" : ""}: ${labels.join(", ")}`;
+  wrapper.appendChild(usageNode);
+}
+
 function renderEmptyChatView() {
   chatThread.innerHTML = "";
   const emptyNode = document.createElement("p");
@@ -234,6 +288,7 @@ function renderEmptyChatView() {
 
 function renderActiveChat() {
   updateCurrentChatTitle();
+  updateSystemTraceToggleLabel();
   const activeChat = getActiveChat();
   if (!activeChat) {
     renderEmptyChatView();
@@ -242,8 +297,20 @@ function renderActiveChat() {
 
   chatThread.innerHTML = "";
   activeChat.messages.forEach((turn) => {
-    if (turn?.role === "user" || turn?.role === "assistant") {
-      addMessage(turn.role, String(turn.content ?? ""), String(turn.timestamp ?? ""));
+    if (turn?.role !== "user" && turn?.role !== "assistant" && turn?.role !== "system") {
+      return;
+    }
+
+    if (turn.role === "system" && activeChat.collapse_system_trace) {
+      return;
+    }
+
+    const bubble = addMessage(turn.role, String(turn.content ?? ""), String(turn.timestamp ?? ""));
+    if (turn.role === "assistant") {
+      const wrapper = bubble.parentElement;
+      if (wrapper instanceof HTMLElement) {
+        renderToolUsageLine(wrapper, turn.tool_usage);
+      }
     }
   });
 
@@ -634,9 +701,13 @@ function updateTokenCounter(usedTokens = state.usedTokens, tokenLimit = state.mo
 
   state.usedTokens = safeUsed;
   state.modelTokenLimit = safeLimit;
+  const activeChat = getActiveChat();
+  const chatTotalTokens = activeChat && Number.isFinite(Number(activeChat.total_tokens_used))
+    ? Math.max(0, Number(activeChat.total_tokens_used || 0))
+    : 0;
 
   const percent = safeLimit > 0 ? ((safeUsed / safeLimit) * 100).toFixed(2) : "0.00";
-  tokenCounterNode.textContent = `${formatNumber(safeUsed)} / ${formatNumber(safeLimit)} tokens (${percent}% used)`;
+  tokenCounterNode.textContent = `${formatNumber(safeUsed)} / ${formatNumber(safeLimit)} tokens (${percent}% used) - Chat total: ${formatNumber(chatTotalTokens)}`;
 }
 
 function getProviderById(providerId) {
@@ -662,6 +733,9 @@ function estimateContextTokens(messages, memoryBlock = "") {
   const historyTokens = messages.reduce((total, item) => {
     const role = typeof item?.role === "string" ? item.role : "";
     const content = typeof item?.content === "string" ? item.content : "";
+    if (role !== "user" && role !== "assistant") {
+      return total;
+    }
     return total + Math.ceil((role.length + content.length) / 4);
   }, 0);
   return Math.max(0, memoryTokens + historyTokens);
@@ -827,8 +901,191 @@ async function persistChatsToSettings() {
 
   const nextSettings = JSON.parse(JSON.stringify(state.settings));
   nextSettings.chats = state.chats;
+  nextSettings.mcp_configs = state.mcpConfigs;
   const persisted = await persistSettings(nextSettings);
   state.settings = persisted;
+}
+
+function normalizeIncomingMcpConfigs(rawConfigs) {
+  if (!rawConfigs || typeof rawConfigs !== "object") {
+    return {};
+  }
+
+  const normalized = {};
+  Object.entries(rawConfigs).forEach(([mcpId, rawValue]) => {
+    if (!rawValue || typeof rawValue !== "object") {
+      return;
+    }
+
+    const params = rawValue.params && typeof rawValue.params === "object" ? rawValue.params : {};
+    const normalizedParams = {};
+    Object.entries(params).forEach(([key, value]) => {
+      if (typeof key !== "string") {
+        return;
+      }
+      normalizedParams[key] = typeof value === "string" ? value : String(value ?? "");
+    });
+
+    normalized[mcpId] = {
+      enabled: Boolean(rawValue.enabled),
+      params: normalizedParams,
+    };
+  });
+
+  return normalized;
+}
+
+function getMcpConfig(mcpId) {
+  const config = state.mcpConfigs[mcpId];
+  if (config && typeof config === "object") {
+    return config;
+  }
+
+  return { enabled: false, params: {} };
+}
+
+async function persistMcpConfigsToSettings() {
+  if (!state.settings) {
+    return;
+  }
+
+  const nextSettings = JSON.parse(JSON.stringify(state.settings));
+  nextSettings.mcp_configs = state.mcpConfigs;
+  nextSettings.chats = state.chats;
+  const persisted = await persistSettings(nextSettings);
+  state.settings = persisted;
+  state.mcpConfigs = normalizeIncomingMcpConfigs(persisted.mcp_configs);
+}
+
+async function verifyMcpConfig(mcpId) {
+  const config = getMcpConfig(mcpId);
+  const response = await fetch("/api/mcps/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mcp_id: mcpId,
+      params: config.params,
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = "MCP verification failed.";
+    try {
+      const payload = await response.json();
+      if (typeof payload.detail === "string" && payload.detail) {
+        detail = payload.detail;
+      }
+    } catch (error) {
+      detail = "MCP verification failed.";
+    }
+
+    throw new Error(detail);
+  }
+}
+
+function renderMcpPanel() {
+  if (!(mcpList instanceof HTMLElement)) {
+    return;
+  }
+
+  mcpList.innerHTML = "";
+  if (!Array.isArray(state.mcps) || state.mcps.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "chat-history-empty";
+    emptyNode.textContent = "No MCPs available.";
+    mcpList.appendChild(emptyNode);
+    return;
+  }
+
+  state.mcps.forEach((mcp) => {
+    const card = document.createElement("div");
+    card.className = "mcp-card";
+    card.dataset.mcpId = mcp.id;
+
+    const config = getMcpConfig(mcp.id);
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "mcp-title-row";
+
+    const title = document.createElement("p");
+    title.className = "mcp-title";
+    title.textContent = mcp.label;
+
+    const toggleLabel = document.createElement("label");
+    toggleLabel.className = "mcp-toggle";
+
+    const toggleInput = document.createElement("input");
+    toggleInput.type = "checkbox";
+    toggleInput.checked = Boolean(config.enabled);
+    toggleInput.dataset.action = "toggle";
+    toggleInput.dataset.mcpId = mcp.id;
+
+    const toggleText = document.createElement("span");
+    toggleText.textContent = "Enabled";
+
+    toggleLabel.appendChild(toggleInput);
+    toggleLabel.appendChild(toggleText);
+
+    titleRow.appendChild(title);
+    titleRow.appendChild(toggleLabel);
+
+    const description = document.createElement("p");
+    description.className = "mcp-description";
+    description.textContent = typeof mcp.description === "string" ? mcp.description : "";
+
+    card.appendChild(titleRow);
+    card.appendChild(description);
+
+    const fields = Array.isArray(mcp.config_fields) ? mcp.config_fields : [];
+    fields.forEach((field) => {
+      const fieldId = typeof field.id === "string" ? field.id : "";
+      if (!fieldId) {
+        return;
+      }
+
+      const fieldWrapper = document.createElement("div");
+      fieldWrapper.className = "mcp-field";
+
+      const fieldLabel = document.createElement("label");
+      fieldLabel.textContent = field.label || fieldId;
+      fieldLabel.setAttribute("for", `mcp-${mcp.id}-${fieldId}`);
+
+      const fieldInput = document.createElement("input");
+      fieldInput.id = `mcp-${mcp.id}-${fieldId}`;
+      fieldInput.type = field.type === "password" ? "password" : "text";
+      fieldInput.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
+      fieldInput.placeholder = typeof field.placeholder === "string" ? field.placeholder : "";
+      fieldInput.dataset.action = "param";
+      fieldInput.dataset.mcpId = mcp.id;
+      fieldInput.dataset.fieldId = fieldId;
+
+      fieldWrapper.appendChild(fieldLabel);
+      fieldWrapper.appendChild(fieldInput);
+      card.appendChild(fieldWrapper);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "mcp-card-actions";
+
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "mcp-link-btn";
+    saveButton.textContent = "Save";
+    saveButton.dataset.action = "save";
+    saveButton.dataset.mcpId = mcp.id;
+
+    const verifyButton = document.createElement("button");
+    verifyButton.type = "button";
+    verifyButton.className = "mcp-link-btn";
+    verifyButton.textContent = "Verify";
+    verifyButton.dataset.action = "verify";
+    verifyButton.dataset.mcpId = mcp.id;
+
+    actions.appendChild(saveButton);
+    actions.appendChild(verifyButton);
+    card.appendChild(actions);
+    mcpList.appendChild(card);
+  });
 }
 
 async function compactHistoryForLimit(chat, targetTokenLimit, reasonLabel) {
@@ -955,6 +1212,7 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
     nextProviderConfig.model = nextModelId;
     nextSettings.active_provider_id = nextProviderId;
     nextSettings.chats = state.chats;
+    nextSettings.mcp_configs = state.mcpConfigs;
     const persisted = await persistSettings(nextSettings);
 
     state.settings = persisted;
@@ -974,7 +1232,7 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
     state.activeModelId = previousModelId;
     syncSwitcherControls();
     updateMetaIndicators();
-    setStatus(error.message, true);
+    setStatus(hardErrorText, true);
   } finally {
     state.isSwitching = false;
     setSwitchersDisabled(state.isSending || state.isCompacting);
@@ -1001,11 +1259,13 @@ function normalizeIncomingChats(rawChats) {
 
     const messages = Array.isArray(rawChat.messages)
       ? rawChat.messages
-          .filter((message) => message && (message.role === "user" || message.role === "assistant"))
+          .filter((message) => message && (message.role === "user" || message.role === "assistant" || message.role === "system"))
           .map((message) => ({
             role: message.role,
             content: typeof message.content === "string" ? message.content : "",
             timestamp: typeof message.timestamp === "string" ? message.timestamp : createTimestamp(),
+            system_type: typeof message.system_type === "string" ? message.system_type : "",
+            tool_usage: normalizeToolUsage(message.tool_usage),
           }))
       : [];
 
@@ -1015,6 +1275,11 @@ function normalizeIncomingChats(rawChats) {
       type: "normal",
       messages,
       memory_block: typeof rawChat.memory_block === "string" ? rawChat.memory_block : "",
+      total_tokens_used:
+        Number.isFinite(Number(rawChat.total_tokens_used)) && Number(rawChat.total_tokens_used) > 0
+          ? Number(rawChat.total_tokens_used)
+          : 0,
+      collapse_system_trace: Boolean(rawChat.collapse_system_trace),
       created_at: typeof rawChat.created_at === "string" ? rawChat.created_at : "",
       updated_at: typeof rawChat.updated_at === "string" ? rawChat.updated_at : "",
     });
@@ -1025,17 +1290,19 @@ function normalizeIncomingChats(rawChats) {
 
 async function loadGatewayMeta() {
   try {
-    const [providersResponse, settingsResponse] = await Promise.all([
+    const [providersResponse, settingsResponse, mcpsResponse] = await Promise.all([
       fetch("/api/providers"),
       fetch("/api/settings"),
+      fetch("/api/mcps"),
     ]);
 
-    if (!providersResponse.ok || !settingsResponse.ok) {
+    if (!providersResponse.ok || !settingsResponse.ok || !mcpsResponse.ok) {
       throw new Error("Failed to load gateway metadata.");
     }
 
     const providers = await providersResponse.json();
     const settings = await settingsResponse.json();
+    const mcps = await mcpsResponse.json();
 
     const activeProvider = providers.find((provider) => provider.id === settings.active_provider_id);
     const activeConfig = settings.provider_configs?.[settings.active_provider_id];
@@ -1046,6 +1313,8 @@ async function loadGatewayMeta() {
     state.activeModelId = activeConfig?.model ?? "";
     state.botName = typeof settings?.bot_name === "string" ? settings.bot_name.trim() : "";
     state.chats = normalizeIncomingChats(settings.chats);
+    state.mcps = Array.isArray(mcps) ? mcps : [];
+    state.mcpConfigs = normalizeIncomingMcpConfigs(settings.mcp_configs);
 
     state.providerLabel = activeProvider?.label ?? settings.active_provider_id ?? "";
     state.modelLabel = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.label ?? activeConfig?.model ?? "";
@@ -1059,6 +1328,7 @@ async function loadGatewayMeta() {
     updateAssistantHeader(settings);
     renderChatHistory();
     renderActiveChat();
+    renderMcpPanel();
     syncUsedTokensToContext();
     setStatus("Gateway ready.");
   } catch (error) {
@@ -1068,6 +1338,7 @@ async function loadGatewayMeta() {
     syncSwitcherControls();
     renderChatHistory();
     renderEmptyChatView();
+    renderMcpPanel();
     updateTokenCounter(0, 0);
     setStatus(error.message, true);
   }
@@ -1135,6 +1406,17 @@ function processSseBlock(block, assistantBubble) {
       syncUsedTokensToContext();
     }
 
+    state.pendingToolUsage = normalizeToolUsage(payload.used_mcp_tools);
+    state.pendingSystemTrace = Array.isArray(payload.system_trace_messages)
+      ? payload.system_trace_messages
+          .filter((entry) => entry && typeof entry === "object")
+          .map((entry) => ({
+            system_type: typeof entry.system_type === "string" ? entry.system_type : "orchestrator",
+            content: typeof entry.content === "string" ? entry.content : "",
+          }))
+          .filter((entry) => entry.content)
+      : [];
+
     if (payload.token_limit) {
       updateTokenCounter(state.usedTokens, payload.token_limit ?? state.modelTokenLimit);
     }
@@ -1158,24 +1440,61 @@ function processSseBlock(block, assistantBubble) {
   return { done: false, hasError: false };
 }
 
+function appendSystemTraceMessages(chat, traceMessages, timestamp) {
+  if (!Array.isArray(traceMessages) || traceMessages.length === 0) {
+    return;
+  }
+
+  traceMessages.forEach((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+
+    const content = typeof entry.content === "string" ? entry.content.trim() : "";
+    if (!content) {
+      return;
+    }
+
+    chat.messages.push({
+      role: "system",
+      content,
+      timestamp,
+      system_type: typeof entry.system_type === "string" ? entry.system_type : "orchestrator",
+      tool_usage: [],
+    });
+  });
+}
+
 async function finalizeSuccessfulResponse(chatId, assistantBubble) {
   const chat = state.chats.find((entry) => entry.id === chatId);
   if (!chat) {
     return;
   }
 
+  const assistantTimestamp = createTimestamp();
+  appendSystemTraceMessages(chat, state.pendingSystemTrace, assistantTimestamp);
+
   chat.messages.push({
     role: "assistant",
     content: assistantBubble.dataset.rawText ?? "",
-    timestamp: createTimestamp(),
+    timestamp: assistantTimestamp,
+    system_type: "",
+    tool_usage: state.pendingToolUsage,
   });
-  chat.updated_at = createTimestamp();
+  if (Number.isFinite(Number(state.lastRequestTokens)) && Number(state.lastRequestTokens) > 0) {
+    const currentTotal = Number(chat.total_tokens_used || 0);
+    chat.total_tokens_used = Math.max(0, currentTotal) + Number(state.lastRequestTokens);
+  }
+  chat.updated_at = assistantTimestamp;
+  state.pendingToolUsage = [];
+  state.pendingSystemTrace = [];
 
   const compactResult = await maybeAutoCompact(chat, "ongoing chat", state.modelTokenLimit);
   if (!compactResult.ok) {
     return;
   }
 
+  renderActiveChat();
   renderChatHistory();
   syncUsedTokensToContext();
 
@@ -1213,6 +1532,7 @@ async function sendMessage(event) {
     state.chats.push(chat);
     state.activeChatId = chat.id;
     updateCurrentChatTitle();
+    updateSystemTraceToggleLabel();
     renderChatHistory();
   }
 
@@ -1227,6 +1547,9 @@ async function sendMessage(event) {
   renderChatHistory();
   setSendingState(true);
   setStatus("Sending...");
+  state.pendingToolUsage = [];
+  state.pendingSystemTrace = [];
+  state.lastRequestTokens = 0;
 
   addMessage("user", message, userTimestamp);
   const assistantBubble = addMessage("assistant", "");
@@ -1296,13 +1619,43 @@ async function sendMessage(event) {
     await finalizeSuccessfulResponse(chat.id, assistantBubble);
   } catch (error) {
     setAssistantLoading(assistantBubble, false);
+    const hardErrorText = typeof error?.message === "string" && error.message ? error.message : "Hard error.";
 
-    if (!assistantBubble.dataset.rawText) {
-      assistantBubble.dataset.rawText = "Sorry, something went wrong.";
-      assistantBubble.innerHTML = renderMarkdown(assistantBubble.dataset.rawText);
+    if (assistantBubble.dataset.rawText) {
+      assistantBubble.dataset.rawText = `${assistantBubble.dataset.rawText}\n\nHard error: ${hardErrorText}`;
+    } else {
+      assistantBubble.dataset.rawText = hardErrorText;
+    }
+    assistantBubble.innerHTML = renderMarkdown(assistantBubble.dataset.rawText);
+
+    const errorTimestamp = createTimestamp();
+    appendSystemTraceMessages(chat, state.pendingSystemTrace, errorTimestamp);
+    chat.messages.push({
+      role: "assistant",
+      content: assistantBubble.dataset.rawText,
+      timestamp: errorTimestamp,
+      system_type: "",
+      tool_usage: state.pendingToolUsage,
+    });
+    if (Number.isFinite(Number(state.lastRequestTokens)) && Number(state.lastRequestTokens) > 0) {
+      const currentTotal = Number(chat.total_tokens_used || 0);
+      chat.total_tokens_used = Math.max(0, currentTotal) + Number(state.lastRequestTokens);
+    }
+    chat.updated_at = errorTimestamp;
+    state.pendingToolUsage = [];
+    state.pendingSystemTrace = [];
+
+    renderActiveChat();
+    renderChatHistory();
+    syncUsedTokensToContext();
+    try {
+      await persistChatsToSettings();
+    } catch (persistError) {
+      setStatus(`Response failed and save failed: ${persistError.message}`, true);
+      return;
     }
 
-    setStatus(error.message, true);
+    setStatus(hardErrorText, true);
   } finally {
     setSendingState(false);
     syncUsedTokensToContext();
@@ -1331,6 +1684,95 @@ async function triggerManualCompaction() {
     setStatus("Memory compacted.");
   } catch (error) {
     setStatus(error.message, true);
+  }
+}
+
+function ensureMcpConfig(mcpId) {
+  if (!state.mcpConfigs[mcpId] || typeof state.mcpConfigs[mcpId] !== "object") {
+    state.mcpConfigs[mcpId] = { enabled: false, params: {} };
+  }
+
+  if (!state.mcpConfigs[mcpId].params || typeof state.mcpConfigs[mcpId].params !== "object") {
+    state.mcpConfigs[mcpId].params = {};
+  }
+
+  return state.mcpConfigs[mcpId];
+}
+
+function handleMcpInputChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+
+  const action = target.dataset.action;
+  const mcpId = target.dataset.mcpId;
+  if (!action || !mcpId) {
+    return;
+  }
+
+  const config = ensureMcpConfig(mcpId);
+  if (action === "toggle") {
+    config.enabled = target.checked;
+    return;
+  }
+
+  if (action === "param") {
+    const fieldId = target.dataset.fieldId;
+    if (!fieldId) {
+      return;
+    }
+    config.params[fieldId] = target.value;
+  }
+}
+
+async function handleMcpActionClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  const button = target.closest("button[data-action][data-mcp-id]");
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const action = button.dataset.action;
+  const mcpId = button.dataset.mcpId;
+  if (!action || !mcpId) {
+    return;
+  }
+
+  try {
+    if (action === "save") {
+      await persistMcpConfigsToSettings();
+      setStatus("MCP settings saved.");
+      return;
+    }
+
+    if (action === "verify") {
+      await verifyMcpConfig(mcpId);
+      setStatus("MCP verified.");
+      return;
+    }
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function toggleSystemTraceVisibility() {
+  const activeChat = getActiveChat();
+  if (!activeChat) {
+    return;
+  }
+
+  activeChat.collapse_system_trace = !Boolean(activeChat.collapse_system_trace);
+  renderActiveChat();
+
+  try {
+    await persistChatsToSettings();
+  } catch (error) {
+    setStatus(`System trace toggle saved locally only: ${error.message}`, true);
   }
 }
 
@@ -1391,6 +1833,15 @@ if (compactButton instanceof HTMLButtonElement) {
 
 if (newChatButton instanceof HTMLButtonElement) {
   newChatButton.addEventListener("click", startNewChat);
+}
+
+if (systemTraceToggleButton instanceof HTMLButtonElement) {
+  systemTraceToggleButton.addEventListener("click", toggleSystemTraceVisibility);
+}
+
+if (mcpList instanceof HTMLElement) {
+  mcpList.addEventListener("input", handleMcpInputChange);
+  mcpList.addEventListener("click", handleMcpActionClick);
 }
 
 chatHistoryList.addEventListener("click", (event) => {

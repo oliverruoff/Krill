@@ -1,0 +1,41 @@
+from typing import Literal, Protocol
+
+from pydantic import BaseModel, Field
+
+
+class McpConfigField(BaseModel):
+    id: str
+    label: str
+    type: Literal["text", "password"] = "text"
+    required: bool = False
+    placeholder: str = ""
+    description: str = ""
+
+
+class McpToolSpec(BaseModel):
+    id: str
+    label: str
+    description: str
+    input_schema: dict[str, object] = Field(default_factory=dict)
+
+
+class McpToolCall(BaseModel):
+    mcp_id: str
+    tool_id: str
+    arguments: dict[str, object] = Field(default_factory=dict)
+
+
+class MCPPlugin(Protocol):
+    mcp_id: str
+    display_name: str
+    description: str
+    config_fields: list[McpConfigField]
+
+    def tool_specs(self) -> list[McpToolSpec]:
+        ...
+
+    async def verify(self, params: dict[str, str]) -> tuple[bool, str]:
+        ...
+
+    async def call_tool(self, tool_id: str, arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
+        ...

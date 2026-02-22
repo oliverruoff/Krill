@@ -41,6 +41,13 @@
             <button type="button" id="new-chat-btn" class="new-chat-btn">New chat</button>
           </div>
           <div id="chat-history-list" class="chat-history-list" aria-label="Chat history"></div>
+
+          <section class="mcp-panel" aria-label="MCP tools">
+            <div class="mcp-header">
+              <h3>MCPs</h3>
+            </div>
+            <div id="mcp-list" class="mcp-list"></div>
+          </section>
         </aside>
 
         <section class="chat-panel">
@@ -48,6 +55,7 @@
             <div class="provider-meta">
               <p class="meta-row"><strong>Provider</strong> <span id="provider-indicator">Loading...</span></p>
               <p class="meta-row"><strong>Model</strong> <span id="model-indicator">Loading...</span></p>
+              <button type="button" id="system-trace-toggle" class="trace-toggle-btn">Hide system trace</button>
             </div>
             <p id="current-chat-title" class="current-chat-title">New chat</p>
             <div class="token-tools">

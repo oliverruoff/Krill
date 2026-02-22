@@ -88,6 +88,8 @@ Notes:
 - `GET /gateway` -> main gateway view (redirects to setup if incomplete)
 - `GET /api/providers` -> returns available providers and model lists from registry
 - `POST /api/providers/verify` -> verifies provider credentials with a live test call
+- `GET /api/mcps` -> returns available native MCP integrations, config fields, and tool metadata
+- `POST /api/mcps/verify` -> verifies MCP configuration (for example Brave Search API key)
 - `GET /api/settings` -> returns current settings
 - `POST /api/settings` -> validates and saves settings
 - `POST /api/reset` -> resets all settings to defaults
@@ -122,6 +124,9 @@ To add a provider, add one new file in `app/providers/` and register it in `app/
 - Automatic memory compaction keeps continuity when context nears limits (>=75%) and before constrained model switches
 - Chat thread auto-scrolls to newest messages and renders Markdown
 - Gateway sidebar stores persistent chat history with sortable conversations
+- Gateway sidebar includes MCP management (enable, configure, save, verify)
+- Assistant messages display subtle MCP usage tags when tools are used
+- Internal orchestrator/system trace messages are shown in-chat and persisted
 - Press `Enter` to send and `Shift+Enter` for a new line
 - Add/Update provider verifies API key + model before accepting provider config
 - Setup offers "Start from scratch" and braindump import (file picker or drag/drop)
