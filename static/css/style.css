@@ -1111,6 +1111,14 @@ button:disabled {
   gap: 0.6rem;
 }
 
+.chat-composer .actions #send-btn {
+  flex: 6;
+}
+
+.chat-composer .actions #stop-btn {
+  flex: 1;
+}
+
 #chat-input {
   resize: none;
 }
