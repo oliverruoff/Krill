@@ -1229,7 +1229,9 @@ function renderMcpPanel() {
       actions.appendChild(verifyButton);
     }
 
-    card.appendChild(actions);
+    if (mcp.id !== "local_files") {
+      card.appendChild(actions);
+    }
     mcpList.appendChild(card);
   });
 }

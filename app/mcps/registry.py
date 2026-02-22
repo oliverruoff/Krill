@@ -1,11 +1,13 @@
 from .base import MCPPlugin, McpConfigField, McpToolSpec
 from .brave_search import BraveSearchMCP
 from .git_ops import GitOpsMCP
+from .local_files import LocalFilesMCP
 
 
 _MCPS: dict[str, MCPPlugin] = {
     "brave_search": BraveSearchMCP(),
     "git_ops": GitOpsMCP(),
+    "local_files": LocalFilesMCP(),
 }
 
 

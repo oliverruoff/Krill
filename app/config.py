@@ -268,6 +268,12 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
 
     data["mcp_configs"] = normalized_mcp_configs
 
+    if "local_files" not in normalized_mcp_configs:
+        normalized_mcp_configs["local_files"] = {
+            "enabled": True,
+            "params": {},
+        }
+
     return data
 
 
