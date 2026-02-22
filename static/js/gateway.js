@@ -393,7 +393,7 @@ function renderActiveChat() {
       return;
     }
 
-    if (turn.role === "system" && activeChat.collapse_system_trace) {
+    if (turn.role === "system" && activeChat.collapse_system_trace && turn.system_type !== "memory_compaction") {
       return;
     }
 
@@ -406,9 +406,6 @@ function renderActiveChat() {
     }
   });
 
-  if (typeof activeChat.memory_block === "string" && activeChat.memory_block.trim()) {
-    addMessage("assistant", `**Auto-compacted memory**\n\n${activeChat.memory_block.trim()}`);
-  }
 }
 
 function renderChatHistory() {
@@ -1502,18 +1499,20 @@ async function compactHistoryForLimit(chat, targetTokenLimit, reasonLabel) {
     }
 
     const payload = await response.json();
-    const compactedMessages = Array.isArray(payload.history) ? payload.history : [];
-
-    if (compactedMessages.length > 0) {
-      const timestamp = createTimestamp();
-      chat.messages = compactedMessages.map((turn) => ({
-        role: turn.role,
-        content: turn.content,
-        timestamp,
-      }));
-    }
-
     chat.memory_block = typeof payload.memory_block === "string" ? payload.memory_block : chat.memory_block;
+    if (chat.memory_block.trim()) {
+      const timestamp = createTimestamp();
+      chat.messages = [
+        {
+          role: "system",
+          content: `Compacted memory\n\n${chat.memory_block.trim()}`,
+          timestamp,
+          system_type: "memory_compaction",
+        },
+      ];
+    } else {
+      chat.messages = [];
+    }
     chat.updated_at = createTimestamp();
     if (state.activeChatId === chat.id) {
       state.lastRequestTokens = estimateContextTokens(chat.messages, chat.memory_block);

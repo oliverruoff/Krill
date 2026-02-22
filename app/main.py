@@ -447,12 +447,11 @@ async def compact_chat(payload: CompactChatRequest) -> CompactChatResponse:
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Compaction failed: {exc}") from exc
 
-    trimmed_history = payload.history[-4:] if len(payload.history) > 4 else payload.history
     memory_block = compacted_text.strip()
     if not memory_block:
         raise HTTPException(status_code=422, detail="Compaction failed: Provider returned empty compact memory.")
 
-    return CompactChatResponse(memory_block=memory_block, history=trimmed_history, used_tokens=used_tokens)
+    return CompactChatResponse(memory_block=memory_block, history=[], used_tokens=used_tokens)
 
 
 def _validate_provider_configs(settings: Settings) -> None:

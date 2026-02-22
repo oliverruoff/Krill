@@ -49,7 +49,19 @@ class GeminiProvider(LLMProvider):
 
         text = _extract_text(response_body)
         if not text:
-            raise RuntimeError("Gemini returned an empty response.")
+            await asyncio.sleep(0.2)
+            try:
+                retry_body = await asyncio.to_thread(_post_json_return_body, endpoint, payload)
+            except Exception:
+                retry_body = response_body
+
+            text = _extract_text(retry_body)
+            if not text:
+                detail = _extract_empty_reason(retry_body)
+                if detail:
+                    raise RuntimeError(f"Gemini returned an empty response. {detail}")
+                raise RuntimeError("Gemini returned an empty response.")
+            response_body = retry_body
 
         used_tokens = _extract_total_tokens(response_body)
         return text, used_tokens
@@ -154,6 +166,24 @@ def _extract_total_tokens(payload: dict[str, object]) -> int | None:
         return total
 
     return None
+
+
+def _extract_empty_reason(payload: dict[str, object]) -> str:
+    prompt_feedback = payload.get("promptFeedback")
+    if isinstance(prompt_feedback, dict):
+        block_reason = prompt_feedback.get("blockReason")
+        if isinstance(block_reason, str) and block_reason.strip():
+            return f"Blocked by Gemini policy ({block_reason})."
+
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        first_candidate = candidates[0]
+        if isinstance(first_candidate, dict):
+            finish_reason = first_candidate.get("finishReason")
+            if isinstance(finish_reason, str) and finish_reason.strip():
+                return f"Finish reason: {finish_reason}."
+
+    return ""
 
 
 def _build_contents(history: list[dict[str, str]], prompt: str) -> list[dict[str, object]]:
