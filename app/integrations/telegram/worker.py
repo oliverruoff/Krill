@@ -129,6 +129,23 @@ class TelegramBridgeWorker:
                 return "No active chat yet. Send a message or use /new."
             return f"Active chat: {active.title} ({_short_chat_id(active.id)})"
 
+        if command == "usage":
+            active = _get_active_chat(settings)
+            chat_tokens = active.total_tokens_used if active is not None else 0
+            daily_tokens = _today_token_usage(settings)
+            return f"Usage\nChat tokens: {chat_tokens}\nToday tokens: {daily_tokens}"
+
+        if command == "help":
+            return (
+                "Available commands:\n"
+                "/new - Create and switch to a new chat\n"
+                "/chats - List recent chats\n"
+                "/use <number> - Switch active chat\n"
+                "/where - Show active chat\n"
+                "/usage - Show chat and daily token usage\n"
+                "/help - Show this help"
+            )
+
         if command == "chats":
             if not settings.chats:
                 return "No chats yet."
@@ -151,7 +168,7 @@ class TelegramBridgeWorker:
             await save_settings(settings)
             return f"Switched active chat to: {selected.title}"
 
-        return "Unknown command. Available: /new, /chats, /use, /where"
+        return "Unknown command. Use /help for available commands."
 
     async def _handle_user_message(self, settings: Settings, text: str) -> str:
         prompt = text.strip()
@@ -415,6 +432,14 @@ def _add_daily_usage(settings: Settings, tokens_to_add: int) -> None:
             entry.tokens += tokens_to_add
             return
     settings.daily_token_usage.append(DailyTokenUsage(date=date_key, tokens=tokens_to_add))
+
+
+def _today_token_usage(settings: Settings) -> int:
+    date_key = datetime.now(timezone.utc).date().isoformat()
+    for entry in settings.daily_token_usage:
+        if entry.date == date_key:
+            return max(0, int(entry.tokens))
+    return 0
 
 
 def _chunk_telegram_text(text: str, max_len: int = 3500) -> list[str]:
