@@ -294,24 +294,24 @@ button:disabled {
 
 .memory-add-btn {
   margin: 0;
-  width: 2.2rem;
-  min-width: 2.2rem;
-  height: 2.2rem;
-  border: 1px solid #c9d4e4;
-  border-radius: 999px;
-  padding: 0;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  padding: 0.1rem 0.25rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #f6f9ff;
+  background: transparent;
   color: #4f6077;
-  font-size: 1rem;
+  font-size: 1.5rem;
   font-weight: 700;
   line-height: 1;
 }
 
 .memory-add-btn:hover {
-  background: #eef4fe;
+  background: transparent;
   color: #2f4159;
 }
 

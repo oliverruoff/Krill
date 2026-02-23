@@ -78,18 +78,13 @@ async def generate_with_tools(
     interaction_log: list[dict[str, object]] = []
     normalized_recursion = max(1, min(20, int(max_tool_recursion)))
     timeout_seconds = max(5, min(300, int(tool_timeout_seconds)))
+    planner_system = "You are selecting tools for a user request. Return JSON only without markdown and without extra prose."
+    await trace("tool_planner_system", planner_system)
 
     for step_index in range(1, normalized_recursion + 1):
         await trace("tool_step_status", f"Step {step_index}/{normalized_recursion}")
 
         planner_prompt = _build_recursive_planner_prompt(prompt, enabled_tools, interaction_log, step_index, normalized_recursion)
-        planner_system = (
-            f"{system_prompt}\n\n"
-            "You are selecting tools for a user request. "
-            "Return JSON only without markdown and without extra prose."
-        )
-
-        await trace("tool_planner_system", planner_system)
         await trace("tool_planner_prompt", planner_prompt)
 
         planner_response, planner_tokens = await provider.generate(

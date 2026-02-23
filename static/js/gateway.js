@@ -635,7 +635,7 @@ function addMessage(role, text = "", timestamp = "", status = "") {
   const bubble = document.createElement("div");
   bubble.className = "chat-bubble";
 
-  if (role === "assistant") {
+  if (role === "assistant" || role === "system") {
     if ((status === "queued" || status === "processing") && !text) {
       const label = status === "queued" ? "Queued" : "Processing";
       bubble.innerHTML = `<span class="compaction-loading">${label} <span class="typing-dots" aria-label="${label}"><span></span><span></span><span></span></span></span>`;
@@ -1047,7 +1047,8 @@ function renderMarkdown(rawText) {
       continue;
     }
 
-    if (trimmed.startsWith("- ")) {
+    const unorderedMatch = trimmed.match(/^[-*+]\s+(.*)$/);
+    if (unorderedMatch) {
       if (!inUlList) {
         if (inOlList) {
           html.push("</ol>");
@@ -1056,7 +1057,7 @@ function renderMarkdown(rawText) {
         html.push("<ul>");
         inUlList = true;
       }
-      html.push(`<li>${renderInlineMarkdown(trimmed.slice(2))}</li>`);
+      html.push(`<li>${renderInlineMarkdown(unorderedMatch[1])}</li>`);
       continue;
     }
 
