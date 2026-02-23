@@ -312,9 +312,10 @@ function renderCoreMemories() {
 
     const removeButton = document.createElement("button");
     removeButton.type = "button";
-    removeButton.className = "danger ghost";
+    removeButton.className = "memory-card-delete-btn";
     removeButton.dataset.coreMemoryIndex = String(index);
-    removeButton.textContent = "Delete";
+    removeButton.textContent = "x";
+    removeButton.setAttribute("aria-label", "Delete core memory");
 
     row.appendChild(timestamp);
     row.appendChild(removeButton);

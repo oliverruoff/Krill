@@ -30,6 +30,7 @@
         <div class="menu-wrap">
           <button type="button" id="menu-btn" class="icon-btn" aria-expanded="false" aria-controls="menu-popover" aria-label="Open menu">&#9881;</button>
           <div id="menu-popover" class="menu-popover hidden" role="menu">
+            <button type="button" id="memory-management-btn" class="menu-item menu-item-button" role="menuitem">Memory Management</button>
             <a href="/api/braindump/download" class="menu-item" download="braindump.json" role="menuitem">Braindump</a>
             <a href="/setup" class="menu-item" role="menuitem">Settings</a>
           </div>
@@ -90,6 +91,49 @@
         </aside>
       </div>
     </main>
+
+    <div id="memory-modal" class="memory-modal hidden" role="dialog" aria-modal="true" aria-labelledby="memory-modal-title">
+      <div class="memory-modal-backdrop" id="memory-modal-backdrop"></div>
+      <section class="memory-modal-card">
+        <header class="memory-modal-header">
+          <div>
+            <h2 id="memory-modal-title">Memory Management</h2>
+            <p id="memory-token-total" class="memory-token-total">Total estimated memory tokens: 0</p>
+          </div>
+          <button type="button" id="memory-modal-close" class="memory-modal-close" aria-label="Close memory management">&times;</button>
+        </header>
+
+        <div class="memory-columns">
+          <section class="memory-column" aria-labelledby="core-memory-column-title">
+            <div class="memory-column-header">
+              <h3 id="core-memory-column-title">Core Memories</h3>
+              <p id="core-memory-token-count" class="memory-token-subtle">Estimated tokens: 0</p>
+            </div>
+            <label class="memory-search-label" for="core-memory-search">Search core memories</label>
+            <input id="core-memory-search" type="text" maxlength="200" placeholder="Search core memories" />
+            <div class="memory-add-row">
+              <input id="core-memory-input" type="text" maxlength="200" placeholder="Add core memory (max 200 chars)" />
+              <button type="button" id="add-core-memory-btn" class="memory-add-btn" aria-label="Add core memory">+</button>
+            </div>
+            <div id="core-memory-list" class="memory-modal-list" aria-live="polite"></div>
+          </section>
+
+          <section class="memory-column" aria-labelledby="normal-memory-column-title">
+            <div class="memory-column-header">
+              <h3 id="normal-memory-column-title">Normal Memories</h3>
+              <p id="normal-memory-token-count" class="memory-token-subtle">Estimated tokens: 0</p>
+            </div>
+            <label class="memory-search-label" for="normal-memory-search">Search normal memories</label>
+            <input id="normal-memory-search" type="text" maxlength="200" placeholder="Search normal memories" />
+            <div class="memory-add-row">
+              <input id="normal-memory-input" type="text" maxlength="200" placeholder="Add normal memory (max 200 chars)" />
+              <button type="button" id="add-normal-memory-btn" class="memory-add-btn" aria-label="Add normal memory">+</button>
+            </div>
+            <div id="normal-memory-list" class="memory-modal-list" aria-live="polite"></div>
+          </section>
+        </div>
+      </section>
+    </div>
 
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 

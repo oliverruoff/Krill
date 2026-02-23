@@ -134,6 +134,7 @@ SSE events include:
 - Setup first, then Gateway
 - Setup supports Core Memories for persistent personal context
 - Gateway has three panes: chats (left), chat view (center), tools/integrations (right)
+- Gateway menu includes Memory Management for searchable core/normal memory editing
 - Chat execution supports per-chat queueing and cross-chat parallel background processing
 - Assistant/tool progress is visible through system trace messages
 - Tool usage is displayed below assistant responses (`used Tools: ...`)

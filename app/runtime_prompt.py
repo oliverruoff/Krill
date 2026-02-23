@@ -1,14 +1,19 @@
 """Helpers for building the runtime system prompt injected into model calls."""
 
+from datetime import datetime
+
 def compose_runtime_system_prompt(
     bot_name: str,
     system_prompt: str,
     memory_block: str = "",
     core_memories: list[dict[str, str]] | None = None,
 ) -> str:
+    current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
     invisible_context = (
         f"You are Krill assistant named '{bot_name}'. "
-        f"This is the system prompt your user provided: {system_prompt}"
+        f"This is the system prompt your user provided: {system_prompt}\n\n"
+        f"Current datetime (server local): {current_local_time}\n"
+        "Use time context only when relevant; do not mention it unless needed."
     )
 
     memory_lines: list[str] = []
