@@ -176,6 +176,20 @@ Run:
 docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
 
+### Docker E2E API Test
+
+Run a full end-to-end API flow against Docker using existing public endpoints only:
+
+```bash
+python test/e2e_docker_test.py --env-file .env_test
+```
+
+Expected `.env_test` key:
+
+- `GEMINI_API_KEY` (fallback: `GOOGLE_API_KEY`)
+
+The script builds the image, starts fresh containers, configures setup with Gemini (`gemini-2.5-flash`), runs one chat turn (`"hi"`), exports/imports braindump, and validates restored chat state.
+
 ## API Overview
 
 - `GET /` -> setup or gateway depending on completion state

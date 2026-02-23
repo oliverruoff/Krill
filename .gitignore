@@ -5,3 +5,4 @@ braindump.json.bak
 *.pub
 workspace/*
 braindump.json.bak
+.env_test
