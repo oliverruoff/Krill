@@ -48,6 +48,20 @@
           <label for="system_prompt">How should Krill behave? <span id="system_prompt_count" class="count-hint">0/200</span></label>
           <textarea id="system_prompt" maxlength="200" rows="3" required></textarea>
 
+          <section class="memory-section" aria-labelledby="core-memory-heading">
+            <div class="memory-section-header">
+              <h3 id="core-memory-heading">Core Memories</h3>
+              <p class="memory-section-copy">Add persistent personal context Krill can use subtly in future chats.</p>
+            </div>
+
+            <div class="memory-input-row">
+              <input id="core_memory_input" type="text" maxlength="200" placeholder="Add core memory (max 200 chars)" />
+              <button type="button" id="add-core-memory-btn" class="memory-add-btn" aria-label="Add core memory">+</button>
+            </div>
+
+            <div id="core-memory-list" class="memory-list" aria-live="polite"></div>
+          </section>
+
           <h2>Provider Configuration</h2>
 
           <label for="provider_select">Provider</label>

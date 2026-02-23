@@ -21,6 +21,9 @@ const fields = {
   providerApiHelp: document.getElementById("provider-api-help"),
   providerApiLink: document.getElementById("provider-api-link"),
   providerApiKey: document.getElementById("provider_api_key"),
+  coreMemoryInput: document.getElementById("core_memory_input"),
+  addCoreMemoryButton: document.getElementById("add-core-memory-btn"),
+  coreMemoryList: document.getElementById("core-memory-list"),
   providerList: document.getElementById("provider-list"),
   activeProviderSelect: document.getElementById("active_provider_select"),
   toolMaxRecursion: document.getElementById("tool_max_recursion"),
@@ -32,6 +35,8 @@ const fields = {
 const state = {
   providers: [],
   providerConfigs: {},
+  coreMemories: [],
+  normalMemories: [],
   chats: [],
   mcpConfigs: {},
   integrationConfigs: {},
@@ -268,6 +273,95 @@ function normalizeProviderConfigs(providerConfigs) {
   return normalized;
 }
 
+function normalizeMemories(memories) {
+  if (!Array.isArray(memories)) {
+    return [];
+  }
+
+  return memories
+    .filter((memory) => memory && typeof memory === "object")
+    .map((memory) => {
+      const content = typeof memory.content === "string" ? memory.content.trim().slice(0, 200) : "";
+      const createdAt = typeof memory.created_at === "string" ? memory.created_at.trim() : "";
+      return { content, created_at: createdAt };
+    })
+    .filter((memory) => memory.content.length > 0);
+}
+
+function renderCoreMemories() {
+  fields.coreMemoryList.innerHTML = "";
+
+  if (!Array.isArray(state.coreMemories) || state.coreMemories.length === 0) {
+    const emptyState = document.createElement("p");
+    emptyState.className = "memory-empty";
+    emptyState.textContent = "No core memories yet.";
+    fields.coreMemoryList.appendChild(emptyState);
+    return;
+  }
+
+  state.coreMemories.forEach((memory, index) => {
+    const card = document.createElement("article");
+    card.className = "memory-card";
+
+    const row = document.createElement("div");
+    row.className = "memory-card-row";
+
+    const timestamp = document.createElement("span");
+    timestamp.className = "memory-card-timestamp";
+    timestamp.textContent = memory.created_at || "";
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "danger ghost";
+    removeButton.dataset.coreMemoryIndex = String(index);
+    removeButton.textContent = "Delete";
+
+    row.appendChild(timestamp);
+    row.appendChild(removeButton);
+
+    const content = document.createElement("p");
+    content.className = "memory-card-content";
+    content.textContent = memory.content;
+
+    card.appendChild(row);
+    card.appendChild(content);
+    fields.coreMemoryList.appendChild(card);
+  });
+}
+
+function addCoreMemory() {
+  const value = String(fields.coreMemoryInput.value || "").trim();
+  if (!value) {
+    setStatus("Please enter a core memory before adding.", true);
+    return;
+  }
+
+  if (value.length > 200) {
+    setStatus("Core memory must be at most 200 characters.", true);
+    return;
+  }
+
+  state.coreMemories.push({
+    content: value,
+    created_at: new Date().toISOString(),
+  });
+
+  fields.coreMemoryInput.value = "";
+  renderCoreMemories();
+  setStatus("Core memory added.");
+}
+
+function removeCoreMemoryByIndex(indexValue) {
+  const parsedIndex = Number.parseInt(String(indexValue), 10);
+  if (!Number.isFinite(parsedIndex) || parsedIndex < 0 || parsedIndex >= state.coreMemories.length) {
+    return;
+  }
+
+  state.coreMemories.splice(parsedIndex, 1);
+  renderCoreMemories();
+  setStatus("Core memory deleted.");
+}
+
 function createSetupSnapshot() {
   const maxRecursion = clampInteger(fields.toolMaxRecursion.value, 1, 20, state.toolMaxRecursion || 6);
   const timeoutSeconds = clampInteger(fields.toolTimeoutSeconds.value, 5, 300, state.toolTimeoutSeconds || 45);
@@ -276,6 +370,8 @@ function createSetupSnapshot() {
     system_prompt: fields.systemPrompt.value,
     active_provider_id: fields.activeProviderSelect.value || "",
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
+    core_memories: normalizeMemories(state.coreMemories),
+    normal_memories: normalizeMemories(state.normalMemories),
     chats: state.chats,
     mcp_configs: state.mcpConfigs,
     integration_configs: state.integrationConfigs,
@@ -313,6 +409,8 @@ function buildPayload() {
     setup_completed: true,
     active_provider_id: fields.activeProviderSelect.value,
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
+    core_memories: normalizeMemories(state.coreMemories),
+    normal_memories: normalizeMemories(state.normalMemories),
     chats: state.chats,
     mcp_configs: state.mcpConfigs,
     integration_configs: state.integrationConfigs,
@@ -408,6 +506,8 @@ async function loadPage() {
     updateSystemPromptCounter();
 
     state.providerConfigs = settings.provider_configs ?? {};
+    state.coreMemories = normalizeMemories(settings.core_memories);
+    state.normalMemories = normalizeMemories(settings.normal_memories);
     state.chats = Array.isArray(settings.chats) ? settings.chats : [];
     state.mcpConfigs = settings.mcp_configs && typeof settings.mcp_configs === "object" ? settings.mcp_configs : {};
     state.integrationConfigs = settings.integration_configs && typeof settings.integration_configs === "object"
@@ -427,6 +527,7 @@ async function loadPage() {
 
     renderProviderOptions();
     renderConfiguredProviders();
+    renderCoreMemories();
     setModeFromSettings();
     state.initialSetupSnapshot = createSetupSnapshot();
     setStatus("Setup data loaded.");
@@ -528,6 +629,13 @@ fields.providerSelect.addEventListener("change", () => {
 });
 
 fields.systemPrompt.addEventListener("input", updateSystemPromptCounter);
+fields.coreMemoryInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    addCoreMemory();
+  }
+});
+fields.addCoreMemoryButton.addEventListener("click", addCoreMemory);
 fields.startScratchButton.addEventListener("click", startFromScratch);
 fields.cancelButton.addEventListener("click", cancelSetupChanges);
 
@@ -561,6 +669,20 @@ fields.braindumpDropzone.addEventListener("drop", (event) => {
 });
 
 fields.addProviderButton.addEventListener("click", addOrUpdateProvider);
+
+fields.coreMemoryList.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const memoryIndex = target.dataset.coreMemoryIndex;
+  if (typeof memoryIndex !== "string") {
+    return;
+  }
+
+  removeCoreMemoryByIndex(memoryIndex);
+});
 
 fields.providerList.addEventListener("click", (event) => {
   const target = event.target;

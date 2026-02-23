@@ -29,6 +29,7 @@ Think of me as the compact, practical sibling: I keep your data in one place, ru
 Krill persists runtime state in `data/braindump.json`, including:
 
 - setup + provider settings
+- core and normal memories
 - chat sessions and messages
 - tool configs
 - daily token usage
@@ -131,6 +132,7 @@ SSE events include:
 ## Current UI Flow
 
 - Setup first, then Gateway
+- Setup supports Core Memories for persistent personal context
 - Gateway has three panes: chats (left), chat view (center), tools/integrations (right)
 - Chat execution supports per-chat queueing and cross-chat parallel background processing
 - Assistant/tool progress is visible through system trace messages

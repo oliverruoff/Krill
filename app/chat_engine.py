@@ -58,6 +58,7 @@ async def generate_chat_response(
         bot_name=bot_name.strip() if bot_name.strip() else settings.bot_name,
         system_prompt=system_prompt.strip() if system_prompt.strip() else settings.system_prompt,
         memory_block=memory_block,
+        core_memories=[memory.model_dump() for memory in settings.core_memories],
     )
     token_limit = get_provider_model_limit(active_provider_id, model_id)
 

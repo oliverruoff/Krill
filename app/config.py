@@ -24,6 +24,11 @@ class ProviderConfig(BaseModel):
     model: str = ""
 
 
+class MemoryEntry(BaseModel):
+    content: str = Field(default="", max_length=200)
+    created_at: str = ""
+
+
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str = Field(default="", max_length=200000)
@@ -71,6 +76,8 @@ class Settings(BaseModel):
     active_provider_id: str = ""
     active_model_id: str = ""
     provider_configs: dict[str, ProviderConfig] = Field(default_factory=dict)
+    core_memories: list[MemoryEntry] = Field(default_factory=list)
+    normal_memories: list[MemoryEntry] = Field(default_factory=list)
     chats: list[ChatSession] = Field(default_factory=list)
     mcp_configs: dict[str, McpConfig] = Field(default_factory=dict)
     integration_configs: dict[str, IntegrationConfig] = Field(default_factory=dict)
@@ -217,6 +224,12 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
         }
 
     data["provider_configs"] = normalized_provider_configs
+
+    raw_core_memories = data.get("core_memories")
+    data["core_memories"] = _normalize_memories(raw_core_memories)
+
+    raw_normal_memories = data.get("normal_memories")
+    data["normal_memories"] = _normalize_memories(raw_normal_memories)
 
     chats = data.get("chats")
     normalized_chats: list[dict[str, object]] = []
@@ -425,6 +438,35 @@ def _normalize_legacy_settings(raw_data: dict[str, object]) -> dict[str, object]
     data["tool_timeout_seconds"] = max(5, min(300, tool_timeout_seconds))
 
     return data
+
+
+def _normalize_memories(raw_memories: object) -> list[dict[str, str]]:
+    normalized_memories: list[dict[str, str]] = []
+    if not isinstance(raw_memories, list):
+        return normalized_memories
+
+    for raw_memory in raw_memories:
+        if not isinstance(raw_memory, dict):
+            continue
+
+        content = raw_memory.get("content")
+        created_at = raw_memory.get("created_at")
+
+        if not isinstance(content, str):
+            continue
+
+        normalized_content = content.strip()[:200]
+        if not normalized_content:
+            continue
+
+        normalized_memories.append(
+            {
+                "content": normalized_content,
+                "created_at": created_at.strip() if isinstance(created_at, str) else "",
+            }
+        )
+
+    return normalized_memories
 
 
 def _sync_active_selection(settings: Settings) -> Settings:
