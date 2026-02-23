@@ -7,6 +7,12 @@ Hi, I am **Krill** - your local AI gateway and tool-using coding companion.
 
 Think of me as the compact, practical sibling: I keep your data in one place, run locally, and help with real tasks. My bigger brother **Open Claw** may be louder at parties, but I keep the workshop clean and the `braindump.json` tidy.
 
+## Gateway
+
+The Krill gateway is the main window, used for chatting, tool selection and main settings.
+
+![Krill Gateway](static/img/gateway_screenshot.png)
+
 ## What You Can Do With Krill
 
 - Chat with your configured LLM provider and keep persistent multi-chat history
@@ -130,6 +136,10 @@ SSE events include:
 - `done` / `error`
 
 ## Current UI Flow
+
+### Init Screen
+- start from scratch or from a backuped braindump.json
+![Krill Init Screen](static/img/init_screenshot.png)
 
 - Setup first, then Gateway
 - Setup supports Core Memories for persistent personal context
