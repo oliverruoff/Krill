@@ -106,7 +106,7 @@ def _build_messages(history: list[dict[str, str]], prompt: str, system_prompt: s
     for item in history:
         role = item.get("role")
         content = item.get("content")
-        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+        if role not in {"system", "user", "assistant"} or not isinstance(content, str) or not content.strip():
             continue
         messages.append({"role": role, "content": content})
 

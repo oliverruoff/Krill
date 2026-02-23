@@ -107,7 +107,7 @@ Exact message workflow (Gateway):
 2. Gateway posts `POST /api/chat/stream` with message, chat history, and memory block
 3. `app/main.py` calls shared engine `generate_chat_response(...)`
 4. Shared engine composes runtime system prompt via `compose_runtime_system_prompt(...)` in `app/runtime_prompt.py`
-5. Composed prompt includes bot identity (`bot_name`), configured `system_prompt`, and optional `memory_block`
+5. Runtime prompt includes current local server time (+ optional compacted `memory_block`); identity/behavior/core-memory instructions are seeded into chat history at chat start and after compaction
 6. Shared engine calls orchestrator `generate_with_tools(...)`
 7. SSE streams back `tool_step`, `meta`, `token`, then `done` (or `error`)
 8. Gateway finalizes assistant message, tool usage, and token counters, then persists Gateway chat state

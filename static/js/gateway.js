@@ -7,6 +7,7 @@ const CHAT_TITLE_MAX_LENGTH = 24;
 const EDITABLE_CHAT_TITLE_MAX_LENGTH = 24;
 const CHAT_SYNC_INTERVAL_MS = 3000;
 const INTEGRATION_STATUS_SYNC_INTERVAL_MS = 3000;
+const RUNTIME_CONTEXT_SYSTEM_TYPE = "runtime_context_seed";
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -525,7 +526,78 @@ function createChatEntry(firstMessage) {
   };
 }
 
-function toApiHistory(messages) {
+function buildRuntimeContextSeed() {
+  const botName = typeof state.settings?.bot_name === "string" ? state.settings.bot_name.trim() : "Krill";
+  const behavior = typeof state.settings?.system_prompt === "string" ? state.settings.system_prompt.trim() : "";
+  const coreMemories = Array.isArray(state.coreMemories) ? state.coreMemories : [];
+
+  let seed = (
+    `You are Krill assistant named '${botName}'. `
+    + `This is the system prompt your user provided: ${behavior}`
+  );
+
+  const memoryLines = coreMemories
+    .map((memory) => (typeof memory?.content === "string" ? memory.content.trim() : ""))
+    .filter((content) => Boolean(content))
+    .map((content) => `- ${content}`);
+
+  if (memoryLines.length > 0) {
+    seed = (
+      `${seed}\n\n`
+      + "Core memories (background context from the user):\n"
+      + "Use these memories subtly and only when they are relevant and helpful. "
+      + "Do not repeatedly mention or announce these memories. "
+      + "Keep the response natural, personal, and context-aware.\n"
+      + memoryLines.join("\n")
+    );
+  }
+
+  return seed;
+}
+
+function ensureRuntimeContextSeed(chat) {
+  if (!chat || !Array.isArray(chat.messages)) {
+    return;
+  }
+
+  const hasSeed = chat.messages.some(
+    (message) =>
+      message
+      && message.role === "system"
+      && typeof message.system_type === "string"
+      && message.system_type === RUNTIME_CONTEXT_SYSTEM_TYPE,
+  );
+  if (hasSeed) {
+    return;
+  }
+
+  const timestamp = createTimestamp();
+  chat.messages.unshift({
+    role: "system",
+    content: buildRuntimeContextSeed(),
+    timestamp,
+    system_type: RUNTIME_CONTEXT_SYSTEM_TYPE,
+    tool_usage: [],
+    request_id: "",
+    status: "",
+  });
+  chat.updated_at = timestamp;
+}
+
+function toApiChatHistory(messages) {
+  return messages
+    .filter((turn) => turn && (turn.role === "user" || turn.role === "assistant" || turn.role === "system"))
+    .filter((turn) => typeof turn.content === "string" && turn.content.trim())
+    .filter((turn) => {
+      if (turn.role !== "system") {
+        return true;
+      }
+      return turn.system_type === RUNTIME_CONTEXT_SYSTEM_TYPE;
+    })
+    .map((turn) => ({ role: turn.role, content: turn.content }));
+}
+
+function toApiCompactionHistory(messages) {
   return messages
     .filter((turn) => turn && (turn.role === "user" || turn.role === "assistant"))
     .filter((turn) => typeof turn.content === "string" && turn.content.trim())
@@ -1923,7 +1995,7 @@ async function compactHistoryForLimit(chat, targetTokenLimit, reasonLabel) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        history: toApiHistory(chat.messages),
+        history: toApiCompactionHistory(chat.messages),
         target_token_limit: Math.max(0, Number(targetTokenLimit || 0)),
         memory_block: chat.memory_block || "",
       }),
@@ -1944,18 +2016,32 @@ async function compactHistoryForLimit(chat, targetTokenLimit, reasonLabel) {
 
     const payload = await response.json();
     chat.memory_block = typeof payload.memory_block === "string" ? payload.memory_block : chat.memory_block;
+    const contextTimestamp = createTimestamp();
+    const runtimeContextMessage = {
+      role: "system",
+      content: buildRuntimeContextSeed(),
+      timestamp: contextTimestamp,
+      system_type: RUNTIME_CONTEXT_SYSTEM_TYPE,
+      tool_usage: [],
+      request_id: "",
+      status: "",
+    };
     if (chat.memory_block.trim()) {
       const timestamp = createTimestamp();
       chat.messages = [
+        runtimeContextMessage,
         {
           role: "system",
           content: `Compacted memory\n\n${chat.memory_block.trim()}`,
           timestamp,
           system_type: "memory_compaction",
+          tool_usage: [],
+          request_id: "",
+          status: "",
         },
       ];
     } else {
-      chat.messages = [];
+      chat.messages = [runtimeContextMessage];
     }
     chat.updated_at = createTimestamp();
     if (state.activeChatId === chat.id) {
@@ -2512,7 +2598,7 @@ function buildQueueSnapshot(chat) {
   const activeProviderId = state.activeProviderId;
   const providerConfig = state.settings?.provider_configs?.[activeProviderId] ?? null;
   return {
-    history: toApiHistory(chat.messages),
+    history: toApiChatHistory(chat.messages),
     memoryBlock: chat.memory_block || "",
     providerId: activeProviderId,
     model: providerConfig?.model ?? "",
@@ -2728,6 +2814,7 @@ async function sendMessage(event) {
     chat.title = deriveChatTitle(message);
   }
 
+  ensureRuntimeContextSeed(chat);
   const snapshot = buildQueueSnapshot(chat);
   const requestId = createChatId();
   const timestamp = createTimestamp();

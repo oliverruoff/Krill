@@ -55,10 +55,7 @@ async def generate_chat_response(
     model_id = model.strip() if model.strip() else provider_config.model
     api_key_value = api_key if api_key.strip() else provider_config.api_key
     runtime_system_prompt = compose_runtime_system_prompt(
-        bot_name=bot_name.strip() if bot_name.strip() else settings.bot_name,
-        system_prompt=system_prompt.strip() if system_prompt.strip() else settings.system_prompt,
         memory_block=memory_block,
-        core_memories=[memory.model_dump() for memory in settings.core_memories],
     )
     token_limit = get_provider_model_limit(active_provider_id, model_id)
 

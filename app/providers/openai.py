@@ -97,7 +97,7 @@ def _build_input(history: list[dict[str, str]], prompt: str, system_prompt: str)
         role = item.get("role")
         content = item.get("content")
 
-        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+        if role not in {"system", "user", "assistant"} or not isinstance(content, str) or not content.strip():
             continue
 
         input_items.append({"role": role, "content": content})

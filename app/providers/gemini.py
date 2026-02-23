@@ -32,8 +32,17 @@ class GeminiProvider(LLMProvider):
         if not api_key.strip():
             raise RuntimeError("API key is required.")
 
-        contents = _build_contents(history, prompt)
-        payload = {"contents": contents, "system_instruction": {"parts": [{"text": system_prompt}]}}
+        contents, system_history_block = _build_contents(history, prompt)
+        merged_system_prompt = system_prompt.strip()
+        if system_history_block:
+            if merged_system_prompt:
+                merged_system_prompt = f"{merged_system_prompt}\n\nConversation system context:\n{system_history_block}"
+            else:
+                merged_system_prompt = f"Conversation system context:\n{system_history_block}"
+
+        payload: dict[str, object] = {"contents": contents}
+        if merged_system_prompt:
+            payload["system_instruction"] = {"parts": [{"text": merged_system_prompt}]}
 
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
 
@@ -186,21 +195,26 @@ def _extract_empty_reason(payload: dict[str, object]) -> str:
     return ""
 
 
-def _build_contents(history: list[dict[str, str]], prompt: str) -> list[dict[str, object]]:
+def _build_contents(history: list[dict[str, str]], prompt: str) -> tuple[list[dict[str, object]], str]:
     contents: list[dict[str, object]] = []
+    system_lines: list[str] = []
 
     for item in history:
         role = item.get("role")
         content = item.get("content")
 
-        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+        if role not in {"system", "user", "assistant"} or not isinstance(content, str) or not content.strip():
+            continue
+
+        if role == "system":
+            system_lines.append(content.strip())
             continue
 
         mapped_role = "user" if role == "user" else "model"
         contents.append({"role": mapped_role, "parts": [{"text": content}]})
 
     contents.append({"role": "user", "parts": [{"text": prompt}]})
-    return contents
+    return contents, "\n\n".join(system_lines)
 
 
 def _safe_read_error(exc: error.HTTPError) -> str:

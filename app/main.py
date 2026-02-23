@@ -96,7 +96,7 @@ class GitSshVerifyResponse(BaseModel):
 
 
 class ChatTurn(BaseModel):
-    role: Literal["user", "assistant"]
+    role: Literal["user", "assistant", "system"]
     content: str = Field(min_length=1, max_length=5000)
 
 
