@@ -474,16 +474,19 @@ button:disabled {
 }
 
 #status {
-  min-height: 1.2rem;
-  margin: 0.25rem 0 0;
-  font-size: 0.9rem;
+  min-height: 0;
+  margin: 0;
+  font-size: 0.88rem;
 }
 
 #status.ok {
+  display: none;
   color: var(--ok);
 }
 
 #status.error {
+  display: block;
+  margin-top: 0.18rem;
   color: var(--error);
 }
 
@@ -563,6 +566,27 @@ button:disabled {
 .gateway-banner {
   height: 56px;
   width: auto;
+}
+
+.gateway-icon {
+  display: none;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+}
+
+.mobile-brand-row {
+  display: none;
+}
+
+.mobile-assistant-name {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .assistant-header {
@@ -675,6 +699,14 @@ button:disabled {
   border-radius: 8px;
   font-size: 0.9rem;
   font-weight: 700;
+}
+
+.menu-item-icon {
+  display: inline-block;
+  width: 1.1rem;
+  margin-right: 0.32rem;
+  text-align: center;
+  color: #70819a;
 }
 
 .menu-item:hover {
@@ -1165,8 +1197,8 @@ button:disabled {
   box-shadow: var(--shadow);
   padding: 1rem;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-  gap: 0.8rem;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0.55rem;
   min-height: 0;
   height: 100%;
 }
@@ -1193,6 +1225,52 @@ button:disabled {
   grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
   gap: 0.65rem;
   min-height: 0;
+}
+
+.mobile-side-header {
+  display: none;
+  position: relative;
+}
+
+.mobile-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2rem;
+  padding: 0.32rem 0.68rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: #f7faff;
+  cursor: pointer;
+}
+
+.mobile-settings-btn:hover {
+  background: #eef4fc;
+}
+
+.mobile-settings-popover {
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 82;
+  min-width: 180px;
+}
+
+.mobile-settings-popover .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.mobile-drawer-backdrop {
+  display: none;
+}
+
+.mobile-drawer-handle {
+  display: none;
 }
 
 .panel-section {
@@ -1434,8 +1512,8 @@ button:disabled {
 .chat-meta {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: 0.8rem;
-  align-items: start;
+  gap: 0.55rem;
+  align-items: center;
 }
 
 .current-chat-title {
@@ -1452,7 +1530,14 @@ button:disabled {
 
 .provider-meta {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.12rem;
+}
+
+.meta-row-inline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  gap: 0.45rem;
 }
 
 .meta-row {
@@ -1529,7 +1614,7 @@ button:disabled {
 .chat-thread {
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 0.8rem;
+  padding: 0.68rem;
   overflow: auto;
   background: #fbfdff;
   display: grid;
@@ -1740,7 +1825,7 @@ button:disabled {
 
 .chat-composer {
   display: grid;
-  gap: 0.6rem;
+  gap: 0.4rem;
 }
 
 .chat-composer .actions #send-btn {
@@ -1753,50 +1838,204 @@ button:disabled {
 
 #chat-input {
   resize: none;
+  min-height: 2.35rem;
+  max-height: 10rem;
+  padding: 0.5rem 0.64rem;
+  line-height: 1.35;
+  overflow-y: hidden;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 900px) {
   .gateway-shell {
-    padding: 0.7rem;
-    gap: 0.7rem;
+    --mobile-left-header-height: clamp(120px, 20dvh, 170px);
+    --mobile-left-drawer-gap: 0.55rem;
+    padding: 0.6rem;
+    gap: 0.6rem;
+    position: relative;
+    height: 100dvh;
   }
 
-  .gateway-banner {
-    height: 42px;
+  .gateway-body {
+    display: block;
+    width: 100%;
+    height: 100%;
   }
 
   .gateway-topbar {
-    flex-wrap: wrap;
+    position: fixed;
+    top: 0.6rem;
+    left: 0.6rem;
+    width: min(86vw, 360px);
+    height: var(--mobile-left-header-height);
+    overflow: hidden;
+    margin: 0;
+    z-index: 80;
+    transform: translateX(calc(-100% - 1rem));
+    transition: transform 0.24s ease;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    align-content: start;
+    justify-items: stretch;
+    gap: 0.42rem;
+    padding: 0.55rem 0.65rem;
+  }
+
+  .chat-history-panel {
+    position: fixed;
+    top: calc(0.6rem + var(--mobile-left-header-height) + var(--mobile-left-drawer-gap));
+    left: 0.6rem;
+    width: min(86vw, 360px);
+    height: calc(100dvh - (0.6rem + var(--mobile-left-header-height) + var(--mobile-left-drawer-gap) + 0.6rem));
+    z-index: 79;
+    transform: translateX(calc(-100% - 1rem));
+    transition: transform 0.24s ease;
+    overflow: hidden;
+  }
+
+  .mcp-side-panel {
+    position: fixed;
+    top: 0.6rem;
+    right: 0.6rem;
+    width: min(86vw, 360px);
+    height: calc(100dvh - 1.2rem);
+    z-index: 80;
+    transform: translateX(calc(100% + 1rem));
+    transition: transform 0.24s ease;
+    grid-template-rows: auto minmax(0, 2fr) minmax(0, 1fr);
+  }
+
+  .mobile-side-header {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+  }
+
+  .mobile-settings-popover {
+    width: min(78vw, 280px);
+  }
+
+  .gateway-shell.mobile-left-open .gateway-topbar,
+  .gateway-shell.mobile-left-open .chat-history-panel {
+    transform: translateX(0);
+  }
+
+  .gateway-shell.mobile-right-open .mcp-side-panel {
+    transform: translateX(0);
+  }
+
+  .mobile-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    display: block;
+    z-index: 70;
+    background: rgba(18, 32, 51, 0.33);
+  }
+
+  .mobile-drawer-backdrop.hidden {
+    display: none;
+  }
+
+  .mobile-drawer-handle {
+    display: inline-flex;
+    position: fixed;
+    z-index: 68;
+    top: 50%;
+    transform: translateY(-50%);
+    margin: 0;
+    padding: 0.3rem 0.38rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #ffffffde;
+    color: #4a5b72;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    box-shadow: 0 8px 20px rgba(18, 32, 51, 0.14);
+  }
+
+  .mobile-drawer-handle-left {
+    left: 0.28rem;
+  }
+
+  .mobile-drawer-handle-right {
+    right: 0.28rem;
+  }
+
+  .gateway-shell.mobile-left-open .mobile-drawer-handle-left,
+  .gateway-shell.mobile-right-open .mobile-drawer-handle-right {
+    display: none;
+  }
+
+  .gateway-banner {
+    display: none;
+  }
+
+  .mobile-brand-row {
+    display: flex;
+    align-items: center;
+    gap: 0.42rem;
+    min-width: 0;
+  }
+
+  .gateway-icon {
+    display: block;
+    width: 30px;
+    height: 30px;
+    justify-self: start;
+    flex: 0 0 auto;
+  }
+
+  .mobile-assistant-name {
+    font-size: 0.78rem;
+    max-width: 100%;
   }
 
   .gateway-switchers {
     width: 100%;
-    order: 4;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+    margin-top: 0;
   }
 
   .switch-field {
-    flex: 1;
     min-width: 0;
+    width: 100%;
+    font-size: 0.7rem;
   }
 
-  .assistant-title,
-  .assistant-meta {
-    white-space: normal;
+  .switch-field select {
+    padding: 0.34rem 0.42rem;
+    font-size: 0.74rem;
   }
 
-  .gateway-body {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(180px, 220px) minmax(180px, 220px) minmax(0, 1fr);
-    gap: 0.7rem;
+  .assistant-header {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.12rem;
   }
 
-  .chat-history-panel,
-  .mcp-side-panel {
-    padding: 0.65rem;
+  #assistant-title,
+  #assistant-meta,
+  #telegram-status {
+    display: none;
+  }
+
+  #daily-token-usage,
+  #short-term-memory-status {
+    display: block;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.72rem;
   }
 
   .chat-panel {
-    padding: 0.8rem;
+    padding: 0.66rem;
+    height: 100%;
   }
 
   .chat-meta {
@@ -1813,6 +2052,10 @@ button:disabled {
 
   .token-tools {
     justify-items: start;
+  }
+
+  .menu-wrap {
+    display: none;
   }
 
   .memory-modal {

@@ -9,7 +9,15 @@
   </head>
   <body>
     <main class="gateway-shell">
+      <button type="button" id="mobile-left-drawer-handle" class="mobile-drawer-handle mobile-drawer-handle-left" aria-label="Open chats and model panel">Chats</button>
+      <button type="button" id="mobile-right-drawer-handle" class="mobile-drawer-handle mobile-drawer-handle-right" aria-label="Open tools and integrations panel">Tools</button>
+      <div id="mobile-drawer-backdrop" class="mobile-drawer-backdrop hidden" aria-hidden="true"></div>
+
       <header class="gateway-topbar">
+        <div class="mobile-brand-row">
+          <img src="/static/img/krill_icon.png" alt="Krill" class="gateway-icon" />
+          <p id="mobile-assistant-name" class="mobile-assistant-name">Assistant</p>
+        </div>
         <img src="/static/img/krill_banner.png" alt="Krill" class="gateway-banner" />
         <div class="assistant-header">
           <p id="assistant-title" class="assistant-title">This is your personal assistant.</p>
@@ -52,8 +60,7 @@
         <section class="chat-panel">
           <div class="chat-meta">
             <div class="provider-meta">
-              <p class="meta-row"><strong>Provider</strong> <span id="provider-indicator">Loading...</span></p>
-              <p class="meta-row"><strong>Model</strong> <span id="model-indicator">Loading...</span></p>
+              <p class="meta-row meta-row-inline"><strong>Provider</strong> <span id="provider-indicator">Loading...</span> <strong>Model</strong> <span id="model-indicator">Loading...</span></p>
               <button type="button" id="system-trace-toggle" class="trace-toggle-btn">Hide system trace</button>
             </div>
             <p id="current-chat-title" class="current-chat-title">New chat</p>
@@ -68,7 +75,7 @@
 
           <form id="chat-form" class="chat-composer" novalidate>
             <label for="chat-input">Message</label>
-            <textarea id="chat-input" rows="3" maxlength="5000" required></textarea>
+            <textarea id="chat-input" rows="1" maxlength="5000" required></textarea>
             <div class="actions">
               <button type="submit" id="send-btn">Send</button>
               <button type="button" id="stop-btn" class="secondary">Stop</button>
@@ -79,6 +86,16 @@
         </section>
 
         <aside class="mcp-side-panel" aria-label="Tools">
+          <div class="mobile-side-header">
+            <button type="button" id="mobile-settings-menu-btn" class="mobile-settings-btn" aria-expanded="false" aria-controls="mobile-settings-popover">Settings</button>
+            <div id="mobile-settings-popover" class="menu-popover mobile-settings-popover hidden" role="menu">
+              <button type="button" id="mobile-memory-management-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◌</span>Memory Management</button>
+              <button type="button" id="mobile-short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
+              <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
+              <button type="button" id="mobile-brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
+              <a href="/setup" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>
+            </div>
+          </div>
           <div class="panel-section panel-section-tools">
             <div class="mcp-header">
               <h2>Tools</h2>

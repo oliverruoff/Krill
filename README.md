@@ -146,6 +146,7 @@ SSE events include:
 - Setup supports Core Memories for persistent personal context
 - Setup Advanced Settings includes "View Brain" to inspect SQLite tables/columns/rows for debugging
 - Gateway has three panes: chats (left), chat view (center), tools/integrations (right)
+- On smartphones (<= 900px), the chat view takes the full screen and side panels become swipe-in drawers (left: header/provider/model/chat history, right: settings + tools/integrations)
 - Gateway menu includes Memory Management for searchable core/normal memory editing
 - Gateway menu includes Short Term Memory for confirming/declining auto-detected memory suggestions
 - Chat execution supports per-chat queueing and cross-chat parallel background processing

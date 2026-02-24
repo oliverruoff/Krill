@@ -24,6 +24,7 @@ const menuButton = document.getElementById("menu-btn");
 const menuPopover = document.getElementById("menu-popover");
 const assistantTitleNode = document.getElementById("assistant-title");
 const assistantMetaNode = document.getElementById("assistant-meta");
+const mobileAssistantNameNode = document.getElementById("mobile-assistant-name");
 const dailyTokenUsageNode = document.getElementById("daily-token-usage");
 const telegramStatusNode = document.getElementById("telegram-status");
 const shortTermMemoryStatusNode = document.getElementById("short-term-memory-status");
@@ -36,6 +37,18 @@ const chatHistoryList = document.getElementById("chat-history-list");
 const newChatButton = document.getElementById("new-chat-btn");
 const mcpList = document.getElementById("mcp-list");
 const integrationList = document.getElementById("integration-list");
+const gatewayShell = document.querySelector(".gateway-shell");
+const gatewayTopbar = document.querySelector(".gateway-topbar");
+const chatHistoryPanel = document.querySelector(".chat-history-panel");
+const mcpSidePanel = document.querySelector(".mcp-side-panel");
+const mobileDrawerBackdrop = document.getElementById("mobile-drawer-backdrop");
+const mobileLeftDrawerHandle = document.getElementById("mobile-left-drawer-handle");
+const mobileRightDrawerHandle = document.getElementById("mobile-right-drawer-handle");
+const mobileSettingsMenuButton = document.getElementById("mobile-settings-menu-btn");
+const mobileSettingsPopover = document.getElementById("mobile-settings-popover");
+const mobileMemoryManagementButton = document.getElementById("mobile-memory-management-btn");
+const mobileShortTermMemoryButton = document.getElementById("mobile-short-term-memory-btn");
+const mobileBrainViewButton = document.getElementById("mobile-brain-view-btn");
 const memoryManagementButton = document.getElementById("memory-management-btn");
 const shortTermMemoryButton = document.getElementById("short-term-memory-btn");
 const brainViewButton = document.getElementById("brain-view-btn");
@@ -69,6 +82,12 @@ const addNormalMemoryButton = document.getElementById("add-normal-memory-btn");
 const coreMemoryList = document.getElementById("core-memory-list");
 const normalMemoryList = document.getElementById("normal-memory-list");
 let toastNode = document.getElementById("toast");
+
+const MOBILE_DRAWER_BREAKPOINT = 900;
+const MOBILE_SWIPE_EDGE_PX = 24;
+const MOBILE_SWIPE_OPEN_THRESHOLD = 70;
+const MOBILE_SWIPE_CLOSE_THRESHOLD = 52;
+const CHAT_INPUT_MAX_HEIGHT_PX = 160;
 
 const state = {
   providers: [],
@@ -119,7 +138,192 @@ const state = {
   brainTables: [],
   selectedBrainTable: "",
   brainLoading: false,
+  mobileLeftDrawerOpen: false,
+  mobileRightDrawerOpen: false,
+  mobileTouchGesture: null,
 };
+
+function isMobileDrawerMode() {
+  return window.matchMedia(`(max-width: ${MOBILE_DRAWER_BREAKPOINT}px)`).matches;
+}
+
+function isAnyModalOpen() {
+  const memoryOpen = memoryModal instanceof HTMLElement && !memoryModal.classList.contains("hidden");
+  const brainOpen = brainModal instanceof HTMLElement && !brainModal.classList.contains("hidden");
+  const shortTermOpen = shortTermMemoryModal instanceof HTMLElement && !shortTermMemoryModal.classList.contains("hidden");
+  return memoryOpen || brainOpen || shortTermOpen;
+}
+
+function syncMobileDrawerUi() {
+  if (!(gatewayShell instanceof HTMLElement)) {
+    return;
+  }
+
+  const mobileMode = isMobileDrawerMode();
+  const leftOpen = mobileMode && state.mobileLeftDrawerOpen;
+  const rightOpen = mobileMode && state.mobileRightDrawerOpen;
+  gatewayShell.classList.toggle("mobile-left-open", leftOpen);
+  gatewayShell.classList.toggle("mobile-right-open", rightOpen);
+
+  if (mobileDrawerBackdrop instanceof HTMLElement) {
+    const shouldShowBackdrop = leftOpen || rightOpen;
+    mobileDrawerBackdrop.classList.toggle("hidden", !shouldShowBackdrop);
+  }
+
+  if (mobileLeftDrawerHandle instanceof HTMLButtonElement) {
+    mobileLeftDrawerHandle.setAttribute("aria-expanded", leftOpen ? "true" : "false");
+  }
+  if (mobileRightDrawerHandle instanceof HTMLButtonElement) {
+    mobileRightDrawerHandle.setAttribute("aria-expanded", rightOpen ? "true" : "false");
+  }
+
+  if (mobileMode && (leftOpen || rightOpen)) {
+    document.body.style.overflow = "hidden";
+    return;
+  }
+
+  if (!isAnyModalOpen()) {
+    document.body.style.overflow = "";
+  }
+}
+
+function closeMobileDrawers() {
+  toggleMobileSettingsMenu(false);
+  if (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen) {
+    return;
+  }
+
+  state.mobileLeftDrawerOpen = false;
+  state.mobileRightDrawerOpen = false;
+  syncMobileDrawerUi();
+}
+
+function openMobileLeftDrawer() {
+  if (!isMobileDrawerMode()) {
+    return;
+  }
+  toggleMobileSettingsMenu(false);
+  state.mobileLeftDrawerOpen = true;
+  state.mobileRightDrawerOpen = false;
+  syncMobileDrawerUi();
+}
+
+function openMobileRightDrawer() {
+  if (!isMobileDrawerMode()) {
+    return;
+  }
+  toggleMobileSettingsMenu(false);
+  state.mobileRightDrawerOpen = true;
+  state.mobileLeftDrawerOpen = false;
+  syncMobileDrawerUi();
+}
+
+function toggleMobileSettingsMenu(forceOpen) {
+  if (!(mobileSettingsPopover instanceof HTMLElement) || !(mobileSettingsMenuButton instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : mobileSettingsPopover.classList.contains("hidden");
+  mobileSettingsPopover.classList.toggle("hidden", !shouldOpen);
+  mobileSettingsMenuButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+}
+
+function handleMobileSwipeStart(event) {
+  if (!isMobileDrawerMode() || isAnyModalOpen()) {
+    state.mobileTouchGesture = null;
+    return;
+  }
+
+  const touch = event.touches?.[0];
+  if (!touch) {
+    state.mobileTouchGesture = null;
+    return;
+  }
+
+  const startX = touch.clientX;
+  const startY = touch.clientY;
+  const target = event.target;
+  const viewportWidth = window.innerWidth;
+  let mode = "";
+
+  if (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen) {
+    if (startX <= MOBILE_SWIPE_EDGE_PX) {
+      mode = "open-left";
+    } else if (startX >= viewportWidth - MOBILE_SWIPE_EDGE_PX) {
+      mode = "open-right";
+    }
+  } else if (state.mobileLeftDrawerOpen && target instanceof Node) {
+    if ((gatewayTopbar instanceof HTMLElement && gatewayTopbar.contains(target))
+      || (chatHistoryPanel instanceof HTMLElement && chatHistoryPanel.contains(target))) {
+      mode = "close-left";
+    }
+  } else if (state.mobileRightDrawerOpen && target instanceof Node) {
+    if (mcpSidePanel instanceof HTMLElement && mcpSidePanel.contains(target)) {
+      mode = "close-right";
+    }
+  }
+
+  if (!mode) {
+    state.mobileTouchGesture = null;
+    return;
+  }
+
+  state.mobileTouchGesture = {
+    mode,
+    startX,
+    startY,
+    handled: false,
+  };
+}
+
+function handleMobileSwipeMove(event) {
+  const gesture = state.mobileTouchGesture;
+  if (!gesture || gesture.handled) {
+    return;
+  }
+
+  const touch = event.touches?.[0];
+  if (!touch) {
+    return;
+  }
+
+  const deltaX = touch.clientX - gesture.startX;
+  const deltaY = touch.clientY - gesture.startY;
+  if (Math.abs(deltaX) <= Math.abs(deltaY)) {
+    return;
+  }
+
+  if (gesture.mode === "open-left" && deltaX > MOBILE_SWIPE_OPEN_THRESHOLD) {
+    openMobileLeftDrawer();
+    gesture.handled = true;
+    event.preventDefault();
+    return;
+  }
+
+  if (gesture.mode === "open-right" && deltaX < -MOBILE_SWIPE_OPEN_THRESHOLD) {
+    openMobileRightDrawer();
+    gesture.handled = true;
+    event.preventDefault();
+    return;
+  }
+
+  if (gesture.mode === "close-left" && deltaX < -MOBILE_SWIPE_CLOSE_THRESHOLD) {
+    closeMobileDrawers();
+    gesture.handled = true;
+    event.preventDefault();
+    return;
+  }
+
+  if (gesture.mode === "close-right" && deltaX > MOBILE_SWIPE_CLOSE_THRESHOLD) {
+    closeMobileDrawers();
+    gesture.handled = true;
+    event.preventDefault();
+  }
+}
+
+function handleMobileSwipeEnd() {
+  state.mobileTouchGesture = null;
+}
 
 function getChatRuntime(chatId) {
   if (!chatId) {
@@ -181,6 +385,17 @@ function isAnyChatBusy() {
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.className = isError ? "error" : "ok";
+}
+
+function syncChatInputHeight() {
+  if (!(chatInput instanceof HTMLTextAreaElement)) {
+    return;
+  }
+
+  chatInput.style.height = "auto";
+  const targetHeight = Math.min(chatInput.scrollHeight, CHAT_INPUT_MAX_HEIGHT_PX);
+  chatInput.style.height = `${Math.max(targetHeight, 38)}px`;
+  chatInput.style.overflowY = chatInput.scrollHeight > CHAT_INPUT_MAX_HEIGHT_PX ? "auto" : "hidden";
 }
 
 function normalizeErrorMessage(error, fallback = "Request failed.") {
@@ -899,6 +1114,7 @@ async function editChatTitle(chatId) {
 function activateChat(chatId) {
   state.activeChatId = chatId;
   state.lastRequestTokens = 0;
+  closeMobileDrawers();
   renderChatHistory();
   renderActiveChat();
   syncUsedTokensToContext();
@@ -913,6 +1129,7 @@ function startNewChat() {
     return;
   }
 
+  closeMobileDrawers();
   const chat = createChatEntry("");
   chat.title = "New chat";
   state.chats.push(chat);
@@ -1154,6 +1371,9 @@ function updateAssistantHeader(settings) {
   assistantTitleNode.textContent = botName
     ? `This is ${botName} - your personal assistant`
     : "This is your personal assistant";
+  if (mobileAssistantNameNode instanceof HTMLElement) {
+    mobileAssistantNameNode.textContent = botName || "Assistant";
+  }
   assistantMetaNode.textContent = `${providerText} connected - Active provider: ${activeProviderText} - Active model: ${modelText}`;
 }
 
@@ -1610,7 +1830,8 @@ function closeMemoryManagementModal() {
   }
 
   memoryModal.classList.add("hidden");
-  if (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden")) {
+  if ((!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
+    && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)) {
     document.body.style.overflow = "";
   }
 }
@@ -1762,7 +1983,9 @@ function closeBrainModal() {
     return;
   }
   brainModal.classList.add("hidden");
-  if (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden")) {
+  if ((!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
+    && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
+    && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))) {
     document.body.style.overflow = "";
   }
 }
@@ -1889,6 +2112,7 @@ function closeShortTermMemoryModal() {
   if (
     (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
     && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
+    && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
   ) {
     document.body.style.overflow = "";
   }
@@ -2729,10 +2953,13 @@ async function loadGatewayMeta() {
     loadShortTermMemory(false);
     syncIntegrationStatus();
     updateComposerState();
-    setStatus("Gateway ready.");
+    setStatus("");
   } catch (error) {
     updateMetaIndicators();
     assistantTitleNode.textContent = "This is your personal assistant";
+    if (mobileAssistantNameNode instanceof HTMLElement) {
+      mobileAssistantNameNode.textContent = "Assistant";
+    }
     assistantMetaNode.textContent = "Assistant metadata unavailable.";
     syncSwitcherControls();
     renderChatHistory();
@@ -3331,6 +3558,7 @@ async function sendMessage(event) {
   });
 
   chatInput.value = "";
+  syncChatInputHeight();
   if (state.activeChatId === chat.id) {
     renderActiveChat();
   }
@@ -3803,6 +4031,62 @@ chatInput.addEventListener("keydown", (event) => {
   }
 });
 
+chatInput.addEventListener("input", () => {
+  syncChatInputHeight();
+});
+
+if (mobileLeftDrawerHandle instanceof HTMLButtonElement) {
+  mobileLeftDrawerHandle.addEventListener("click", openMobileLeftDrawer);
+}
+
+if (mobileRightDrawerHandle instanceof HTMLButtonElement) {
+  mobileRightDrawerHandle.addEventListener("click", openMobileRightDrawer);
+}
+
+if (mobileDrawerBackdrop instanceof HTMLElement) {
+  mobileDrawerBackdrop.addEventListener("click", closeMobileDrawers);
+}
+
+if (mobileSettingsMenuButton instanceof HTMLButtonElement) {
+  mobileSettingsMenuButton.addEventListener("click", () => {
+    toggleMobileSettingsMenu();
+  });
+}
+
+if (mobileMemoryManagementButton instanceof HTMLButtonElement) {
+  mobileMemoryManagementButton.addEventListener("click", () => {
+    toggleMobileSettingsMenu(false);
+    openMemoryManagementModal();
+  });
+}
+
+if (mobileShortTermMemoryButton instanceof HTMLButtonElement) {
+  mobileShortTermMemoryButton.addEventListener("click", () => {
+    toggleMobileSettingsMenu(false);
+    openShortTermMemoryModal();
+  });
+}
+
+if (mobileBrainViewButton instanceof HTMLButtonElement) {
+  mobileBrainViewButton.addEventListener("click", () => {
+    toggleMobileSettingsMenu(false);
+    openBrainModal();
+  });
+}
+
+document.addEventListener("touchstart", handleMobileSwipeStart, { passive: true });
+document.addEventListener("touchmove", handleMobileSwipeMove, { passive: false });
+document.addEventListener("touchend", handleMobileSwipeEnd, { passive: true });
+document.addEventListener("touchcancel", handleMobileSwipeEnd, { passive: true });
+
+window.addEventListener("resize", () => {
+  if (!isMobileDrawerMode()) {
+    closeMobileDrawers();
+  } else {
+    syncMobileDrawerUi();
+  }
+});
+
 menuButton.addEventListener("click", () => {
   toggleMenu();
 });
@@ -3813,15 +4097,35 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  if (menuPopover.contains(target) || menuButton.contains(target)) {
+  const desktopMenuTargeted = (menuPopover instanceof HTMLElement && menuPopover.contains(target))
+    || (menuButton instanceof HTMLButtonElement && menuButton.contains(target));
+  if (desktopMenuTargeted) {
+    return;
+  }
+
+  const mobileMenuTargeted = (mobileSettingsPopover instanceof HTMLElement && mobileSettingsPopover.contains(target))
+    || (mobileSettingsMenuButton instanceof HTMLButtonElement && mobileSettingsMenuButton.contains(target));
+  if (mobileMenuTargeted) {
     return;
   }
 
   toggleMenu(false);
+  toggleMobileSettingsMenu(false);
 });
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") {
+    return;
+  }
+
+  if (state.mobileLeftDrawerOpen || state.mobileRightDrawerOpen) {
+    toggleMobileSettingsMenu(false);
+    closeMobileDrawers();
+    return;
+  }
+
+  if (mobileSettingsPopover instanceof HTMLElement && !mobileSettingsPopover.classList.contains("hidden")) {
+    toggleMobileSettingsMenu(false);
     return;
   }
 
@@ -3952,4 +4256,8 @@ window.addEventListener("beforeunload", () => {
     state.shortTermMemorySyncTimerId = null;
   }
 });
-window.addEventListener("load", loadGatewayMeta);
+window.addEventListener("load", () => {
+  syncChatInputHeight();
+  syncMobileDrawerUi();
+  loadGatewayMeta();
+});
