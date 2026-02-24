@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .chat_engine import generate_chat_response
-from .config import BRAINDUMP_PATH, IntegrationConfig, McpConfig, Settings, ensure_settings_file, load_settings, save_settings, create_braindump_snapshot, import_braindump_db
+from .config import IntegrationConfig, McpConfig, Settings, create_braindump_snapshot, ensure_settings_file, import_braindump_db, load_settings, save_settings, view_braindump
 from .integrations import (
     get_integration,
     get_integration_options,
@@ -210,6 +210,11 @@ async def import_braindump(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Import failed: {exc}")
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+@app.get("/api/braindump/view")
+async def get_braindump_view() -> dict[str, object]:
+    return await view_braindump(show_secrets=True)
 
 
 @app.get("/api/settings", response_model=Settings)

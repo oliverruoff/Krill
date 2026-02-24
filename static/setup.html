@@ -95,6 +95,10 @@
 
             <label for="tool_timeout_seconds">Tool timeout (seconds)</label>
             <input id="tool_timeout_seconds" type="number" min="5" max="300" value="45" />
+
+            <button type="button" id="view-brain-btn" class="secondary">View Brain</button>
+            <input id="setup_braindump_file" class="hidden" type="file" accept=".db" />
+            <button type="button" id="setup-import-braindump-btn" class="secondary">Import braindump.db</button>
           </details>
 
           <div class="actions">
@@ -108,6 +112,33 @@
     </main>
 
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+    <div id="brain-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="brain-modal-title">
+      <div id="brain-modal-backdrop" class="brain-modal-backdrop"></div>
+      <section class="brain-modal-card">
+        <header class="brain-modal-header">
+          <div>
+            <h2 id="brain-modal-title">View Brain</h2>
+            <p id="brain-modal-meta" class="brain-modal-meta">Loading...</p>
+          </div>
+          <button type="button" id="brain-modal-close" class="brain-modal-close" aria-label="Close brain view">&times;</button>
+        </header>
+        <div class="brain-modal-toolbar">
+          <button type="button" id="brain-refresh-btn" class="secondary">Refresh</button>
+        </div>
+        <div class="brain-modal-body">
+          <aside class="brain-table-list-wrap">
+            <h3>Tables</h3>
+            <div id="brain-table-list" class="brain-table-list"></div>
+          </aside>
+          <section class="brain-table-view-wrap">
+            <h3 id="brain-table-title">Select a table</h3>
+            <p id="brain-table-columns" class="brain-columns"></p>
+            <div id="brain-table-view" class="brain-table-view"></div>
+          </section>
+        </div>
+      </section>
+    </div>
 
     <script src="/static/js/setup.js"></script>
   </body>

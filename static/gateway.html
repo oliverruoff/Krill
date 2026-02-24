@@ -32,6 +32,7 @@
           <div id="menu-popover" class="menu-popover hidden" role="menu">
             <button type="button" id="memory-management-btn" class="menu-item menu-item-button" role="menuitem">Memory Management</button>
             <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem">Braindump</a>
+            <button type="button" id="brain-view-btn" class="menu-item menu-item-button menu-item-plain" role="menuitem">View Brain</button>
             <a href="/setup" class="menu-item" role="menuitem">Settings</a>
           </div>
         </div>
@@ -130,6 +131,33 @@
               <button type="button" id="add-normal-memory-btn" class="memory-add-btn" aria-label="Add normal memory">+</button>
             </div>
             <div id="normal-memory-list" class="memory-modal-list" aria-live="polite"></div>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <div id="brain-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="brain-modal-title">
+      <div id="brain-modal-backdrop" class="brain-modal-backdrop"></div>
+      <section class="brain-modal-card">
+        <header class="brain-modal-header">
+          <div>
+            <h2 id="brain-modal-title">View Brain</h2>
+            <p id="brain-modal-meta" class="brain-modal-meta">Loading...</p>
+          </div>
+          <button type="button" id="brain-modal-close" class="brain-modal-close" aria-label="Close brain view">&times;</button>
+        </header>
+        <div class="brain-modal-toolbar">
+          <button type="button" id="brain-refresh-btn" class="secondary">Refresh</button>
+        </div>
+        <div class="brain-modal-body">
+          <aside class="brain-table-list-wrap">
+            <h3>Tables</h3>
+            <div id="brain-table-list" class="brain-table-list"></div>
+          </aside>
+          <section class="brain-table-view-wrap">
+            <h3 id="brain-table-title">Select a table</h3>
+            <p id="brain-table-columns" class="brain-columns"></p>
+            <div id="brain-table-view" class="brain-table-view"></div>
           </section>
         </div>
       </section>

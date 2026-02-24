@@ -6,7 +6,7 @@ import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,14 @@ BRAINDUMP_PATH = Path(os.getenv("KRILL_BRAINDUMP_PATH", str(DEFAULT_BRAINDUMP_PA
 BRAINDUMP_BACKUP_PATH = BRAINDUMP_PATH.with_suffix(".db.bak")
 DATA_DIR = BRAINDUMP_PATH.parent
 _DB_LOCK = asyncio.Lock()
+SENSITIVE_KEYWORDS = {
+    "api_key",
+    "token",
+    "secret",
+    "password",
+    "private_key",
+    "ssh_private",
+}
 
 # Pydantic models remain the source of truth for the application layer
 class ProviderConfig(BaseModel):
@@ -486,3 +494,86 @@ async def import_braindump_db(source_path: Path) -> None:
             
         # 2. Atomic swap
         await asyncio.to_thread(shutil.copyfile, source_path, BRAINDUMP_PATH)
+
+
+def _quote_identifier(identifier: str) -> str:
+    escaped = identifier.replace('"', '""')
+    return '"' + escaped + '"'
+
+
+def _is_sensitive_column(column_name: str) -> bool:
+    lowered = column_name.lower()
+    return any(keyword in lowered for keyword in SENSITIVE_KEYWORDS)
+
+
+def _mask_value(value: object) -> object:
+    if value is None:
+        return None
+    text = str(value)
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return "****"
+    return f"{text[:2]}***{text[-2:]}"
+
+
+def _view_braindump_sync(show_secrets: bool) -> dict[str, object]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        table_rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name ASC"
+        ).fetchall()
+        table_names = [str(row["name"]) for row in table_rows]
+
+        tables: list[dict[str, object]] = []
+        for table_name in table_names:
+            quoted = _quote_identifier(table_name)
+            column_rows = conn.execute(f"PRAGMA table_info({quoted})").fetchall()
+            columns = [
+                {
+                    "name": str(column["name"]),
+                    "type": str(column["type"] or ""),
+                    "notnull": bool(column["notnull"]),
+                    "pk": bool(column["pk"]),
+                }
+                for column in column_rows
+            ]
+
+            row_count = conn.execute(f"SELECT COUNT(*) AS count FROM {quoted}").fetchone()
+            total_rows = int(row_count["count"] if row_count else 0)
+
+            result_rows = conn.execute(f"SELECT * FROM {quoted}").fetchall()
+            entries: list[dict[str, object]] = []
+            for raw_row in result_rows:
+                entry: dict[str, object] = {}
+                for key in raw_row.keys():
+                    raw_value: Any = raw_row[key]
+                    if show_secrets or not _is_sensitive_column(str(key)):
+                        entry[str(key)] = raw_value
+                    else:
+                        entry[str(key)] = _mask_value(raw_value)
+                entries.append(entry)
+
+            tables.append(
+                {
+                    "name": table_name,
+                    "columns": columns,
+                    "row_count": total_rows,
+                    "rows": entries,
+                }
+            )
+
+        return {
+            "ok": True,
+            "show_secrets": show_secrets,
+            "table_count": len(tables),
+            "tables": tables,
+        }
+    finally:
+        conn.close()
+
+
+async def view_braindump(*, show_secrets: bool = False) -> dict[str, object]:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_view_braindump_sync, show_secrets)

@@ -143,6 +143,7 @@ SSE events include:
 
 - Setup first, then Gateway
 - Setup supports Core Memories for persistent personal context
+- Setup Advanced Settings includes "View Brain" to inspect SQLite tables/columns/rows for debugging (with masked secrets by default)
 - Gateway has three panes: chats (left), chat view (center), tools/integrations (right)
 - Gateway menu includes Memory Management for searchable core/normal memory editing
 - Chat execution supports per-chat queueing and cross-chat parallel background processing
@@ -222,6 +223,7 @@ The script builds the image, starts fresh containers, configures setup with Gemi
 - `POST /api/reset` -> reset defaults
 - `POST /api/braindump/import` -> full state import
 - `GET /api/braindump/download` -> download full state
+- `GET /api/braindump/view` -> inspect SQLite tables/columns/rows (optional `show_secrets=true`)
 - `POST /api/chat/stream` -> streaming chat + tool orchestration
 - `POST /api/chat/compact` -> compact memory block
 - `GET /api/chat/state` -> chat list + active chat id for near-real-time sync

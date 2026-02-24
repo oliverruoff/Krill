@@ -13,6 +13,8 @@ const fields = {
   cancelButton: document.getElementById("cancel-btn"),
   braindumpFileInput: document.getElementById("braindump_file"),
   braindumpDropzone: document.getElementById("braindump_dropzone"),
+  setupBraindumpFileInput: document.getElementById("setup_braindump_file"),
+  setupImportBraindumpButton: document.getElementById("setup-import-braindump-btn"),
   botName: document.getElementById("bot_name"),
   systemPrompt: document.getElementById("system_prompt"),
   systemPromptCount: document.getElementById("system_prompt_count"),
@@ -30,6 +32,16 @@ const fields = {
   toolTimeoutSeconds: document.getElementById("tool_timeout_seconds"),
   addProviderButton: document.getElementById("add-provider-btn"),
   completeButton: document.getElementById("complete-btn"),
+  viewBrainButton: document.getElementById("view-brain-btn"),
+  brainModal: document.getElementById("brain-modal"),
+  brainModalBackdrop: document.getElementById("brain-modal-backdrop"),
+  brainModalClose: document.getElementById("brain-modal-close"),
+  brainModalMeta: document.getElementById("brain-modal-meta"),
+  brainRefreshButton: document.getElementById("brain-refresh-btn"),
+  brainTableList: document.getElementById("brain-table-list"),
+  brainTableTitle: document.getElementById("brain-table-title"),
+  brainTableColumns: document.getElementById("brain-table-columns"),
+  brainTableView: document.getElementById("brain-table-view"),
 };
 
 const state = {
@@ -49,6 +61,9 @@ const state = {
   setupCompleted: false,
   initialSetupSnapshot: "",
   toastTimerId: null,
+  brainTables: [],
+  selectedBrainTable: "",
+  brainLoading: false,
 };
 
 function setStatus(message, isError = false) {
@@ -89,6 +104,12 @@ function setImportingState(isImporting) {
   fields.cancelButton.disabled = isImporting;
   fields.braindumpDropzone.classList.toggle("disabled", isImporting);
   fields.braindumpFileInput.disabled = isImporting;
+  if (fields.setupImportBraindumpButton instanceof HTMLButtonElement) {
+    fields.setupImportBraindumpButton.disabled = isImporting;
+  }
+  if (fields.setupBraindumpFileInput instanceof HTMLInputElement) {
+    fields.setupBraindumpFileInput.disabled = isImporting;
+  }
 }
 
 function getProviderById(providerId) {
@@ -532,6 +553,12 @@ async function loadPage() {
     setModeFromSettings();
     state.initialSetupSnapshot = createSetupSnapshot();
     setStatus("Setup data loaded.");
+
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get("view_brain") === "1") {
+      showConfigView();
+      openBrainModal();
+    }
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -546,6 +573,13 @@ function openFilePicker() {
 async function importBraindumpFile(file) {
   if (!file) {
     setStatus("Please choose a braindump.db file.", true);
+    return;
+  }
+
+  const shouldImport = window.confirm(
+    "Importing braindump.db will replace your current state. Continue?"
+  );
+  if (!shouldImport) {
     return;
   }
 
@@ -586,8 +620,147 @@ async function importBraindumpFile(file) {
     showToast(message);
   } finally {
     fields.braindumpFileInput.value = "";
+    if (fields.setupBraindumpFileInput instanceof HTMLInputElement) {
+      fields.setupBraindumpFileInput.value = "";
+    }
     setImportingState(false);
   }
+}
+
+function openSetupImportPicker() {
+  if (fields.setupBraindumpFileInput instanceof HTMLInputElement && !fields.setupBraindumpFileInput.disabled) {
+    fields.setupBraindumpFileInput.click();
+  }
+}
+
+function renderBrainTableList() {
+  fields.brainTableList.innerHTML = "";
+
+  if (!Array.isArray(state.brainTables) || state.brainTables.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "memory-empty";
+    emptyNode.textContent = "No tables found.";
+    fields.brainTableList.appendChild(emptyNode);
+    return;
+  }
+
+  state.brainTables.forEach((table) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "brain-table-item";
+    if (table.name === state.selectedBrainTable) {
+      button.classList.add("active");
+    }
+    button.dataset.tableName = table.name;
+    button.textContent = `${table.name} (${table.row_count})`;
+    fields.brainTableList.appendChild(button);
+  });
+}
+
+function renderSelectedBrainTable() {
+  const table = state.brainTables.find((entry) => entry.name === state.selectedBrainTable);
+  if (!table) {
+    fields.brainTableTitle.textContent = "Select a table";
+    fields.brainTableColumns.textContent = "";
+    fields.brainTableView.innerHTML = "";
+    return;
+  }
+
+  fields.brainTableTitle.textContent = `${table.name} (${table.row_count} rows)`;
+  const columnLabels = Array.isArray(table.columns)
+    ? table.columns.map((column) => `${column.name}:${column.type || "text"}`)
+    : [];
+  fields.brainTableColumns.textContent = columnLabels.length > 0 ? columnLabels.join(" | ") : "No columns";
+
+  fields.brainTableView.innerHTML = "";
+  const rows = Array.isArray(table.rows) ? table.rows : [];
+  const columns = Array.isArray(table.columns) ? table.columns : [];
+  if (rows.length === 0 || columns.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "memory-empty";
+    emptyNode.textContent = "No rows in this table.";
+    fields.brainTableView.appendChild(emptyNode);
+    return;
+  }
+
+  const tableNode = document.createElement("table");
+  tableNode.className = "brain-grid";
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  columns.forEach((column) => {
+    const th = document.createElement("th");
+    th.textContent = column.name;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  tableNode.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    columns.forEach((column) => {
+      const td = document.createElement("td");
+      const value = row[column.name];
+      td.textContent = value === null || value === undefined ? "" : String(value);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  tableNode.appendChild(tbody);
+  fields.brainTableView.appendChild(tableNode);
+}
+
+async function loadBrainView() {
+  if (state.brainLoading) {
+    return;
+  }
+
+  state.brainLoading = true;
+  fields.brainModalMeta.textContent = "Loading brain tables...";
+  fields.brainRefreshButton.disabled = true;
+
+  try {
+    const response = await fetch("/api/braindump/view");
+    if (!response.ok) {
+      throw new Error("Failed to load brain view.");
+    }
+    const payload = await response.json();
+    const tables = Array.isArray(payload.tables) ? payload.tables : [];
+    state.brainTables = tables;
+    if (!tables.some((table) => table.name === state.selectedBrainTable)) {
+      state.selectedBrainTable = tables[0]?.name ?? "";
+    }
+    fields.brainModalMeta.textContent = `${payload.table_count ?? tables.length} tables loaded`;
+    renderBrainTableList();
+    renderSelectedBrainTable();
+  } catch (error) {
+    fields.brainModalMeta.textContent = error.message || "Failed to load brain tables.";
+    state.brainTables = [];
+    state.selectedBrainTable = "";
+    renderBrainTableList();
+    renderSelectedBrainTable();
+  } finally {
+    state.brainLoading = false;
+    fields.brainRefreshButton.disabled = false;
+  }
+}
+
+function openBrainModal() {
+  if (!(fields.brainModal instanceof HTMLElement)) {
+    return;
+  }
+  fields.brainModal.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  loadBrainView();
+}
+
+function closeBrainModal() {
+  if (!(fields.brainModal instanceof HTMLElement)) {
+    return;
+  }
+  fields.brainModal.classList.add("hidden");
+  document.body.style.overflow = "";
 }
 
 function handleDropzoneKeydown(event) {
@@ -615,6 +788,12 @@ function cancelSetupChanges() {
 
 function handleEscapeToGateway(event) {
   if (event.key !== "Escape") {
+    return;
+  }
+
+  if (fields.brainModal instanceof HTMLElement && !fields.brainModal.classList.contains("hidden")) {
+    event.preventDefault();
+    closeBrainModal();
     return;
   }
 
@@ -665,6 +844,39 @@ fields.braindumpDropzone.addEventListener("drop", (event) => {
   if (file) {
     importBraindumpFile(file);
   }
+});
+
+if (fields.setupImportBraindumpButton instanceof HTMLButtonElement) {
+  fields.setupImportBraindumpButton.addEventListener("click", openSetupImportPicker);
+}
+
+if (fields.setupBraindumpFileInput instanceof HTMLInputElement) {
+  fields.setupBraindumpFileInput.addEventListener("change", () => {
+    const file = fields.setupBraindumpFileInput.files?.[0];
+    if (file) {
+      importBraindumpFile(file);
+    }
+  });
+}
+
+fields.viewBrainButton.addEventListener("click", openBrainModal);
+fields.brainModalClose.addEventListener("click", closeBrainModal);
+fields.brainModalBackdrop.addEventListener("click", closeBrainModal);
+fields.brainRefreshButton.addEventListener("click", loadBrainView);
+fields.brainTableList.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const tableName = target.dataset.tableName;
+  if (!tableName) {
+    return;
+  }
+
+  state.selectedBrainTable = tableName;
+  renderBrainTableList();
+  renderSelectedBrainTable();
 });
 
 fields.addProviderButton.addEventListener("click", addOrUpdateProvider);

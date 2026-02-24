@@ -35,9 +35,19 @@ const newChatButton = document.getElementById("new-chat-btn");
 const mcpList = document.getElementById("mcp-list");
 const integrationList = document.getElementById("integration-list");
 const memoryManagementButton = document.getElementById("memory-management-btn");
+const brainViewButton = document.getElementById("brain-view-btn");
 const memoryModal = document.getElementById("memory-modal");
 const memoryModalBackdrop = document.getElementById("memory-modal-backdrop");
 const memoryModalCloseButton = document.getElementById("memory-modal-close");
+const brainModal = document.getElementById("brain-modal");
+const brainModalBackdrop = document.getElementById("brain-modal-backdrop");
+const brainModalCloseButton = document.getElementById("brain-modal-close");
+const brainModalMetaNode = document.getElementById("brain-modal-meta");
+const brainRefreshButton = document.getElementById("brain-refresh-btn");
+const brainTableList = document.getElementById("brain-table-list");
+const brainTableTitle = document.getElementById("brain-table-title");
+const brainTableColumns = document.getElementById("brain-table-columns");
+const brainTableView = document.getElementById("brain-table-view");
 const memoryTokenTotalNode = document.getElementById("memory-token-total");
 const coreMemoryTokenCountNode = document.getElementById("core-memory-token-count");
 const normalMemoryTokenCountNode = document.getElementById("normal-memory-token-count");
@@ -91,6 +101,9 @@ const state = {
   normalMemoryEditingIndex: -1,
   coreMemoryEditDraft: "",
   normalMemoryEditDraft: "",
+  brainTables: [],
+  selectedBrainTable: "",
+  brainLoading: false,
 };
 
 function getChatRuntime(chatId) {
@@ -1523,7 +1536,161 @@ function closeMemoryManagementModal() {
   }
 
   memoryModal.classList.add("hidden");
-  document.body.style.overflow = "";
+  if (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden")) {
+    document.body.style.overflow = "";
+  }
+}
+
+function renderBrainTableList() {
+  if (!(brainTableList instanceof HTMLElement)) {
+    return;
+  }
+
+  brainTableList.innerHTML = "";
+
+  if (!Array.isArray(state.brainTables) || state.brainTables.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "memory-empty";
+    emptyNode.textContent = "No tables found.";
+    brainTableList.appendChild(emptyNode);
+    return;
+  }
+
+  state.brainTables.forEach((table) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "brain-table-item";
+    if (table.name === state.selectedBrainTable) {
+      button.classList.add("active");
+    }
+    button.dataset.tableName = table.name;
+    button.textContent = `${table.name} (${table.row_count})`;
+    brainTableList.appendChild(button);
+  });
+}
+
+function renderSelectedBrainTable() {
+  if (!(brainTableTitle instanceof HTMLElement) || !(brainTableColumns instanceof HTMLElement) || !(brainTableView instanceof HTMLElement)) {
+    return;
+  }
+
+  const table = state.brainTables.find((entry) => entry.name === state.selectedBrainTable);
+  if (!table) {
+    brainTableTitle.textContent = "Select a table";
+    brainTableColumns.textContent = "";
+    brainTableView.innerHTML = "";
+    return;
+  }
+
+  brainTableTitle.textContent = `${table.name} (${table.row_count} rows)`;
+  const columnLabels = Array.isArray(table.columns)
+    ? table.columns.map((column) => `${column.name}:${column.type || "text"}`)
+    : [];
+  brainTableColumns.textContent = columnLabels.length > 0 ? columnLabels.join(" | ") : "No columns";
+
+  brainTableView.innerHTML = "";
+  const rows = Array.isArray(table.rows) ? table.rows : [];
+  const columns = Array.isArray(table.columns) ? table.columns : [];
+  if (rows.length === 0 || columns.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "memory-empty";
+    emptyNode.textContent = "No rows in this table.";
+    brainTableView.appendChild(emptyNode);
+    return;
+  }
+
+  const tableNode = document.createElement("table");
+  tableNode.className = "brain-grid";
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  columns.forEach((column) => {
+    const th = document.createElement("th");
+    th.textContent = column.name;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  tableNode.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    columns.forEach((column) => {
+      const td = document.createElement("td");
+      const value = row[column.name];
+      td.textContent = value === null || value === undefined ? "" : String(value);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  tableNode.appendChild(tbody);
+  brainTableView.appendChild(tableNode);
+}
+
+async function loadBrainView() {
+  if (state.brainLoading) {
+    return;
+  }
+
+  state.brainLoading = true;
+  if (brainModalMetaNode instanceof HTMLElement) {
+    brainModalMetaNode.textContent = "Loading brain tables...";
+  }
+  if (brainRefreshButton instanceof HTMLButtonElement) {
+    brainRefreshButton.disabled = true;
+  }
+
+  try {
+    const response = await fetch("/api/braindump/view", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("Failed to load brain view.");
+    }
+
+    const payload = await response.json();
+    const tables = Array.isArray(payload.tables) ? payload.tables : [];
+    state.brainTables = tables;
+    if (!tables.some((table) => table.name === state.selectedBrainTable)) {
+      state.selectedBrainTable = tables[0]?.name ?? "";
+    }
+
+    if (brainModalMetaNode instanceof HTMLElement) {
+      brainModalMetaNode.textContent = `${payload.table_count ?? tables.length} tables loaded`;
+    }
+    renderBrainTableList();
+    renderSelectedBrainTable();
+  } catch (error) {
+    if (brainModalMetaNode instanceof HTMLElement) {
+      brainModalMetaNode.textContent = normalizeErrorMessage(error, "Failed to load brain tables.");
+    }
+    state.brainTables = [];
+    state.selectedBrainTable = "";
+    renderBrainTableList();
+    renderSelectedBrainTable();
+  } finally {
+    state.brainLoading = false;
+    if (brainRefreshButton instanceof HTMLButtonElement) {
+      brainRefreshButton.disabled = false;
+    }
+  }
+}
+
+function openBrainModal() {
+  if (!(brainModal instanceof HTMLElement)) {
+    return;
+  }
+  brainModal.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  loadBrainView();
+}
+
+function closeBrainModal() {
+  if (!(brainModal instanceof HTMLElement)) {
+    return;
+  }
+  brainModal.classList.add("hidden");
+  if (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden")) {
+    document.body.style.overflow = "";
+  }
 }
 
 async function addMemory(type) {
@@ -3098,12 +3265,49 @@ if (memoryManagementButton instanceof HTMLButtonElement) {
   });
 }
 
+if (brainViewButton instanceof HTMLButtonElement) {
+  brainViewButton.addEventListener("click", () => {
+    toggleMenu(false);
+    openBrainModal();
+  });
+}
+
 if (memoryModalCloseButton instanceof HTMLButtonElement) {
   memoryModalCloseButton.addEventListener("click", closeMemoryManagementModal);
 }
 
 if (memoryModalBackdrop instanceof HTMLElement) {
   memoryModalBackdrop.addEventListener("click", closeMemoryManagementModal);
+}
+
+if (brainModalCloseButton instanceof HTMLButtonElement) {
+  brainModalCloseButton.addEventListener("click", closeBrainModal);
+}
+
+if (brainModalBackdrop instanceof HTMLElement) {
+  brainModalBackdrop.addEventListener("click", closeBrainModal);
+}
+
+if (brainRefreshButton instanceof HTMLButtonElement) {
+  brainRefreshButton.addEventListener("click", loadBrainView);
+}
+
+if (brainTableList instanceof HTMLElement) {
+  brainTableList.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLButtonElement)) {
+      return;
+    }
+
+    const tableName = target.dataset.tableName;
+    if (!tableName) {
+      return;
+    }
+
+    state.selectedBrainTable = tableName;
+    renderBrainTableList();
+    renderSelectedBrainTable();
+  });
 }
 
 if (coreMemorySearchInput instanceof HTMLInputElement) {
@@ -3265,6 +3469,11 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") {
+    return;
+  }
+
+  if (brainModal instanceof HTMLElement && !brainModal.classList.contains("hidden")) {
+    closeBrainModal();
     return;
   }
 

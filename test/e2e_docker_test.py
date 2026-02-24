@@ -370,6 +370,24 @@ def _download_braindump(base_url: str, output_path: Path) -> bytes:
     return payload
 
 
+def _validate_brain_view(base_url: str) -> None:
+    _step("Validating brain view endpoint")
+    payload = _http_json("GET", f"{base_url}/api/braindump/view")
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        raise E2EFailure("/api/braindump/view returned invalid payload")
+
+    tables = payload.get("tables")
+    if not isinstance(tables, list) or not tables:
+        raise E2EFailure("/api/braindump/view returned no tables")
+
+    table_names = {table.get("name") for table in tables if isinstance(table, dict)}
+    required = {"settings_core", "provider_configs", "chats", "chat_messages"}
+    if not required.issubset(table_names):
+        raise E2EFailure("/api/braindump/view missing required tables")
+
+    _ok("Brain view endpoint looks good")
+
+
 def _import_braindump(base_url: str, braindump_bytes: bytes) -> None:
     _step("Importing braindump into fresh instance")
     
@@ -493,6 +511,7 @@ def main() -> int:
         )
 
         _persist_chat_to_settings(base_url_a, assistant_text)
+        _validate_brain_view(base_url_a)
         exported_bytes = _download_braindump(base_url_a, exported_braindump_path)
 
         base_url_b = _start_container(args.image, container_b)
