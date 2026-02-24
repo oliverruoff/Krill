@@ -131,6 +131,8 @@ class ChatRequest(BaseModel):
     api_key: str = ""
     bot_name: str = Field(default="", max_length=30)
     system_prompt: str = Field(default="", max_length=1000)
+    source_channel: str = "gateway"
+    source_chat_id: str = ""
 
 
 class CompactChatRequest(BaseModel):
@@ -459,6 +461,14 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     settings = await load_settings()
     if not _is_setup_complete(settings):
         raise HTTPException(status_code=422, detail="Setup is not complete.")
+    try:
+        await register_user_message_and_maybe_extract(
+            source_channel=payload.source_channel,
+            source_chat_id=payload.source_chat_id,
+        )
+    except Exception:
+        # Memory extraction triggering must not block chat.
+        pass
     history = [turn.model_dump() for turn in payload.history]
 
     async def event_stream():

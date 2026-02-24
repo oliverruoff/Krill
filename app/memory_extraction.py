@@ -77,7 +77,7 @@ async def _extraction_worker_loop() -> None:
         try:
             await run_memory_extraction(
                 trigger_count=_to_int(payload.get("trigger_count"), 0),
-                interval=_to_int(payload.get("interval"), 25),
+                interval=_to_int(payload.get("interval"), 10),
                 source_channel=str(payload.get("source_channel", "")),
                 source_chat_id=str(payload.get("source_chat_id", "")),
             )

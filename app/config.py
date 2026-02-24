@@ -91,7 +91,7 @@ class Settings(BaseModel):
     integration_configs: dict[str, IntegrationConfig] = Field(default_factory=dict)
     tool_max_recursion: int = Field(default=6, ge=1, le=20)
     tool_timeout_seconds: int = Field(default=45, ge=5, le=300)
-    memory_extraction_interval: int = Field(default=25, ge=1, le=500)
+    memory_extraction_interval: int = Field(default=10, ge=1, le=500)
     user_message_count: int = Field(default=0, ge=0)
     daily_token_usage: list[DailyTokenUsage] = Field(default_factory=list)
     active_chat_id: str = ""
@@ -129,7 +129,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           active_chat_id TEXT NOT NULL DEFAULT '',
           tool_max_recursion INTEGER NOT NULL DEFAULT 6,
           tool_timeout_seconds INTEGER NOT NULL DEFAULT 45,
-          memory_extraction_interval INTEGER NOT NULL DEFAULT 25,
+          memory_extraction_interval INTEGER NOT NULL DEFAULT 10,
           user_message_count INTEGER NOT NULL DEFAULT 0
         );
 
@@ -248,7 +248,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_conversation_turns_created ON conversation_turns(created_at DESC);
     """)
 
-    _ensure_settings_core_column(conn, "memory_extraction_interval", "INTEGER NOT NULL DEFAULT 25")
+    _ensure_settings_core_column(conn, "memory_extraction_interval", "INTEGER NOT NULL DEFAULT 10")
     _ensure_settings_core_column(conn, "user_message_count", "INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
@@ -575,7 +575,7 @@ def _register_user_message_event_sync() -> tuple[int, int, bool]:
                 "SELECT user_message_count, memory_extraction_interval FROM settings_core WHERE id = 1"
             ).fetchone()
         current_count = int(row["user_message_count"] if row else 0)
-        interval = int(row["memory_extraction_interval"] if row else 25)
+        interval = int(row["memory_extraction_interval"] if row else 10)
         safe_interval = max(1, interval)
         next_count = max(0, current_count) + 1
         conn.execute("UPDATE settings_core SET user_message_count = ? WHERE id = 1", (next_count,))

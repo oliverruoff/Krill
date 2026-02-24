@@ -9,11 +9,13 @@
   </head>
   <body class="gateway-page">
     <main class="gateway-shell">
-      <button type="button" id="mobile-left-drawer-handle" class="mobile-drawer-handle mobile-drawer-handle-left" aria-label="Open chats and model panel">Chats</button>
-      <button type="button" id="mobile-right-drawer-handle" class="mobile-drawer-handle mobile-drawer-handle-right" aria-label="Open tools and integrations panel">Tools</button>
       <div id="mobile-drawer-backdrop" class="mobile-drawer-backdrop hidden" aria-hidden="true"></div>
 
       <header class="gateway-topbar">
+        <button type="button" id="mobile-left-drawer-handle" class="mobile-drawer-handle mobile-drawer-handle-left" aria-label="Open chats and model panel">
+          <span class="mobile-drawer-handle-icon" aria-hidden="true">≡</span>
+          <span class="mobile-drawer-handle-text">Chats</span>
+        </button>
         <div class="mobile-brand-row">
           <img src="/static/img/krill_icon.png" alt="Krill" class="gateway-icon" />
           <p id="mobile-assistant-name" class="mobile-assistant-name">Assistant</p>
@@ -39,13 +41,17 @@
         <div class="menu-wrap">
           <button type="button" id="menu-btn" class="icon-btn" aria-expanded="false" aria-controls="menu-popover" aria-label="Open menu">&#9881;</button>
           <div id="menu-popover" class="menu-popover hidden" role="menu">
-            <button type="button" id="memory-management-btn" class="menu-item menu-item-button" role="menuitem">Memory Management</button>
-            <button type="button" id="short-term-memory-btn" class="menu-item menu-item-button" role="menuitem">Short Term Memory</button>
-            <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem">Braindump</a>
-            <button type="button" id="brain-view-btn" class="menu-item menu-item-button" role="menuitem">View Brain</button>
-            <a href="/setup" class="menu-item" role="menuitem">Settings</a>
+            <button type="button" id="memory-management-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◌</span>Memory Management</button>
+            <button type="button" id="short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
+            <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
+            <button type="button" id="brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
+            <a href="/setup" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>
           </div>
         </div>
+        <button type="button" id="mobile-right-drawer-handle" class="mobile-drawer-handle mobile-drawer-handle-right" aria-label="Open tools and integrations panel">
+          <span class="mobile-drawer-handle-icon" aria-hidden="true">▦</span>
+          <span class="mobile-drawer-handle-text">Tools</span>
+        </button>
       </header>
 
       <div class="gateway-body">

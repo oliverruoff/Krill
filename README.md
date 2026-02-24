@@ -101,7 +101,7 @@ Advanced controls (setup -> Advanced Settings):
 
 - max tool recursion
 - tool timeout in seconds
-- memory extraction interval (defaults to 25 user messages)
+- memory extraction interval (defaults to 10 user messages)
 
 ### 5) API + Streaming
 

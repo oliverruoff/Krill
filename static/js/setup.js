@@ -60,7 +60,7 @@ const state = {
   activeProviderId: "",
   toolMaxRecursion: 6,
   toolTimeoutSeconds: 45,
-  memoryExtractionInterval: 25,
+  memoryExtractionInterval: 10,
   setupCompleted: false,
   initialSetupSnapshot: "",
   toastTimerId: null,
@@ -390,7 +390,7 @@ function removeCoreMemoryByIndex(indexValue) {
 function createSetupSnapshot() {
   const maxRecursion = clampInteger(fields.toolMaxRecursion.value, 1, 20, state.toolMaxRecursion || 6);
   const timeoutSeconds = clampInteger(fields.toolTimeoutSeconds.value, 5, 300, state.toolTimeoutSeconds || 45);
-  const extractionInterval = clampInteger(fields.memoryExtractionInterval.value, 1, 500, state.memoryExtractionInterval || 25);
+  const extractionInterval = clampInteger(fields.memoryExtractionInterval.value, 1, 500, state.memoryExtractionInterval || 10);
   const snapshot = {
     bot_name: fields.botName.value,
     system_prompt: fields.systemPrompt.value,
@@ -427,7 +427,7 @@ function clampInteger(value, min, max, fallback) {
 function buildPayload() {
   const maxRecursion = clampInteger(fields.toolMaxRecursion.value, 1, 20, 6);
   const timeoutSeconds = clampInteger(fields.toolTimeoutSeconds.value, 5, 300, 45);
-  const extractionInterval = clampInteger(fields.memoryExtractionInterval.value, 1, 500, 25);
+  const extractionInterval = clampInteger(fields.memoryExtractionInterval.value, 1, 500, 10);
   fields.toolMaxRecursion.value = String(maxRecursion);
   fields.toolTimeoutSeconds.value = String(timeoutSeconds);
   fields.memoryExtractionInterval.value = String(extractionInterval);
@@ -554,7 +554,7 @@ async function loadPage() {
     state.toolTimeoutSeconds = Number.isFinite(Number(settings.tool_timeout_seconds)) ? Number(settings.tool_timeout_seconds) : 45;
     state.memoryExtractionInterval = Number.isFinite(Number(settings.memory_extraction_interval))
       ? Number(settings.memory_extraction_interval)
-      : 25;
+      : 10;
     fields.toolMaxRecursion.value = String(Math.max(1, Math.min(20, state.toolMaxRecursion)));
     fields.toolTimeoutSeconds.value = String(Math.max(5, Math.min(300, state.toolTimeoutSeconds)));
     fields.memoryExtractionInterval.value = String(Math.max(1, Math.min(500, state.memoryExtractionInterval)));

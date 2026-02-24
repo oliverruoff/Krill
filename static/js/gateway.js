@@ -5,8 +5,8 @@
 
 const CHAT_TITLE_MAX_LENGTH = 24;
 const EDITABLE_CHAT_TITLE_MAX_LENGTH = 24;
-const CHAT_SYNC_INTERVAL_MS = 3000;
-const INTEGRATION_STATUS_SYNC_INTERVAL_MS = 3000;
+const CHAT_SYNC_INTERVAL_MS = 5000;
+const INTEGRATION_STATUS_SYNC_INTERVAL_MS = 8000;
 const RUNTIME_CONTEXT_SYSTEM_TYPE = "runtime_context_seed";
 
 const chatForm = document.getElementById("chat-form");
@@ -1729,19 +1729,6 @@ async function persistSettings(nextSettings) {
   return response.json();
 }
 
-async function registerUserMessageForMemory(sourceChannel, sourceChatId) {
-  const response = await fetch("/api/memory/user-message", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source_channel: sourceChannel, source_chat_id: sourceChatId || "" }),
-  });
-  if (!response.ok) {
-    return false;
-  }
-  const payload = await response.json();
-  return Boolean(payload?.triggered);
-}
-
 async function registerCompletedTurnForMemory(sourceChannel, sourceChatId, userMessage, assistantMessage) {
   const response = await fetch("/api/memory/turn-complete", {
     method: "POST",
@@ -3357,6 +3344,8 @@ async function executeQueuedJob(chat, job, runtime) {
         api_key: job.snapshot.apiKey,
         bot_name: job.snapshot.botName,
         system_prompt: job.snapshot.systemPrompt,
+        source_channel: "gateway",
+        source_chat_id: chat.id,
       }),
     });
 
@@ -3524,13 +3513,6 @@ async function sendMessage(event) {
   }
 
   ensureRuntimeContextSeed(chat);
-  registerUserMessageForMemory("gateway", chat.id)
-    .then((triggered) => {
-      if (triggered) {
-        setStatus("Identifying memories in background...");
-      }
-    })
-    .catch(() => {});
   const snapshot = buildQueueSnapshot(chat);
   const requestId = createChatId();
   const timestamp = createTimestamp();
