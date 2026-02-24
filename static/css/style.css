@@ -224,6 +224,16 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.outline-btn {
+  color: var(--accent-strong);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent-strong) 55%, #ffffff 45%);
+}
+
+.outline-btn:hover {
+  background: color-mix(in srgb, var(--accent-strong) 10%, #ffffff 90%);
+}
+
 .button-link {
   margin-top: 0.4rem;
   border: 0;
