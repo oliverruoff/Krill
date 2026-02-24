@@ -500,6 +500,18 @@ button:disabled {
   box-shadow: 0 10px 24px rgba(18, 32, 51, 0.3);
 }
 
+.app-version {
+  position: fixed;
+  right: 0.65rem;
+  bottom: 0.35rem;
+  margin: 0;
+  font-size: 0.68rem;
+  color: #8ea0b7;
+  letter-spacing: 0.02em;
+  z-index: 5;
+  pointer-events: none;
+}
+
 @media (max-width: 640px) {
   .card {
     padding: 1rem;

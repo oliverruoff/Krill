@@ -49,6 +49,7 @@ from .memory_extraction import (
     stop_memory_extraction_worker,
 )
 from .providers import get_provider, get_provider_options, is_supported_provider
+from .version import APP_VERSION
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -263,6 +264,11 @@ async def get_braindump_view() -> dict[str, object]:
 @app.get("/api/settings", response_model=Settings)
 async def get_settings() -> Settings:
     return await load_settings()
+
+
+@app.get("/api/version")
+async def get_version() -> dict[str, str]:
+    return {"version": APP_VERSION}
 
 
 @app.get("/api/chat/state", response_model=ChatStateResponse)

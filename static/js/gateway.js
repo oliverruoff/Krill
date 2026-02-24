@@ -27,6 +27,7 @@ const assistantMetaNode = document.getElementById("assistant-meta");
 const dailyTokenUsageNode = document.getElementById("daily-token-usage");
 const telegramStatusNode = document.getElementById("telegram-status");
 const shortTermMemoryStatusNode = document.getElementById("short-term-memory-status");
+const appVersionNode = document.getElementById("app-version");
 const headerProviderSelect = document.getElementById("header-provider-select");
 const headerModelSelect = document.getElementById("header-model-select");
 const compactButton = document.getElementById("compact-btn");
@@ -1226,6 +1227,26 @@ function updateShortTermMemoryBadge() {
   const suffix = state.shortTermMemoryExtracting ? " - identifying..." : "";
   shortTermMemoryStatusNode.textContent = `Short Term Memory: ${formatNumber(pending)} pending${suffix}`;
   shortTermMemoryStatusNode.classList.toggle("assistant-meta-alert", pending > 0);
+}
+
+async function loadAppVersion() {
+  if (!(appVersionNode instanceof HTMLElement)) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/version", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    const version = typeof payload?.version === "string" ? payload.version.trim() : "";
+    if (!version) {
+      return;
+    }
+    appVersionNode.textContent = `v${version}`;
+  } catch (error) {
+    // Best-effort display only.
+  }
 }
 
 function syncTelegramFlagsFromIntegrationConfig() {
@@ -2642,6 +2663,7 @@ function normalizeIncomingChats(rawChats) {
 
 async function loadGatewayMeta() {
   try {
+    loadAppVersion();
     const [providersResponse, settingsResponse, mcpsResponse, integrationsResponse] = await Promise.all([
       fetch("/api/providers"),
       fetch("/api/settings"),

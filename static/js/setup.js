@@ -43,6 +43,7 @@ const fields = {
   brainTableTitle: document.getElementById("brain-table-title"),
   brainTableColumns: document.getElementById("brain-table-columns"),
   brainTableView: document.getElementById("brain-table-view"),
+  appVersionNode: document.getElementById("app-version"),
 };
 
 const state = {
@@ -518,6 +519,7 @@ function setModeFromSettings() {
 
 async function loadPage() {
   try {
+    loadAppVersion();
     const [providersResponse, settingsResponse] = await Promise.all([
       fetch("/api/providers"),
       fetch("/api/settings"),
@@ -572,6 +574,26 @@ async function loadPage() {
     }
   } catch (error) {
     setStatus(error.message, true);
+  }
+}
+
+async function loadAppVersion() {
+  if (!(fields.appVersionNode instanceof HTMLElement)) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/version", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    const version = typeof payload?.version === "string" ? payload.version.trim() : "";
+    if (!version) {
+      return;
+    }
+    fields.appVersionNode.textContent = `v${version}`;
+  } catch (error) {
+    // Best-effort display.
   }
 }
 
