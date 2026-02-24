@@ -90,14 +90,41 @@
 
           <details class="advanced-settings">
             <summary>Advanced Settings</summary>
-            <label for="tool_max_recursion">Max tool recursion</label>
+            <label for="tool_max_recursion" class="setting-label-with-help">
+              Max tool recursion
+              <span
+                class="inline-help"
+                tabindex="0"
+                role="note"
+                aria-label="How many chained tool calls Krill can make in one response before it must stop and answer."
+                data-tooltip="How many chained tool calls Krill can make in one response before it must stop and answer."
+              >i</span>
+            </label>
             <input id="tool_max_recursion" type="number" min="1" max="20" value="6" />
 
-            <label for="tool_timeout_seconds">Tool timeout (seconds)</label>
+            <label for="tool_timeout_seconds" class="setting-label-with-help">
+              Tool timeout (seconds)
+              <span
+                class="inline-help"
+                tabindex="0"
+                role="note"
+                aria-label="Maximum time a single tool call can run before it is cancelled as timed out."
+                data-tooltip="Maximum time a single tool call can run before it is cancelled as timed out."
+              >i</span>
+            </label>
             <input id="tool_timeout_seconds" type="number" min="5" max="300" value="45" />
 
-            <label for="memory_extraction_interval">Memory extraction interval (user messages)</label>
-            <input id="memory_extraction_interval" type="number" min="1" max="500" value="25" />
+            <label for="memory_extraction_interval" class="setting-label-with-help">
+              Memory extraction interval (user messages)
+              <span
+                class="inline-help"
+                tabindex="0"
+                role="note"
+                aria-label="After every N user messages, Krill scans recent conversation turns and proposes new short-term memories."
+                data-tooltip="After every N user messages, Krill scans recent conversation turns and proposes new short-term memories."
+              >i</span>
+            </label>
+            <input id="memory_extraction_interval" type="number" min="1" max="500" value="10" />
 
             <button type="button" id="view-brain-btn" class="secondary">View Brain</button>
             <input id="setup_braindump_file" class="hidden" type="file" accept=".db" />

@@ -435,6 +435,58 @@ button:disabled {
   font-weight: 700;
 }
 
+.setting-label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.inline-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid #b8c6db;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #4d5b6f;
+  background: #f4f8ff;
+  cursor: help;
+}
+
+.inline-help::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 0.35rem);
+  transform: translateX(-50%);
+  width: min(280px, 70vw);
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgba(18, 32, 51, 0.14);
+  color: #3d4c61;
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1.35;
+  z-index: 30;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.inline-help:hover::after,
+.inline-help:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
 .dropzone {
   border: 1px dashed #a9bbd8;
   border-radius: 10px;
