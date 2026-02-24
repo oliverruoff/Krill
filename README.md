@@ -5,7 +5,7 @@
 # Krill
 Hi, I am **Krill** - your local AI gateway and tool-using coding companion.
 
-Think of me as the compact, practical sibling: I keep your data in one place, run locally, and help with real tasks. My bigger brother **Open Claw** may be louder at parties, but I keep the workshop clean and the `braindump.json` tidy.
+Think of me as the compact, practical sibling: I keep your data in one place, run locally, and help with real tasks. My bigger brother **Open Claw** may be louder at parties, but I keep the workshop clean and the `braindump.db` tidy.
 
 ## Gateway
 
@@ -30,9 +30,9 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 
 ## How Krill Works (Technical)
 
-### 1) Single Source of Truth: `braindump.json`
+### 1) Single Source of Truth: `braindump.db`
 
-Krill persists runtime state in `data/braindump.json`, including:
+Krill persists runtime state in a normalized SQLite database at `data/braindump.db`, including:
 
 - setup + provider settings
 - core and normal memories
@@ -43,7 +43,7 @@ Krill persists runtime state in `data/braindump.json`, including:
 
 Because all important runtime state is in one file, backup/restore is simple:
 
-- backup: copy `data/braindump.json`
+- backup: download `braindump.db` via Gateway menu or copy `data/braindump.db`
 - restore: replace file or import through setup UI
 
 ### 2) Providers (LLM layer)
@@ -78,7 +78,7 @@ Telegram integration notes:
 - in group chats, Krill responds only to explicit mentions/replies to the bot
 - non-owner messages are silently ignored
 - Telegram chat sessions are ephemeral and isolated from Gateway chats
-- Telegram chat history is not written to `braindump.json`
+- Telegram chat history is not written to `braindump.db`
 
 ### 4) Orchestrator (reason + act loop)
 
@@ -126,7 +126,7 @@ Exact message workflow (Telegram):
 4. Worker calls shared engine `generate_chat_response(...)`
 5. Shared engine uses the same runtime system prompt composition and `generate_with_tools(...)` path as Gateway
 6. Worker appends assistant result to Telegram in-memory chat and replies via Telegram Bot API
-7. Telegram chat history is not written to Gateway chats or `braindump.json`
+7. Telegram chat history is not written to Gateway chats or `braindump.db`
 
 SSE events include:
 
@@ -138,7 +138,7 @@ SSE events include:
 ## Current UI Flow
 
 ### Init Screen
-- start from scratch or from a backuped braindump.json
+- start from scratch or from a backed up braindump.db
 ![Krill Init Screen](static/img/init_screenshot.png)
 
 - Setup first, then Gateway

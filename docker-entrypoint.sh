@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-TARGET_PATH="${KRILL_BRAINDUMP_PATH:-/app/data/braindump.json}"
+TARGET_PATH="${KRILL_BRAINDUMP_PATH:-/app/data/braindump.db}"
 TARGET_DIR="$(dirname "$TARGET_PATH")"
-BOOTSTRAP_PATH="${KRILL_BOOTSTRAP_PATH:-/bootstrap/braindump.json}"
+BOOTSTRAP_PATH="${KRILL_BOOTSTRAP_PATH:-/bootstrap/braindump.db}"
 
 mkdir -p "$TARGET_DIR"
 

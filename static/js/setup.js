@@ -545,7 +545,7 @@ function openFilePicker() {
 
 async function importBraindumpFile(file) {
   if (!file) {
-    setStatus("Please choose a braindump.json file.", true);
+    setStatus("Please choose a braindump.db file.", true);
     return;
   }
 
@@ -553,14 +553,12 @@ async function importBraindumpFile(file) {
   setStatus("Importing braindump...");
 
   try {
-    const text = await file.text();
-    const payload = JSON.parse(text);
-    payload.setup_completed = true;
+    const formData = new FormData();
+    formData.append("file", file);
 
     const response = await fetch("/api/braindump/import", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: formData,
     });
 
     if (!response.ok) {
@@ -583,7 +581,7 @@ async function importBraindumpFile(file) {
       window.location.href = "/gateway";
     }, 800);
   } catch (error) {
-    const message = error.message || "Invalid braindump.json file.";
+    const message = error.message || "Invalid braindump.db file.";
     setStatus(message, true);
     showToast(message);
   } finally {

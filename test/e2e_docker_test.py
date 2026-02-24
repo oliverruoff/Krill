@@ -360,25 +360,44 @@ def _persist_chat_to_settings(base_url: str, assistant_text: str) -> None:
     _ok("Chat persisted")
 
 
-def _download_braindump(base_url: str, output_path: Path) -> dict[str, Any]:
+def _download_braindump(base_url: str, output_path: Path) -> bytes:
     _step("Downloading braindump export")
     payload = _http_bytes("GET", f"{base_url}/api/braindump/download")
     output_path.write_bytes(payload)
-    try:
-        parsed = json.loads(payload.decode("utf-8"))
-    except Exception as exc:  # noqa: BLE001
-        raise E2EFailure("Downloaded braindump is not valid JSON") from exc
-    if not isinstance(parsed, dict):
-        raise E2EFailure("Downloaded braindump is not a JSON object")
+    if not payload.startswith(b"SQLite format 3\0"):
+        raise E2EFailure("Downloaded braindump is not a valid SQLite database")
     _ok(f"Braindump downloaded to {output_path}")
-    return parsed
+    return payload
 
 
-def _import_braindump(base_url: str, braindump: dict[str, Any]) -> None:
+def _import_braindump(base_url: str, braindump_bytes: bytes) -> None:
     _step("Importing braindump into fresh instance")
-    imported = _http_json("POST", f"{base_url}/api/braindump/import", braindump)
-    if not isinstance(imported, dict):
-        raise E2EFailure("Braindump import returned invalid payload")
+    
+    boundary = f"----KrillE2E{uuid4().hex}"
+    parts = [
+        f"--{boundary}",
+        'Content-Disposition: form-data; name="file"; filename="braindump.db"',
+        "Content-Type: application/x-sqlite3",
+        "",
+        "",
+    ]
+    body = "\r\n".join(parts).encode("utf-8") + braindump_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Content-Length": str(len(body)),
+    }
+    
+    req = request.Request(f"{base_url}/api/braindump/import", data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=30) as response:
+            resp_body = response.read().decode("utf-8")
+            result = json.loads(resp_body)
+            if not result.get("ok"):
+                raise E2EFailure(f"Import failed: {resp_body}")
+    except Exception as exc:
+        raise E2EFailure(f"Import failed: {exc}")
+        
     _ok("Braindump imported")
 
 
@@ -444,7 +463,7 @@ def main() -> int:
         env_file = (repo_root / env_file).resolve()
 
     temp_dir_path = Path(tempfile.mkdtemp(prefix="krill-e2e-"))
-    exported_braindump_path = temp_dir_path / "braindump-export.json"
+    exported_braindump_path = temp_dir_path / "braindump-export.db"
 
     container_a = f"krill-e2e-a-{uuid4().hex[:8]}"
     container_b = f"krill-e2e-b-{uuid4().hex[:8]}"
@@ -469,16 +488,16 @@ def main() -> int:
             base_url_a,
             args.model,
             api_key,
-            str(settings.get("bot_name", "KrillE2E")),
-            str(settings.get("system_prompt", "")),
+            str(settings.get("bot_name") or "KrillE2E"),
+            str(settings.get("system_prompt") or ""),
         )
 
         _persist_chat_to_settings(base_url_a, assistant_text)
-        exported = _download_braindump(base_url_a, exported_braindump_path)
+        exported_bytes = _download_braindump(base_url_a, exported_braindump_path)
 
         base_url_b = _start_container(args.image, container_b)
         _wait_for_ready(base_url_b)
-        _import_braindump(base_url_b, exported)
+        _import_braindump(base_url_b, exported_bytes)
         _validate_restored_chat(base_url_b)
 
         print("\n[PASS] End-to-end Docker API test completed successfully.")

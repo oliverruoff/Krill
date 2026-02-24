@@ -4,7 +4,7 @@ Operational guide for agentic coding tools working in `Krill`.
 ## 1) Project Snapshot
 - Stack: Python 3.11+, FastAPI, Uvicorn, Pydantic, vanilla HTML/CSS/JS.
 - Entrypoint: `app/main.py`.
-- Core persisted state: `data/braindump.json`.
+- Core persisted state: `data/braindump.db`.
 - Product: setup flow + gateway chat UI + provider/tool orchestration + optional integrations.
 
 ## 2) Architecture Map
@@ -128,10 +128,10 @@ pytest -q
 - Log unexpected backend exceptions with context.
 
 ## 8) Persistence and State Rules
-- `data/braindump.json` is the source of truth for core app settings/state.
+- `data/braindump.db` is the source of truth for core app settings/state.
 - Use `load_settings()` / `save_settings()` helpers; do not bypass them.
-- Settings I/O is atomic and locked; keep that behavior intact.
-- Any new persisted field requires normalization support in `_normalize_legacy_settings`.
+- Settings I/O is locked; keep that behavior intact.
+- Any new persisted field requires schema support in `app/config.py`.
 - Telegram chat sessions are intentionally ephemeral and must not be written to `settings.chats`.
 - Telegram persisted state is limited (owner binding + update offset + integration config).
 

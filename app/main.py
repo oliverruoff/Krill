@@ -3,16 +3,18 @@
 import asyncio
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .chat_engine import generate_chat_response
-from .config import BRAINDUMP_PATH, IntegrationConfig, McpConfig, Settings, ensure_settings_file, load_settings, save_settings
+from .config import BRAINDUMP_PATH, IntegrationConfig, McpConfig, Settings, ensure_settings_file, load_settings, save_settings, create_braindump_snapshot, import_braindump_db
 from .integrations import (
     get_integration,
     get_integration_options,
@@ -169,10 +171,45 @@ async def read_gateway():
     return FileResponse(STATIC_DIR / "gateway.html")
 
 
-@app.get("/api/braindump/download", response_class=FileResponse)
-async def download_braindump() -> FileResponse:
-    await ensure_settings_file()
-    return FileResponse(BRAINDUMP_PATH, media_type="application/json", filename="braindump.json")
+@app.get("/api/braindump/download")
+async def download_braindump(background_tasks: BackgroundTasks):
+    # We create a temporary snapshot to ensure consistency and avoid locking the main DB
+    fd, tmp_path_str = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    tmp_path = Path(tmp_path_str)
+    
+    try:
+        await create_braindump_snapshot(tmp_path)
+        # Note: In a real production app we'd need a cleaner way to delete this temp file after send.
+        # For Krill, we'll return it and let the OS/Task handle it if possible, 
+        # but FileResponse doesn't delete automatically.
+        background_tasks.add_task(tmp_path.unlink, missing_ok=True)
+        return FileResponse(
+            tmp_path, 
+            media_type="application/x-sqlite3", 
+            filename="braindump.db",
+            background=background_tasks,
+        )
+    except Exception as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Download failed: {exc}")
+
+
+@app.post("/api/braindump/import")
+async def import_braindump(file: UploadFile = File(...)):
+    fd, tmp_path_str = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    tmp_path = Path(tmp_path_str)
+    
+    try:
+        content = await file.read()
+        tmp_path.write_bytes(content)
+        await import_braindump_db(tmp_path)
+        return {"ok": True}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Import failed: {exc}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @app.get("/api/settings", response_model=Settings)
@@ -199,13 +236,6 @@ async def get_providers() -> list[dict[str, object]]:
 async def update_settings(settings: Settings) -> Settings:
     _validate_settings_payload(settings)
     return await save_settings(settings)
-
-
-@app.post("/api/braindump/import", response_model=Settings)
-async def import_braindump(settings: Settings) -> Settings:
-    normalized = settings.model_copy(update={"setup_completed": True})
-    _validate_settings_payload(normalized)
-    return await save_settings(normalized)
 
 
 @app.post("/api/providers/verify", response_model=VerifyProviderResponse)
