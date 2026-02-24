@@ -6,7 +6,7 @@ from typing import Any, Awaitable, Callable, Sequence, TypedDict, cast
 
 from app.config import McpConfig, Settings
 from app.mcps.base import MCPPlugin, McpConfigField
-from app.mcps.registry import get_mcp
+from app.mcps.registry import get_all_mcps
 from app.providers.base import LLMProvider
 
 
@@ -122,6 +122,7 @@ async def generate_with_tools(
 
         if not isinstance(mcp_id, str) or not isinstance(tool_id, str) or not isinstance(arguments, dict):
             raise RuntimeError("MCP hard error: Tool planner returned invalid call payload.")
+        tool_arguments = cast(dict[str, object], arguments)
 
         tool_entry = next((entry for entry in enabled_tools if entry["mcp_id"] == mcp_id and entry["tool_id"] == tool_id), None)
         if tool_entry is None:
@@ -140,14 +141,14 @@ async def generate_with_tools(
         tool_call_payload = {
             "mcp_id": mcp_id,
             "tool_id": tool_id,
-            "arguments": arguments,
+            "arguments": tool_arguments,
             "step": step_index,
         }
         await trace("tool_call", json.dumps(tool_call_payload, ensure_ascii=True))
 
         try:
             tool_result = await asyncio.wait_for(
-                plugin.call_tool(tool_id, arguments, config.params),
+                plugin.call_tool(tool_id, tool_arguments, config.params),
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
@@ -193,13 +194,16 @@ def _sum_tokens(*token_values: int | None) -> int | None:
 
 def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
+    all_mcps = get_all_mcps()
 
-    for mcp_id, config in settings.mcp_configs.items():
+    for mcp_id, plugin in all_mcps.items():
+        raw_config = settings.mcp_configs.get(mcp_id)
+        if raw_config is None:
+            config = McpConfig(enabled=bool(getattr(plugin, "default_enabled", False)), params={})
+        else:
+            config = raw_config
+
         if not config.enabled:
-            continue
-
-        plugin = get_mcp(mcp_id)
-        if plugin is None:
             continue
 
         if _missing_required_params(plugin.config_fields, config):

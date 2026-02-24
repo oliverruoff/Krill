@@ -4,12 +4,14 @@ from .base import MCPPlugin, McpConfigField, McpToolSpec
 from .brave_search import BraveSearchMCP
 from .git_ops import GitOpsMCP
 from .local_files import LocalFilesMCP
+from .memory_access import MemoryAccessMCP
 
 
 _MCPS: dict[str, MCPPlugin] = {
     "brave_search": BraveSearchMCP(),
     "git_ops": GitOpsMCP(),
     "local_files": LocalFilesMCP(),
+    "memory_access": MemoryAccessMCP(),
 }
 
 
@@ -29,6 +31,7 @@ def get_mcp_options() -> list[dict[str, object]]:
                 "id": plugin.mcp_id,
                 "label": plugin.display_name,
                 "description": plugin.description,
+                "default_enabled": bool(getattr(plugin, "default_enabled", False)),
                 "config_fields": [field.model_dump() for field in plugin.config_fields],
                 "tools": [tool.model_dump() for tool in plugin.tool_specs()],
             }
@@ -49,3 +52,7 @@ def get_mcp_tool_specs(mcp_id: str) -> list[McpToolSpec]:
     if plugin is None:
         return []
     return plugin.tool_specs()
+
+
+def get_all_mcps() -> dict[str, MCPPlugin]:
+    return dict(_MCPS)

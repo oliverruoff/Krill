@@ -2378,13 +2378,18 @@ function normalizeIncomingMcpConfigs(rawConfigs) {
   return normalized;
 }
 
+function getMcpDefaultEnabled(mcpId) {
+  const mcp = Array.isArray(state.mcps) ? state.mcps.find((entry) => entry?.id === mcpId) : null;
+  return Boolean(mcp?.default_enabled);
+}
+
 function getMcpConfig(mcpId) {
   const config = state.mcpConfigs[mcpId];
   if (config && typeof config === "object") {
     return config;
   }
 
-  return { enabled: false, params: {} };
+  return { enabled: getMcpDefaultEnabled(mcpId), params: {} };
 }
 
 async function persistMcpConfigsToSettings() {
@@ -3667,7 +3672,7 @@ async function stopActiveChatExecution() {
 
 function ensureMcpConfig(mcpId) {
   if (!state.mcpConfigs[mcpId] || typeof state.mcpConfigs[mcpId] !== "object") {
-    state.mcpConfigs[mcpId] = { enabled: false, params: {} };
+    state.mcpConfigs[mcpId] = { enabled: getMcpDefaultEnabled(mcpId), params: {} };
   }
 
   if (!state.mcpConfigs[mcpId].params || typeof state.mcpConfigs[mcpId].params !== "object") {
