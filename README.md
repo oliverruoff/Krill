@@ -100,6 +100,7 @@ Advanced controls (setup -> Advanced Settings):
 
 - max tool recursion
 - tool timeout in seconds
+- memory extraction interval (defaults to 25 user messages)
 
 ### 5) API + Streaming
 
@@ -143,9 +144,10 @@ SSE events include:
 
 - Setup first, then Gateway
 - Setup supports Core Memories for persistent personal context
-- Setup Advanced Settings includes "View Brain" to inspect SQLite tables/columns/rows for debugging (with masked secrets by default)
+- Setup Advanced Settings includes "View Brain" to inspect SQLite tables/columns/rows for debugging
 - Gateway has three panes: chats (left), chat view (center), tools/integrations (right)
 - Gateway menu includes Memory Management for searchable core/normal memory editing
+- Gateway menu includes Short Term Memory for confirming/declining auto-detected memory suggestions
 - Chat execution supports per-chat queueing and cross-chat parallel background processing
 - Assistant/tool progress is visible through system trace messages
 - Tool usage is displayed below assistant responses (`used Tools: ...`)
@@ -223,7 +225,11 @@ The script builds the image, starts fresh containers, configures setup with Gemi
 - `POST /api/reset` -> reset defaults
 - `POST /api/braindump/import` -> full state import
 - `GET /api/braindump/download` -> download full state
-- `GET /api/braindump/view` -> inspect SQLite tables/columns/rows (optional `show_secrets=true`)
+- `GET /api/braindump/view` -> inspect SQLite tables/columns/rows
+- `POST /api/memory/user-message` -> increment global user message counter and trigger extraction checks
+- `POST /api/memory/turn-complete` -> register completed user+assistant turn for extraction context
+- `GET /api/memory/short-term` -> list pending short-term memory suggestions
+- `POST /api/memory/short-term/resolve` -> accept/decline suggestions
 - `POST /api/chat/stream` -> streaming chat + tool orchestration
 - `POST /api/chat/compact` -> compact memory block
 - `GET /api/chat/state` -> chat list + active chat id for near-real-time sync

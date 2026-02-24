@@ -26,6 +26,7 @@ const assistantTitleNode = document.getElementById("assistant-title");
 const assistantMetaNode = document.getElementById("assistant-meta");
 const dailyTokenUsageNode = document.getElementById("daily-token-usage");
 const telegramStatusNode = document.getElementById("telegram-status");
+const shortTermMemoryStatusNode = document.getElementById("short-term-memory-status");
 const headerProviderSelect = document.getElementById("header-provider-select");
 const headerModelSelect = document.getElementById("header-model-select");
 const compactButton = document.getElementById("compact-btn");
@@ -35,6 +36,7 @@ const newChatButton = document.getElementById("new-chat-btn");
 const mcpList = document.getElementById("mcp-list");
 const integrationList = document.getElementById("integration-list");
 const memoryManagementButton = document.getElementById("memory-management-btn");
+const shortTermMemoryButton = document.getElementById("short-term-memory-btn");
 const brainViewButton = document.getElementById("brain-view-btn");
 const memoryModal = document.getElementById("memory-modal");
 const memoryModalBackdrop = document.getElementById("memory-modal-backdrop");
@@ -48,6 +50,12 @@ const brainTableList = document.getElementById("brain-table-list");
 const brainTableTitle = document.getElementById("brain-table-title");
 const brainTableColumns = document.getElementById("brain-table-columns");
 const brainTableView = document.getElementById("brain-table-view");
+const shortTermMemoryModal = document.getElementById("short-term-memory-modal");
+const shortTermMemoryBackdrop = document.getElementById("short-term-memory-backdrop");
+const shortTermMemoryCloseButton = document.getElementById("short-term-memory-close");
+const shortTermMemoryMetaNode = document.getElementById("short-term-memory-meta");
+const shortTermMemoryRefreshButton = document.getElementById("short-term-memory-refresh");
+const shortTermMemoryListNode = document.getElementById("short-term-memory-list");
 const memoryTokenTotalNode = document.getElementById("memory-token-total");
 const coreMemoryTokenCountNode = document.getElementById("core-memory-token-count");
 const normalMemoryTokenCountNode = document.getElementById("normal-memory-token-count");
@@ -89,6 +97,12 @@ const state = {
   chatSyncInFlight: false,
   integrationStatusSyncTimerId: null,
   integrationStatusSyncInFlight: false,
+  shortTermMemorySyncTimerId: null,
+  shortTermMemorySyncInFlight: false,
+  shortTermMemories: [],
+  shortTermMemoryCount: 0,
+  shortTermMemoryLastToastCount: 0,
+  shortTermMemoryExtracting: false,
   lastChatStateSignature: "",
   telegramEnabled: false,
   telegramTokenConfigured: false,
@@ -1204,6 +1218,16 @@ function updateTelegramStatusLabel() {
   telegramStatusNode.textContent = "Telegram: connected";
 }
 
+function updateShortTermMemoryBadge() {
+  if (!(shortTermMemoryStatusNode instanceof HTMLElement)) {
+    return;
+  }
+  const pending = Math.max(0, Number(state.shortTermMemoryCount || 0));
+  const suffix = state.shortTermMemoryExtracting ? " - identifying..." : "";
+  shortTermMemoryStatusNode.textContent = `Short Term Memory: ${formatNumber(pending)} pending${suffix}`;
+  shortTermMemoryStatusNode.classList.toggle("assistant-meta-alert", pending > 0);
+}
+
 function syncTelegramFlagsFromIntegrationConfig() {
   const telegramConfig = getIntegrationConfig("telegram");
   state.telegramEnabled = Boolean(telegramConfig.enabled);
@@ -1464,6 +1488,35 @@ async function persistSettings(nextSettings) {
   return response.json();
 }
 
+async function registerUserMessageForMemory(sourceChannel, sourceChatId) {
+  const response = await fetch("/api/memory/user-message", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source_channel: sourceChannel, source_chat_id: sourceChatId || "" }),
+  });
+  if (!response.ok) {
+    return false;
+  }
+  const payload = await response.json();
+  return Boolean(payload?.triggered);
+}
+
+async function registerCompletedTurnForMemory(sourceChannel, sourceChatId, userMessage, assistantMessage) {
+  const response = await fetch("/api/memory/turn-complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source_channel: sourceChannel,
+      source_chat_id: sourceChatId || "",
+      user_message: userMessage,
+      assistant_message: assistantMessage || "",
+    }),
+  });
+  if (!response.ok) {
+    return;
+  }
+}
+
 async function persistChatsToSettings() {
   if (!state.settings) {
     return;
@@ -1690,6 +1743,219 @@ function closeBrainModal() {
   brainModal.classList.add("hidden");
   if (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden")) {
     document.body.style.overflow = "";
+  }
+}
+
+async function fetchShortTermMemory() {
+  const response = await fetch("/api/memory/short-term", { cache: "no-store" });
+  if (!response.ok) {
+    const detail = await buildHttpErrorDetail(response, "Failed to load short term memory.");
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
+async function resolveShortTermMemory(items) {
+  const response = await fetch("/api/memory/short-term/resolve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  if (!response.ok) {
+    const detail = await buildHttpErrorDetail(response, "Failed to resolve short term memory.");
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
+async function refreshMemoriesFromServer() {
+  const response = await fetch("/api/settings", { cache: "no-store" });
+  if (!response.ok) {
+    const detail = await buildHttpErrorDetail(response, "Failed to refresh memories.");
+    throw new Error(detail);
+  }
+
+  const settings = await response.json();
+  state.settings = settings;
+  state.coreMemories = normalizeIncomingMemories(settings?.core_memories);
+  state.normalMemories = normalizeIncomingMemories(settings?.normal_memories);
+
+  if (memoryModal instanceof HTMLElement && !memoryModal.classList.contains("hidden")) {
+    renderMemoryManagement();
+  }
+}
+
+function renderShortTermMemory() {
+  if (!(shortTermMemoryListNode instanceof HTMLElement)) {
+    return;
+  }
+  shortTermMemoryListNode.innerHTML = "";
+
+  if (!Array.isArray(state.shortTermMemories) || state.shortTermMemories.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "memory-empty";
+    emptyNode.textContent = "No short term memories pending.";
+    shortTermMemoryListNode.appendChild(emptyNode);
+    return;
+  }
+
+  state.shortTermMemories.forEach((item) => {
+    const wrapper = document.createElement("article");
+    wrapper.className = "short-term-item";
+    wrapper.dataset.shortTermId = String(item.id);
+
+    const contentNode = document.createElement("p");
+    contentNode.className = "short-term-item-content";
+    contentNode.textContent = item.content;
+
+    const row = document.createElement("div");
+    row.className = "short-term-item-row";
+
+    const typeSelect = document.createElement("select");
+    typeSelect.className = "short-term-item-type";
+    typeSelect.dataset.shortTermType = "1";
+    typeSelect.dataset.shortTermId = String(item.id);
+
+    ["core", "normal"].forEach((type) => {
+      const option = document.createElement("option");
+      option.value = type;
+      option.textContent = type;
+      typeSelect.appendChild(option);
+    });
+    typeSelect.value = item.memory_type === "core" ? "core" : "normal";
+
+    const actions = document.createElement("div");
+    actions.className = "short-term-item-actions";
+
+    const confirmButton = document.createElement("button");
+    confirmButton.type = "button";
+    confirmButton.className = "short-term-action-btn short-term-action-confirm";
+    confirmButton.dataset.shortTermAction = "accept";
+    confirmButton.dataset.shortTermId = String(item.id);
+    confirmButton.textContent = "Confirm";
+
+    const declineButton = document.createElement("button");
+    declineButton.type = "button";
+    declineButton.className = "short-term-action-btn short-term-action-decline";
+    declineButton.dataset.shortTermAction = "decline";
+    declineButton.dataset.shortTermId = String(item.id);
+    declineButton.textContent = "Decline";
+
+    actions.appendChild(confirmButton);
+    actions.appendChild(declineButton);
+    row.appendChild(typeSelect);
+    row.appendChild(actions);
+    wrapper.appendChild(contentNode);
+    wrapper.appendChild(row);
+    shortTermMemoryListNode.appendChild(wrapper);
+  });
+}
+
+function openShortTermMemoryModal() {
+  if (!(shortTermMemoryModal instanceof HTMLElement)) {
+    return;
+  }
+  shortTermMemoryModal.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  loadShortTermMemory(true);
+}
+
+function closeShortTermMemoryModal() {
+  if (!(shortTermMemoryModal instanceof HTMLElement)) {
+    return;
+  }
+  shortTermMemoryModal.classList.add("hidden");
+  if (
+    (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
+    && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
+  ) {
+    document.body.style.overflow = "";
+  }
+}
+
+async function loadShortTermMemory(renderModal = false) {
+  if (state.shortTermMemorySyncInFlight) {
+    return;
+  }
+  state.shortTermMemorySyncInFlight = true;
+  if (renderModal && shortTermMemoryMetaNode instanceof HTMLElement) {
+    shortTermMemoryMetaNode.textContent = "Loading short term memory...";
+  }
+  const shouldTouchRefreshButton = renderModal
+    || (shortTermMemoryModal instanceof HTMLElement && !shortTermMemoryModal.classList.contains("hidden"));
+  if (shouldTouchRefreshButton && shortTermMemoryRefreshButton instanceof HTMLButtonElement) {
+    shortTermMemoryRefreshButton.disabled = true;
+  }
+
+  try {
+    const payload = await fetchShortTermMemory();
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    state.shortTermMemoryExtracting = Boolean(payload?.extraction?.in_progress);
+    const previousCount = state.shortTermMemoryCount;
+    state.shortTermMemories = items;
+    state.shortTermMemoryCount = Number.isFinite(Number(payload.count)) ? Number(payload.count) : items.length;
+
+    if (state.shortTermMemoryCount > previousCount && state.shortTermMemoryCount > state.shortTermMemoryLastToastCount) {
+      showToast("Memories identified - check Short Term Memory.");
+      state.shortTermMemoryLastToastCount = state.shortTermMemoryCount;
+    }
+
+    updateShortTermMemoryBadge();
+
+    if (shortTermMemoryMetaNode instanceof HTMLElement) {
+      shortTermMemoryMetaNode.textContent = state.shortTermMemoryExtracting
+        ? `${state.shortTermMemoryCount} pending - identifying...`
+        : `${state.shortTermMemoryCount} pending`;
+    }
+    updateShortTermMemoryBadge();
+
+    if (renderModal || (shortTermMemoryModal instanceof HTMLElement && !shortTermMemoryModal.classList.contains("hidden"))) {
+      renderShortTermMemory();
+    }
+  } catch (error) {
+    if (renderModal && shortTermMemoryMetaNode instanceof HTMLElement) {
+      shortTermMemoryMetaNode.textContent = normalizeErrorMessage(error, "Failed to load short term memory.");
+    }
+  } finally {
+    state.shortTermMemorySyncInFlight = false;
+    if (shouldTouchRefreshButton && shortTermMemoryRefreshButton instanceof HTMLButtonElement) {
+      shortTermMemoryRefreshButton.disabled = false;
+    }
+  }
+}
+
+async function handleShortTermAction(action, suggestionId) {
+  const itemId = Number.parseInt(String(suggestionId), 10);
+  if (!Number.isFinite(itemId)) {
+    return;
+  }
+
+  const wrapper = shortTermMemoryListNode instanceof HTMLElement
+    ? shortTermMemoryListNode.querySelector(`[data-short-term-id="${itemId}"]`)
+    : null;
+  const selectNode = wrapper instanceof HTMLElement
+    ? wrapper.querySelector("select[data-short-term-type='1']")
+    : null;
+  const selectedType = selectNode instanceof HTMLSelectElement && selectNode.value === "core" ? "core" : "normal";
+
+  try {
+    await resolveShortTermMemory([{ id: itemId, action, memory_type: selectedType }]);
+    state.shortTermMemories = state.shortTermMemories.filter((entry) => Number(entry.id) !== itemId);
+    state.shortTermMemoryCount = Math.max(0, state.shortTermMemories.length);
+    if (shortTermMemoryMetaNode instanceof HTMLElement) {
+      shortTermMemoryMetaNode.textContent = state.shortTermMemoryExtracting
+        ? `${state.shortTermMemoryCount} pending - identifying...`
+        : `${state.shortTermMemoryCount} pending`;
+    }
+    renderShortTermMemory();
+    if (action === "accept") {
+      await refreshMemoriesFromServer();
+      setStatus("Memory accepted.");
+    } else {
+      setStatus("Memory declined.");
+    }
+  } catch (error) {
+    setStatus(normalizeErrorMessage(error, "Short term memory update failed."), true);
   }
 }
 
@@ -2433,9 +2699,12 @@ async function loadGatewayMeta() {
     syncUsedTokensToContext();
     updateDailyTokenUsageLabel();
     updateTelegramStatusLabel();
+    updateShortTermMemoryBadge();
     refreshLocalChatStateSignature();
     startChatStateSync();
     startIntegrationStatusSync();
+    startShortTermMemorySync();
+    loadShortTermMemory(false);
     syncIntegrationStatus();
     updateComposerState();
     setStatus("Gateway ready.");
@@ -2451,8 +2720,11 @@ async function loadGatewayMeta() {
     updateTokenCounter(0, 0);
     updateDailyTokenUsageLabel();
     updateTelegramStatusLabel();
+    updateShortTermMemoryBadge();
     startChatStateSync();
     startIntegrationStatusSync();
+    startShortTermMemorySync();
+    loadShortTermMemory(false);
     updateComposerState();
     setStatus(error.message, true);
   }
@@ -2537,6 +2809,15 @@ function startIntegrationStatusSync() {
     window.clearInterval(state.integrationStatusSyncTimerId);
   }
   state.integrationStatusSyncTimerId = window.setInterval(syncIntegrationStatus, INTEGRATION_STATUS_SYNC_INTERVAL_MS);
+}
+
+function startShortTermMemorySync() {
+  if (state.shortTermMemorySyncTimerId) {
+    window.clearInterval(state.shortTermMemorySyncTimerId);
+  }
+  state.shortTermMemorySyncTimerId = window.setInterval(() => {
+    loadShortTermMemory(false);
+  }, CHAT_SYNC_INTERVAL_MS);
 }
 
 function toggleMenu(forceOpen) {
@@ -2753,6 +3034,12 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
     setStatus(`Response complete, but chat history was not saved: ${error.message}`, true);
     return;
   }
+
+  const userMessages = Array.isArray(chat.messages)
+    ? chat.messages.filter((message) => message && message.role === "user" && typeof message.content === "string")
+    : [];
+  const lastUserMessage = userMessages.length > 0 ? userMessages[userMessages.length - 1].content : "";
+  registerCompletedTurnForMemory("gateway", chat.id, lastUserMessage, assistantMessage.content || "").catch(() => {});
 
   if (compactResult.compacted) {
     setStatus("Response complete. Memory compacted.");
@@ -2983,6 +3270,13 @@ async function sendMessage(event) {
   }
 
   ensureRuntimeContextSeed(chat);
+  registerUserMessageForMemory("gateway", chat.id)
+    .then((triggered) => {
+      if (triggered) {
+        setStatus("Identifying memories in background...");
+      }
+    })
+    .catch(() => {});
   const snapshot = buildQueueSnapshot(chat);
   const requestId = createChatId();
   const timestamp = createTimestamp();
@@ -3265,6 +3559,13 @@ if (memoryManagementButton instanceof HTMLButtonElement) {
   });
 }
 
+if (shortTermMemoryButton instanceof HTMLButtonElement) {
+  shortTermMemoryButton.addEventListener("click", () => {
+    toggleMenu(false);
+    openShortTermMemoryModal();
+  });
+}
+
 if (brainViewButton instanceof HTMLButtonElement) {
   brainViewButton.addEventListener("click", () => {
     toggleMenu(false);
@@ -3286,6 +3587,36 @@ if (brainModalCloseButton instanceof HTMLButtonElement) {
 
 if (brainModalBackdrop instanceof HTMLElement) {
   brainModalBackdrop.addEventListener("click", closeBrainModal);
+}
+
+if (shortTermMemoryCloseButton instanceof HTMLButtonElement) {
+  shortTermMemoryCloseButton.addEventListener("click", closeShortTermMemoryModal);
+}
+
+if (shortTermMemoryBackdrop instanceof HTMLElement) {
+  shortTermMemoryBackdrop.addEventListener("click", closeShortTermMemoryModal);
+}
+
+if (shortTermMemoryRefreshButton instanceof HTMLButtonElement) {
+  shortTermMemoryRefreshButton.addEventListener("click", async () => {
+    await loadShortTermMemory(true);
+  });
+}
+
+if (shortTermMemoryListNode instanceof HTMLElement) {
+  shortTermMemoryListNode.addEventListener("click", async (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLButtonElement)) {
+      return;
+    }
+
+    const action = target.dataset.shortTermAction;
+    const suggestionId = target.dataset.shortTermId;
+    if (!action || !suggestionId) {
+      return;
+    }
+    await handleShortTermAction(action, suggestionId);
+  });
 }
 
 if (brainRefreshButton instanceof HTMLButtonElement) {
@@ -3477,6 +3808,11 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (shortTermMemoryModal instanceof HTMLElement && !shortTermMemoryModal.classList.contains("hidden")) {
+    closeShortTermMemoryModal();
+    return;
+  }
+
   if (memoryModal instanceof HTMLElement && !memoryModal.classList.contains("hidden")) {
     closeMemoryManagementModal();
   }
@@ -3588,6 +3924,10 @@ window.addEventListener("beforeunload", () => {
   if (state.integrationStatusSyncTimerId) {
     window.clearInterval(state.integrationStatusSyncTimerId);
     state.integrationStatusSyncTimerId = null;
+  }
+  if (state.shortTermMemorySyncTimerId) {
+    window.clearInterval(state.shortTermMemorySyncTimerId);
+    state.shortTermMemorySyncTimerId = null;
   }
 });
 window.addEventListener("load", loadGatewayMeta);

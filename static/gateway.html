@@ -16,6 +16,7 @@
           <p id="assistant-meta" class="assistant-meta">Loading assistant metadata...</p>
           <p id="daily-token-usage" class="assistant-meta assistant-meta-subtle">Today: 0 tokens</p>
           <p id="telegram-status" class="assistant-meta assistant-meta-subtle">Telegram: checking...</p>
+          <p id="short-term-memory-status" class="assistant-meta assistant-meta-subtle">Short Term Memory: 0 pending</p>
         </div>
         <div class="gateway-switchers">
           <label class="switch-field" for="header-provider-select">
@@ -31,8 +32,9 @@
           <button type="button" id="menu-btn" class="icon-btn" aria-expanded="false" aria-controls="menu-popover" aria-label="Open menu">&#9881;</button>
           <div id="menu-popover" class="menu-popover hidden" role="menu">
             <button type="button" id="memory-management-btn" class="menu-item menu-item-button" role="menuitem">Memory Management</button>
+            <button type="button" id="short-term-memory-btn" class="menu-item menu-item-button" role="menuitem">Short Term Memory</button>
             <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem">Braindump</a>
-            <button type="button" id="brain-view-btn" class="menu-item menu-item-button menu-item-plain" role="menuitem">View Brain</button>
+            <button type="button" id="brain-view-btn" class="menu-item menu-item-button" role="menuitem">View Brain</button>
             <a href="/setup" class="menu-item" role="menuitem">Settings</a>
           </div>
         </div>
@@ -160,6 +162,23 @@
             <div id="brain-table-view" class="brain-table-view"></div>
           </section>
         </div>
+      </section>
+    </div>
+
+    <div id="short-term-memory-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="short-term-memory-title">
+      <div id="short-term-memory-backdrop" class="brain-modal-backdrop"></div>
+      <section class="brain-modal-card">
+        <header class="brain-modal-header">
+          <div>
+            <h2 id="short-term-memory-title">Short Term Memory</h2>
+            <p id="short-term-memory-meta" class="brain-modal-meta">Loading...</p>
+          </div>
+          <button type="button" id="short-term-memory-close" class="brain-modal-close" aria-label="Close short term memory">&times;</button>
+        </header>
+        <div class="brain-modal-toolbar">
+          <button type="button" id="short-term-memory-refresh" class="secondary">Refresh</button>
+        </div>
+        <div id="short-term-memory-list" class="brain-table-view"></div>
       </section>
     </div>
 

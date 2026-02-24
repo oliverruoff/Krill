@@ -608,6 +608,11 @@ button:disabled {
   color: #8b98aa;
 }
 
+.assistant-meta-alert {
+  color: color-mix(in srgb, var(--accent-strong) 75%, #ad4500 25%);
+  font-weight: 600;
+}
+
 .menu-wrap {
   position: relative;
 }
@@ -657,6 +662,7 @@ button:disabled {
   padding: 0.45rem 0.5rem;
   border-radius: 8px;
   font-size: 0.9rem;
+  font-weight: 700;
 }
 
 .menu-item:hover {
@@ -669,12 +675,8 @@ button:disabled {
   border: 0;
   background: transparent;
   text-align: left;
-  font-weight: 500;
+  font-weight: 700;
   cursor: pointer;
-}
-
-.menu-item-plain {
-  font-weight: 400;
 }
 
 .memory-modal {
@@ -873,6 +875,67 @@ button:disabled {
   top: 0;
   background: #eff4fb;
   z-index: 1;
+}
+
+.short-term-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  background: #fff;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.short-term-item-content {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+.short-term-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.short-term-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.short-term-item-type {
+  width: auto;
+  min-width: 120px;
+  margin: 0;
+}
+
+.short-term-action-btn {
+  margin: 0;
+  padding: 0.28rem 0.5rem;
+}
+
+.short-term-action-confirm {
+  background: #2f6fd3;
+  border-color: #2a61b8;
+  color: #ffffff;
+}
+
+.short-term-action-confirm:hover {
+  background: #285eb2;
+}
+
+.short-term-action-decline {
+  background: #d64545;
+  border-color: #bd3a3a;
+  color: #ffffff;
+}
+
+.short-term-action-decline:hover {
+  background: #bf3737;
 }
 
 .memory-modal.hidden {

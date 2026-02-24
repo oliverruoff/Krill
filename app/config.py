@@ -91,9 +91,22 @@ class Settings(BaseModel):
     integration_configs: dict[str, IntegrationConfig] = Field(default_factory=dict)
     tool_max_recursion: int = Field(default=6, ge=1, le=20)
     tool_timeout_seconds: int = Field(default=45, ge=5, le=300)
+    memory_extraction_interval: int = Field(default=25, ge=1, le=500)
+    user_message_count: int = Field(default=0, ge=0)
     daily_token_usage: list[DailyTokenUsage] = Field(default_factory=list)
     active_chat_id: str = ""
     telegram_state: TelegramState = Field(default_factory=TelegramState)
+
+
+class ShortTermMemoryItem(BaseModel):
+    id: int
+    content: str
+    memory_type: Literal["core", "normal"]
+    source_channel: str = ""
+    source_chat_id: str = ""
+    source_request_id: str = ""
+    status: Literal["pending", "accepted", "rejected"] = "pending"
+    created_at: str
 
 
 def _get_conn(path: Path) -> sqlite3.Connection:
@@ -115,7 +128,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           active_model_id TEXT NOT NULL DEFAULT '',
           active_chat_id TEXT NOT NULL DEFAULT '',
           tool_max_recursion INTEGER NOT NULL DEFAULT 6,
-          tool_timeout_seconds INTEGER NOT NULL DEFAULT 45
+          tool_timeout_seconds INTEGER NOT NULL DEFAULT 45,
+          memory_extraction_interval INTEGER NOT NULL DEFAULT 25,
+          user_message_count INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS provider_configs (
@@ -208,8 +223,42 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
         INSERT OR IGNORE INTO settings_core (id) VALUES (1);
         INSERT OR IGNORE INTO telegram_state (id) VALUES (1);
+
+        CREATE TABLE IF NOT EXISTS short_term_memories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          content TEXT NOT NULL,
+          memory_type TEXT NOT NULL CHECK (memory_type IN ('core', 'normal')),
+          source_channel TEXT NOT NULL DEFAULT '',
+          source_chat_id TEXT NOT NULL DEFAULT '',
+          source_request_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+          created_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_short_term_memories_status_created
+          ON short_term_memories(status, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS conversation_turns (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source_channel TEXT NOT NULL DEFAULT '',
+          source_chat_id TEXT NOT NULL DEFAULT '',
+          user_message TEXT NOT NULL,
+          assistant_message TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_turns_created ON conversation_turns(created_at DESC);
     """)
+
+    _ensure_settings_core_column(conn, "memory_extraction_interval", "INTEGER NOT NULL DEFAULT 25")
+    _ensure_settings_core_column(conn, "user_message_count", "INTEGER NOT NULL DEFAULT 0")
     conn.commit()
+
+
+def _ensure_settings_core_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
+    rows = conn.execute("PRAGMA table_info(settings_core)").fetchall()
+    existing = {str(row["name"]) for row in rows}
+    if column_name in existing:
+        return
+    conn.execute(f"ALTER TABLE settings_core ADD COLUMN {column_name} {definition}")
 
 
 async def ensure_settings_file() -> None:
@@ -312,6 +361,8 @@ def _load_settings_sync() -> Settings:
             active_chat_id=core["active_chat_id"],
             tool_max_recursion=core["tool_max_recursion"],
             tool_timeout_seconds=core["tool_timeout_seconds"],
+            memory_extraction_interval=core["memory_extraction_interval"],
+            user_message_count=core["user_message_count"],
             provider_configs=providers,
             core_memories=core_memories,
             normal_memories=normal_memories,
@@ -344,12 +395,14 @@ def _save_settings_sync(settings: Settings) -> None:
             UPDATE settings_core SET 
                 bot_name = ?, system_prompt = ?, setup_completed = ?, 
                 active_provider_id = ?, active_model_id = ?, active_chat_id = ?,
-                tool_max_recursion = ?, tool_timeout_seconds = ?
+                tool_max_recursion = ?, tool_timeout_seconds = ?,
+                memory_extraction_interval = ?
             WHERE id = 1
         """, (
             settings.bot_name, settings.system_prompt, int(settings.setup_completed),
             settings.active_provider_id, settings.active_model_id, settings.active_chat_id,
-            settings.tool_max_recursion, settings.tool_timeout_seconds
+            settings.tool_max_recursion, settings.tool_timeout_seconds,
+            settings.memory_extraction_interval
         ))
         
         # 2. Providers
@@ -494,6 +547,309 @@ async def import_braindump_db(source_path: Path) -> None:
             
         # 2. Atomic swap
         await asyncio.to_thread(shutil.copyfile, source_path, BRAINDUMP_PATH)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_memory_text(text: str) -> str:
+    return " ".join(str(text).split()).strip()
+
+
+async def register_user_message_event() -> tuple[int, int, bool]:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_register_user_message_event_sync)
+
+
+def _register_user_message_event_sync() -> tuple[int, int, bool]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute(
+            "SELECT user_message_count, memory_extraction_interval FROM settings_core WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            conn.execute("INSERT OR IGNORE INTO settings_core (id) VALUES (1)")
+            row = conn.execute(
+                "SELECT user_message_count, memory_extraction_interval FROM settings_core WHERE id = 1"
+            ).fetchone()
+        current_count = int(row["user_message_count"] if row else 0)
+        interval = int(row["memory_extraction_interval"] if row else 25)
+        safe_interval = max(1, interval)
+        next_count = max(0, current_count) + 1
+        conn.execute("UPDATE settings_core SET user_message_count = ? WHERE id = 1", (next_count,))
+        conn.commit()
+        return next_count, safe_interval, next_count % safe_interval == 0
+    finally:
+        conn.close()
+
+
+async def append_conversation_turn(
+    *,
+    source_channel: str,
+    source_chat_id: str,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        await asyncio.to_thread(
+            _append_conversation_turn_sync,
+            source_channel,
+            source_chat_id,
+            user_message,
+            assistant_message,
+        )
+
+
+def _append_conversation_turn_sync(
+    source_channel: str,
+    source_chat_id: str,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        conn.execute(
+            """
+            INSERT INTO conversation_turns (source_channel, source_chat_id, user_message, assistant_message, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                str(source_channel).strip(),
+                str(source_chat_id).strip(),
+                str(user_message),
+                str(assistant_message),
+                _utc_now_iso(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def get_recent_conversation_turns(limit: int) -> list[dict[str, str]]:
+    await ensure_settings_file()
+    safe_limit = max(1, min(500, int(limit)))
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_get_recent_conversation_turns_sync, safe_limit)
+
+
+def _get_recent_conversation_turns_sync(limit: int) -> list[dict[str, str]]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        rows = conn.execute(
+            """
+            SELECT source_channel, source_chat_id, user_message, assistant_message, created_at
+            FROM conversation_turns
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            result.append(
+                {
+                    "source_channel": str(row["source_channel"]),
+                    "source_chat_id": str(row["source_chat_id"]),
+                    "user_message": str(row["user_message"]),
+                    "assistant_message": str(row["assistant_message"]),
+                    "created_at": str(row["created_at"]),
+                }
+            )
+        result.reverse()
+        return result
+    finally:
+        conn.close()
+
+
+async def list_short_term_memories(status: str = "pending") -> list[ShortTermMemoryItem]:
+    await ensure_settings_file()
+    target_status = status if status in {"pending", "accepted", "rejected"} else "pending"
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_list_short_term_memories_sync, target_status)
+
+
+def _list_short_term_memories_sync(status: str) -> list[ShortTermMemoryItem]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, content, memory_type, source_channel, source_chat_id, source_request_id, status, created_at
+            FROM short_term_memories
+            WHERE status = ?
+            ORDER BY id ASC
+            """,
+            (status,),
+        ).fetchall()
+        result: list[ShortTermMemoryItem] = []
+        for row in rows:
+            memory_type_raw = str(row["memory_type"])
+            memory_type: Literal["core", "normal"] = "core" if memory_type_raw == "core" else "normal"
+            status_raw = str(row["status"])
+            if status_raw == "accepted":
+                status_value: Literal["pending", "accepted", "rejected"] = "accepted"
+            elif status_raw == "rejected":
+                status_value = "rejected"
+            else:
+                status_value = "pending"
+
+            result.append(
+                ShortTermMemoryItem(
+                    id=int(row["id"]),
+                    content=str(row["content"]),
+                    memory_type=memory_type,
+                    source_channel=str(row["source_channel"]),
+                    source_chat_id=str(row["source_chat_id"]),
+                    source_request_id=str(row["source_request_id"]),
+                    status=status_value,
+                    created_at=str(row["created_at"]),
+                )
+            )
+        return result
+    finally:
+        conn.close()
+
+
+async def add_short_term_memories(
+    *,
+    core_memories: list[str],
+    normal_memories: list[str],
+    source_channel: str,
+    source_chat_id: str,
+    source_request_id: str,
+) -> int:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(
+            _add_short_term_memories_sync,
+            core_memories,
+            normal_memories,
+            source_channel,
+            source_chat_id,
+            source_request_id,
+        )
+
+
+def _add_short_term_memories_sync(
+    core_memories: list[str],
+    normal_memories: list[str],
+    source_channel: str,
+    source_chat_id: str,
+    source_request_id: str,
+) -> int:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        pending_rows = conn.execute(
+            "SELECT content, memory_type FROM short_term_memories WHERE status = 'pending'"
+        ).fetchall()
+        pending_keys = {
+            (_normalize_memory_text(str(row["content"])).lower(), str(row["memory_type"]))
+            for row in pending_rows
+            if _normalize_memory_text(str(row["content"]))
+        }
+
+        added = 0
+        for memory_type, raw_items in (("core", core_memories), ("normal", normal_memories)):
+            for raw in raw_items:
+                normalized = _normalize_memory_text(raw)
+                if not normalized:
+                    continue
+                key = (normalized.lower(), memory_type)
+                if key in pending_keys:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO short_term_memories
+                    (content, memory_type, source_channel, source_chat_id, source_request_id, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                    """,
+                    (
+                        normalized,
+                        memory_type,
+                        str(source_channel).strip(),
+                        str(source_chat_id).strip(),
+                        str(source_request_id).strip(),
+                        _utc_now_iso(),
+                    ),
+                )
+                pending_keys.add(key)
+                added += 1
+
+        if added > 0:
+            conn.commit()
+        return added
+    finally:
+        conn.close()
+
+
+async def resolve_short_term_memories(items: list[dict[str, object]]) -> int:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_resolve_short_term_memories_sync, items)
+
+
+def _resolve_short_term_memories_sync(items: list[dict[str, object]]) -> int:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        core_existing_rows = conn.execute("SELECT content FROM memories WHERE memory_type = 'core'").fetchall()
+        normal_existing_rows = conn.execute("SELECT content FROM memories WHERE memory_type = 'normal'").fetchall()
+        existing_core = {_normalize_memory_text(str(row["content"])) .lower() for row in core_existing_rows}
+        existing_normal = {_normalize_memory_text(str(row["content"])) .lower() for row in normal_existing_rows}
+
+        changed = 0
+        for item in items:
+            suggestion_id = item.get("id") if isinstance(item, dict) else None
+            action = item.get("action") if isinstance(item, dict) else None
+            memory_type = item.get("memory_type") if isinstance(item, dict) else None
+            if not isinstance(suggestion_id, int) or action not in {"accept", "decline"}:
+                continue
+
+            row = conn.execute(
+                "SELECT id, content, memory_type FROM short_term_memories WHERE id = ? AND status = 'pending'",
+                (suggestion_id,),
+            ).fetchone()
+            if row is None:
+                continue
+
+            target_type = str(memory_type) if memory_type in {"core", "normal"} else str(row["memory_type"])
+
+            if action == "accept":
+                content = _normalize_memory_text(str(row["content"]))
+                if content:
+                    lowered = content.lower()
+                    if target_type == "core":
+                        if lowered not in existing_core:
+                            conn.execute(
+                                "INSERT INTO memories (memory_type, content, created_at) VALUES ('core', ?, ?)",
+                                (content, _utc_now_iso()),
+                            )
+                            existing_core.add(lowered)
+                    else:
+                        if lowered not in existing_normal:
+                            conn.execute(
+                                "INSERT INTO memories (memory_type, content, created_at) VALUES ('normal', ?, ?)",
+                                (content, _utc_now_iso()),
+                            )
+                            existing_normal.add(lowered)
+
+                conn.execute(
+                    "UPDATE short_term_memories SET status = 'accepted', memory_type = ? WHERE id = ?",
+                    (target_type, suggestion_id),
+                )
+                changed += 1
+                continue
+
+            conn.execute("UPDATE short_term_memories SET status = 'rejected' WHERE id = ?", (suggestion_id,))
+            changed += 1
+
+        if changed > 0:
+            conn.commit()
+        return changed
+    finally:
+        conn.close()
 
 
 def _quote_identifier(identifier: str) -> str:

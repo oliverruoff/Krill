@@ -14,7 +14,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .chat_engine import generate_chat_response
-from .config import IntegrationConfig, McpConfig, Settings, create_braindump_snapshot, ensure_settings_file, import_braindump_db, load_settings, save_settings, view_braindump
+from .config import (
+    IntegrationConfig,
+    McpConfig,
+    Settings,
+    create_braindump_snapshot,
+    ensure_settings_file,
+    import_braindump_db,
+    list_short_term_memories,
+    load_settings,
+    resolve_short_term_memories,
+    save_settings,
+    view_braindump,
+)
 from .integrations import (
     get_integration,
     get_integration_options,
@@ -29,6 +41,13 @@ from .mcps.git_ops import (
     verify_github_ssh_access,
 )
 from .mcps import get_mcp, get_mcp_options, is_supported_mcp
+from .memory_extraction import (
+    get_memory_extraction_status,
+    register_completed_turn,
+    register_user_message_and_maybe_extract,
+    start_memory_extraction_worker,
+    stop_memory_extraction_worker,
+)
 from .providers import get_provider, get_provider_options, is_supported_provider
 
 
@@ -131,15 +150,39 @@ class ChatStateResponse(BaseModel):
     daily_token_usage: list[dict[str, object]]
 
 
+class MemoryUserMessageRequest(BaseModel):
+    source_channel: str = "gateway"
+    source_chat_id: str = ""
+
+
+class MemoryTurnCompleteRequest(BaseModel):
+    source_channel: str = "gateway"
+    source_chat_id: str = ""
+    user_message: str = Field(min_length=1, max_length=10000)
+    assistant_message: str = Field(default="", max_length=30000)
+
+
+class ShortTermMemoryResolveItem(BaseModel):
+    id: int
+    action: Literal["accept", "decline"]
+    memory_type: Literal["core", "normal"] = "normal"
+
+
+class ShortTermMemoryResolveRequest(BaseModel):
+    items: list[ShortTermMemoryResolveItem] = Field(default_factory=list)
+
+
 @app.on_event("startup")
 async def startup_event() -> None:
     await ensure_settings_file()
+    await start_memory_extraction_worker()
     for integration in get_runtime_integrations():
         integration.start()
 
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
+    await stop_memory_extraction_worker()
     for integration in get_runtime_integrations():
         await integration.stop()
 
@@ -239,8 +282,48 @@ async def get_providers() -> list[dict[str, object]]:
 
 @app.post("/api/settings", response_model=Settings)
 async def update_settings(settings: Settings) -> Settings:
+    existing = await load_settings()
+    settings = settings.model_copy(update={"user_message_count": existing.user_message_count})
     _validate_settings_payload(settings)
     return await save_settings(settings)
+
+
+@app.post("/api/memory/user-message")
+async def register_memory_user_message(payload: MemoryUserMessageRequest) -> dict[str, object]:
+    triggered = await register_user_message_and_maybe_extract(
+        source_channel=payload.source_channel,
+        source_chat_id=payload.source_chat_id,
+    )
+    return {"ok": True, "triggered": triggered}
+
+
+@app.post("/api/memory/turn-complete")
+async def register_memory_turn_complete(payload: MemoryTurnCompleteRequest) -> dict[str, object]:
+    await register_completed_turn(
+        source_channel=payload.source_channel,
+        source_chat_id=payload.source_chat_id,
+        user_message=payload.user_message,
+        assistant_message=payload.assistant_message,
+    )
+    return {"ok": True}
+
+
+@app.get("/api/memory/short-term")
+async def get_short_term_memory() -> dict[str, object]:
+    items = await list_short_term_memories(status="pending")
+    status = get_memory_extraction_status()
+    return {
+        "ok": True,
+        "count": len(items),
+        "items": [item.model_dump() for item in items],
+        "extraction": status,
+    }
+
+
+@app.post("/api/memory/short-term/resolve")
+async def resolve_short_term_memory(payload: ShortTermMemoryResolveRequest) -> dict[str, object]:
+    changed = await resolve_short_term_memories([item.model_dump() for item in payload.items])
+    return {"ok": True, "changed": changed}
 
 
 @app.post("/api/providers/verify", response_model=VerifyProviderResponse)

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
 from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, load_settings, save_settings
+from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from app.usage import add_daily_usage, get_today_token_usage
 
 from .client import telegram_get_me, telegram_get_updates, telegram_send_message
@@ -236,6 +237,10 @@ class TelegramBridgeWorker:
 
         user_timestamp = _timestamp()
         active_chat.messages.append(ChatMessage(role="user", content=prompt, timestamp=user_timestamp))
+        await register_user_message_and_maybe_extract(
+            source_channel="telegram",
+            source_chat_id=active_chat.id,
+        )
 
         history = [
             {"role": message.role, "content": message.content}
@@ -292,6 +297,13 @@ class TelegramBridgeWorker:
                 ],
                 status="done",
             )
+        )
+
+        await register_completed_turn(
+            source_channel="telegram",
+            source_chat_id=active_chat.id,
+            user_message=prompt,
+            assistant_message=text_response,
         )
 
         if isinstance(used_tokens, int) and used_tokens > 0:

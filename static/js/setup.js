@@ -30,6 +30,7 @@ const fields = {
   activeProviderSelect: document.getElementById("active_provider_select"),
   toolMaxRecursion: document.getElementById("tool_max_recursion"),
   toolTimeoutSeconds: document.getElementById("tool_timeout_seconds"),
+  memoryExtractionInterval: document.getElementById("memory_extraction_interval"),
   addProviderButton: document.getElementById("add-provider-btn"),
   completeButton: document.getElementById("complete-btn"),
   viewBrainButton: document.getElementById("view-brain-btn"),
@@ -58,6 +59,7 @@ const state = {
   activeProviderId: "",
   toolMaxRecursion: 6,
   toolTimeoutSeconds: 45,
+  memoryExtractionInterval: 25,
   setupCompleted: false,
   initialSetupSnapshot: "",
   toastTimerId: null,
@@ -387,6 +389,7 @@ function removeCoreMemoryByIndex(indexValue) {
 function createSetupSnapshot() {
   const maxRecursion = clampInteger(fields.toolMaxRecursion.value, 1, 20, state.toolMaxRecursion || 6);
   const timeoutSeconds = clampInteger(fields.toolTimeoutSeconds.value, 5, 300, state.toolTimeoutSeconds || 45);
+  const extractionInterval = clampInteger(fields.memoryExtractionInterval.value, 1, 500, state.memoryExtractionInterval || 25);
   const snapshot = {
     bot_name: fields.botName.value,
     system_prompt: fields.systemPrompt.value,
@@ -402,6 +405,7 @@ function createSetupSnapshot() {
     telegram_state: state.telegramState,
     tool_max_recursion: maxRecursion,
     tool_timeout_seconds: timeoutSeconds,
+    memory_extraction_interval: extractionInterval,
   };
 
   return JSON.stringify(snapshot);
@@ -422,8 +426,10 @@ function clampInteger(value, min, max, fallback) {
 function buildPayload() {
   const maxRecursion = clampInteger(fields.toolMaxRecursion.value, 1, 20, 6);
   const timeoutSeconds = clampInteger(fields.toolTimeoutSeconds.value, 5, 300, 45);
+  const extractionInterval = clampInteger(fields.memoryExtractionInterval.value, 1, 500, 25);
   fields.toolMaxRecursion.value = String(maxRecursion);
   fields.toolTimeoutSeconds.value = String(timeoutSeconds);
+  fields.memoryExtractionInterval.value = String(extractionInterval);
 
   return {
     bot_name: fields.botName.value,
@@ -441,6 +447,7 @@ function buildPayload() {
     telegram_state: state.telegramState,
     tool_max_recursion: maxRecursion,
     tool_timeout_seconds: timeoutSeconds,
+    memory_extraction_interval: extractionInterval,
   };
 }
 
@@ -543,8 +550,12 @@ async function loadPage() {
     state.activeProviderId = settings.active_provider_id ?? "";
     state.toolMaxRecursion = Number.isFinite(Number(settings.tool_max_recursion)) ? Number(settings.tool_max_recursion) : 6;
     state.toolTimeoutSeconds = Number.isFinite(Number(settings.tool_timeout_seconds)) ? Number(settings.tool_timeout_seconds) : 45;
+    state.memoryExtractionInterval = Number.isFinite(Number(settings.memory_extraction_interval))
+      ? Number(settings.memory_extraction_interval)
+      : 25;
     fields.toolMaxRecursion.value = String(Math.max(1, Math.min(20, state.toolMaxRecursion)));
     fields.toolTimeoutSeconds.value = String(Math.max(5, Math.min(300, state.toolTimeoutSeconds)));
+    fields.memoryExtractionInterval.value = String(Math.max(1, Math.min(500, state.memoryExtractionInterval)));
     state.setupCompleted = settings.setup_completed ?? false;
 
     renderProviderOptions();
