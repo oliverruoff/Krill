@@ -476,6 +476,57 @@ function showToast(message) {
   }, 1800);
 }
 
+function canUseBrowserNotifications() {
+  return typeof window !== "undefined" && "Notification" in window;
+}
+
+function shouldNotifyForAssistantResponse() {
+  return document.visibilityState !== "visible" || document.hidden;
+}
+
+async function requestNotificationPermissionIfNeeded() {
+  if (!canUseBrowserNotifications()) {
+    return "unsupported";
+  }
+
+  if (Notification.permission === "granted" || Notification.permission === "denied") {
+    return Notification.permission;
+  }
+
+  try {
+    return await Notification.requestPermission();
+  } catch (error) {
+    return "default";
+  }
+}
+
+function sendAssistantResponseNotification(chat, assistantMessage) {
+  if (!canUseBrowserNotifications() || Notification.permission !== "granted") {
+    return;
+  }
+
+  if (!shouldNotifyForAssistantResponse()) {
+    return;
+  }
+
+  const rawBody = typeof assistantMessage?.content === "string" ? assistantMessage.content.trim() : "";
+  if (!rawBody) {
+    return;
+  }
+
+  const preview = rawBody.length > 140 ? `${rawBody.slice(0, 140).trimEnd()}...` : rawBody;
+  const chatTitle = chat && typeof chat.title === "string" ? normalizeChatTitle(chat.title) : "New chat";
+  const notification = new Notification(`Krill - ${chatTitle}`, {
+    body: preview,
+    icon: "/static/img/krill_icon.png",
+    tag: `krill-chat-${chat?.id || "default"}`,
+  });
+  notification.onclick = () => {
+    window.focus();
+    notification.close();
+  };
+}
+
 function formatMessageTimestamp(rawValue = "") {
   const parsed = rawValue ? new Date(rawValue) : new Date();
   const date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
@@ -3334,6 +3385,7 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
     : [];
   const lastUserMessage = userMessages.length > 0 ? userMessages[userMessages.length - 1].content : "";
   registerCompletedTurnForMemory("gateway", chat.id, lastUserMessage, assistantMessage.content || "").catch(() => {});
+  sendAssistantResponseNotification(chat, assistantMessage);
 
   if (compactResult.compacted) {
     setStatus("Response complete. Memory compacted.");
@@ -3542,6 +3594,8 @@ async function processChatQueue(chatId) {
 
 async function sendMessage(event) {
   event.preventDefault();
+
+  requestNotificationPermissionIfNeeded().catch(() => {});
 
   if (state.isSwitching || state.isCompacting) {
     setStatus("Please wait for current gateway operation to finish.", true);
