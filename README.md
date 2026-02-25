@@ -23,6 +23,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
   - Local Files (directory listing, glob, grep/content search, file reads)
 - Use integrations for chat ingress channels:
   - Telegram (bot token based Telegram chat ingress)
+- Schedule timed jobs (daily/weekly/monthly/one-time) with hidden prompts and channel fan-out (Gateway, Telegram)
 - Let Krill orchestrate multi-step tool flows automatically (sequential recursive tool calls)
 - See live tool/system trace messages while execution runs
 - Stop running tool chains and clear queued work for the active chat
@@ -174,6 +175,7 @@ SSE events include:
 - On smartphones (<= 900px), the chat view takes the full screen and side panels become swipe-in drawers (left: header/provider/model/chat history, right: settings + tools/integrations)
 - Gateway menu includes Memory Management for searchable core/normal memory editing
 - Gateway menu includes Short Term Memory for confirming/declining auto-detected memory suggestions
+- Gateway menu includes Timed Jobs for scheduled prompt automation with per-job channels
 - Chat execution supports per-chat queueing and cross-chat parallel background processing
 - Assistant/tool progress is visible through system trace messages
 - Tool usage is displayed below assistant responses (`used Tools: ...`)

@@ -23,13 +23,17 @@ from .config import (
     IntegrationConfig,
     McpConfig,
     Settings,
+    TimedJob,
     create_braindump_snapshot,
+    delete_timed_job,
     ensure_settings_file,
     import_braindump_db,
     list_short_term_memories,
+    list_timed_jobs,
     load_settings,
     resolve_short_term_memories,
     save_settings,
+    upsert_timed_job,
     view_braindump,
 )
 from .integrations import (
@@ -75,6 +79,8 @@ from .memory_extraction import (
 from .providers import get_provider, get_provider_options, is_supported_provider
 from .providers.resilience import generate_with_retries
 from .version import APP_VERSION
+from .timed_jobs import get_timed_job_channel_options, start_timed_jobs_worker, stop_timed_jobs_worker
+from .timed_jobs import trigger_timed_job_now
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -208,6 +214,23 @@ class ShortTermMemoryResolveRequest(BaseModel):
     items: list[ShortTermMemoryResolveItem] = Field(default_factory=list)
 
 
+class TimedJobWriteRequest(BaseModel):
+    title: str = Field(default="", max_length=120)
+    prompt: str = Field(default="", max_length=5000)
+    interval: Literal["daily", "weekly", "monthly", "once"] = "daily"
+    start_date: str = ""
+    time_of_day: str = "00:00"
+    timezone: str = "UTC"
+    timezone_offset_minutes: int = Field(default=0, ge=-840, le=840)
+    enabled: bool = False
+    channels: list[str] = Field(default_factory=lambda: ["gateway"])
+
+
+class TimedJobsResponse(BaseModel):
+    jobs: list[TimedJob]
+    channels: list[dict[str, object]]
+
+
 _GOOGLE_OAUTH_STATE_TTL_SECONDS = 600
 _google_oauth_states: dict[str, dict[str, object]] = {}
 _google_oauth_lock = asyncio.Lock()
@@ -218,6 +241,7 @@ _PUBLIC_BASE_URL_ENV = "KRILL_PUBLIC_BASE_URL"
 async def startup_event() -> None:
     await ensure_settings_file()
     await start_memory_extraction_worker()
+    await start_timed_jobs_worker()
     for integration in get_runtime_integrations():
         integration.start()
 
@@ -225,6 +249,7 @@ async def startup_event() -> None:
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
     await stop_memory_extraction_worker()
+    await stop_timed_jobs_worker()
     for integration in get_runtime_integrations():
         await integration.stop()
 
@@ -620,6 +645,7 @@ async def get_integration_status() -> IntegrationStatusResponse:
     token_value = telegram_config.params.get("bot_token", "")
     token_configured = isinstance(token_value, str) and bool(token_value.strip())
     owner_user_id = settings.telegram_state.owner_user_id.strip()
+    owner_chat_id = settings.telegram_state.owner_chat_id.strip()
 
     return IntegrationStatusResponse(
         statuses={
@@ -627,10 +653,55 @@ async def get_integration_status() -> IntegrationStatusResponse:
                 "enabled": bool(telegram_config.enabled),
                 "token_configured": token_configured,
                 "owner_user_id": owner_user_id,
+                "owner_chat_id": owner_chat_id,
                 "owner_bound": bool(owner_user_id),
             }
         }
     )
+
+
+@app.get("/api/timed-jobs", response_model=TimedJobsResponse)
+async def get_timed_jobs() -> TimedJobsResponse:
+    settings = await load_settings()
+    jobs = await list_timed_jobs()
+    channels = get_timed_job_channel_options(settings)
+    return TimedJobsResponse(jobs=jobs, channels=channels)
+
+
+@app.post("/api/timed-jobs", response_model=TimedJob)
+async def create_timed_job(payload: TimedJobWriteRequest) -> TimedJob:
+    if not payload.prompt.strip():
+        raise HTTPException(status_code=422, detail="Timed job prompt is required.")
+    if not payload.channels:
+        raise HTTPException(status_code=422, detail="At least one output channel is required.")
+    return await upsert_timed_job(payload.model_dump())
+
+
+@app.put("/api/timed-jobs/{timed_job_id}", response_model=TimedJob)
+async def update_timed_job(timed_job_id: str, payload: TimedJobWriteRequest) -> TimedJob:
+    if not timed_job_id.strip():
+        raise HTTPException(status_code=422, detail="Timed job id is required.")
+    if not payload.prompt.strip():
+        raise HTTPException(status_code=422, detail="Timed job prompt is required.")
+    if not payload.channels:
+        raise HTTPException(status_code=422, detail="At least one output channel is required.")
+    return await upsert_timed_job(payload.model_dump(), timed_job_id=timed_job_id)
+
+
+@app.delete("/api/timed-jobs/{timed_job_id}")
+async def remove_timed_job(timed_job_id: str) -> dict[str, object]:
+    deleted = await delete_timed_job(timed_job_id)
+    return {"ok": True, "deleted": deleted}
+
+
+@app.post("/api/timed-jobs/{timed_job_id}/trigger")
+async def trigger_timed_job(timed_job_id: str) -> dict[str, object]:
+    if not timed_job_id.strip():
+        raise HTTPException(status_code=422, detail="Timed job id is required.")
+    found = await trigger_timed_job_now(timed_job_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Timed job not found.")
+    return {"ok": True}
 
 
 @app.get("/api/mcps/git/ssh-key", response_model=GitSshKeyResponse)

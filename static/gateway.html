@@ -39,10 +39,11 @@
           </label>
         </div>
         <div class="menu-wrap">
-          <button type="button" id="menu-btn" class="icon-btn" aria-expanded="false" aria-controls="menu-popover" aria-label="Open menu">&#9881;</button>
+          <button type="button" id="menu-btn" class="icon-btn" aria-expanded="false" aria-controls="menu-popover" aria-label="Open settings menu">⋯</button>
           <div id="menu-popover" class="menu-popover hidden" role="menu">
             <button type="button" id="memory-management-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◌</span>Memory Management</button>
             <button type="button" id="short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
+            <button type="button" id="timed-jobs-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◷</span>Timed Jobs</button>
             <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
             <button type="button" id="brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
             <a href="/setup" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>
@@ -105,7 +106,7 @@
             <div class="actions">
               <button type="submit" id="send-btn">Send</button>
               <button type="button" id="stop-btn" class="secondary">Stop</button>
-              <button type="button" id="mic-btn" class="mic-btn" aria-label="Start voice dictation" title="Voice dictation">🎤</button>
+              <button type="button" id="mic-btn" class="mic-btn" aria-label="Start voice dictation" title="Voice dictation">○</button>
             </div>
           </form>
 
@@ -118,6 +119,7 @@
             <div id="mobile-settings-popover" class="menu-popover mobile-settings-popover hidden" role="menu">
               <button type="button" id="mobile-memory-management-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◌</span>Memory Management</button>
               <button type="button" id="mobile-short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
+              <button type="button" id="mobile-timed-jobs-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◷</span>Timed Jobs</button>
               <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
               <button type="button" id="mobile-brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
               <a href="/setup" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>
@@ -223,6 +225,74 @@
           <button type="button" id="short-term-memory-refresh" class="secondary">Refresh</button>
         </div>
         <div id="short-term-memory-list" class="brain-table-view"></div>
+      </section>
+    </div>
+
+    <div id="timed-jobs-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="timed-jobs-title">
+      <div id="timed-jobs-backdrop" class="brain-modal-backdrop"></div>
+      <section class="brain-modal-card timed-jobs-modal-card">
+        <header class="brain-modal-header">
+          <div>
+            <h2 id="timed-jobs-title">Timed Jobs</h2>
+            <p id="timed-jobs-meta" class="brain-modal-meta">Create jobs that run on schedule and post outputs to channels.</p>
+            <p id="timed-jobs-now" class="brain-modal-meta"><strong>Now:</strong> --</p>
+          </div>
+          <button type="button" id="timed-jobs-close" class="brain-modal-close" aria-label="Close timed jobs">&times;</button>
+        </header>
+        <div class="timed-jobs-layout">
+          <section class="timed-jobs-editor" aria-labelledby="timed-jobs-editor-title">
+            <h3 id="timed-jobs-editor-title">Job Editor</h3>
+            <div class="timed-job-field">
+              <label for="timed-job-title">Title</label>
+              <input id="timed-job-title" type="text" maxlength="120" placeholder="Morning digest" />
+            </div>
+            <div class="timed-job-field">
+              <label for="timed-job-prompt">Prompt</label>
+              <textarea id="timed-job-prompt" rows="6" maxlength="5000" placeholder="Summarize top tasks and blockers for today."></textarea>
+            </div>
+            <div class="timed-job-grid">
+              <div class="timed-job-field">
+                <label for="timed-job-interval">Interval</label>
+                <select id="timed-job-interval">
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="once">One-time</option>
+                </select>
+              </div>
+              <div class="timed-job-field">
+                <label for="timed-job-start-date">Start date</label>
+                <input id="timed-job-start-date" type="date" />
+              </div>
+              <div class="timed-job-field">
+                <label for="timed-job-time">Time</label>
+                <input id="timed-job-time" type="time" step="60" />
+              </div>
+              <div class="timed-job-field">
+                <label for="timed-job-timezone">Timezone</label>
+                <input id="timed-job-timezone" type="text" maxlength="80" placeholder="Europe/Berlin" />
+              </div>
+            </div>
+            <div class="timed-job-toggle-row">
+              <label class="timed-job-check" for="timed-job-enabled">
+                <input id="timed-job-enabled" type="checkbox" checked />
+                <span>Enabled</span>
+              </label>
+            </div>
+            <div class="timed-job-field">
+              <p class="timed-job-channel-title">Output channels</p>
+              <div id="timed-job-channels" class="timed-job-channels"></div>
+            </div>
+            <div class="timed-job-actions">
+              <button type="button" id="timed-job-save" class="secondary">Save job</button>
+              <button type="button" id="timed-job-reset" class="secondary">New job</button>
+            </div>
+          </section>
+          <section class="timed-jobs-list-wrap" aria-labelledby="timed-jobs-list-title">
+            <h3 id="timed-jobs-list-title">Jobs</h3>
+            <div id="timed-jobs-list" class="brain-table-view"></div>
+          </section>
+        </div>
       </section>
     </div>
 

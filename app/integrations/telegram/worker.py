@@ -148,11 +148,17 @@ class TelegramBridgeWorker:
         owner_user_id = settings.telegram_state.owner_user_id.strip()
         if not owner_user_id:
             settings.telegram_state.owner_user_id = str(sender_id)
+            settings.telegram_state.owner_chat_id = str(chat_id)
             await save_settings(settings)
             owner_user_id = str(sender_id)
 
         if str(sender_id) != owner_user_id:
             return
+
+        owner_chat_id = settings.telegram_state.owner_chat_id.strip()
+        if owner_chat_id != str(chat_id):
+            settings.telegram_state.owner_chat_id = str(chat_id)
+            await save_settings(settings)
 
         is_group = chat_type in {"group", "supergroup"}
         if is_group and not _is_group_message_addressed_to_bot(message, bot_username, bot_id):

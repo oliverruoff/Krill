@@ -54,9 +54,11 @@ const mobileSettingsMenuButton = document.getElementById("mobile-settings-menu-b
 const mobileSettingsPopover = document.getElementById("mobile-settings-popover");
 const mobileMemoryManagementButton = document.getElementById("mobile-memory-management-btn");
 const mobileShortTermMemoryButton = document.getElementById("mobile-short-term-memory-btn");
+const mobileTimedJobsButton = document.getElementById("mobile-timed-jobs-btn");
 const mobileBrainViewButton = document.getElementById("mobile-brain-view-btn");
 const memoryManagementButton = document.getElementById("memory-management-btn");
 const shortTermMemoryButton = document.getElementById("short-term-memory-btn");
+const timedJobsButton = document.getElementById("timed-jobs-btn");
 const brainViewButton = document.getElementById("brain-view-btn");
 const memoryModal = document.getElementById("memory-modal");
 const memoryModalBackdrop = document.getElementById("memory-modal-backdrop");
@@ -76,6 +78,22 @@ const shortTermMemoryCloseButton = document.getElementById("short-term-memory-cl
 const shortTermMemoryMetaNode = document.getElementById("short-term-memory-meta");
 const shortTermMemoryRefreshButton = document.getElementById("short-term-memory-refresh");
 const shortTermMemoryListNode = document.getElementById("short-term-memory-list");
+const timedJobsModal = document.getElementById("timed-jobs-modal");
+const timedJobsBackdrop = document.getElementById("timed-jobs-backdrop");
+const timedJobsCloseButton = document.getElementById("timed-jobs-close");
+const timedJobsMetaNode = document.getElementById("timed-jobs-meta");
+const timedJobsNowNode = document.getElementById("timed-jobs-now");
+const timedJobsListNode = document.getElementById("timed-jobs-list");
+const timedJobTitleInput = document.getElementById("timed-job-title");
+const timedJobPromptInput = document.getElementById("timed-job-prompt");
+const timedJobIntervalSelect = document.getElementById("timed-job-interval");
+const timedJobStartDateInput = document.getElementById("timed-job-start-date");
+const timedJobTimeInput = document.getElementById("timed-job-time");
+const timedJobTimezoneInput = document.getElementById("timed-job-timezone");
+const timedJobEnabledInput = document.getElementById("timed-job-enabled");
+const timedJobChannelsNode = document.getElementById("timed-job-channels");
+const timedJobSaveButton = document.getElementById("timed-job-save");
+const timedJobResetButton = document.getElementById("timed-job-reset");
 const memoryTokenTotalNode = document.getElementById("memory-token-total");
 const coreMemoryTokenCountNode = document.getElementById("core-memory-token-count");
 const normalMemoryTokenCountNode = document.getElementById("normal-memory-token-count");
@@ -132,10 +150,15 @@ const state = {
   shortTermMemoryCount: 0,
   shortTermMemoryLastToastCount: 0,
   shortTermMemoryExtracting: false,
+  timedJobs: [],
+  timedJobChannels: [],
+  timedJobEditingId: "",
+  timedJobsClockTimerId: null,
   lastChatStateSignature: "",
   telegramEnabled: false,
   telegramTokenConfigured: false,
   telegramOwnerUserId: "",
+  telegramOwnerChatId: "",
   googleOauthStatus: null,
   googleAutosaveTimerId: null,
   googleGuideExpanded: false,
@@ -170,7 +193,8 @@ function isAnyModalOpen() {
   const memoryOpen = memoryModal instanceof HTMLElement && !memoryModal.classList.contains("hidden");
   const brainOpen = brainModal instanceof HTMLElement && !brainModal.classList.contains("hidden");
   const shortTermOpen = shortTermMemoryModal instanceof HTMLElement && !shortTermMemoryModal.classList.contains("hidden");
-  return memoryOpen || brainOpen || shortTermOpen;
+  const timedJobsOpen = timedJobsModal instanceof HTMLElement && !timedJobsModal.classList.contains("hidden");
+  return memoryOpen || brainOpen || shortTermOpen || timedJobsOpen;
 }
 
 function syncMobileDrawerUi() {
@@ -458,7 +482,7 @@ function setSpeechUiState() {
     return;
   }
 
-  micButton.textContent = "🎤";
+  micButton.textContent = state.speechListening ? "●" : "○";
 
   if (!state.speechSupported) {
     micButton.disabled = true;
@@ -1696,6 +1720,11 @@ function updateTelegramStatusLabel() {
     return;
   }
 
+  if (!state.telegramOwnerChatId) {
+    telegramStatusNode.textContent = "Telegram: owner bound, waiting for chat target";
+    return;
+  }
+
   telegramStatusNode.textContent = "Telegram: connected";
 }
 
@@ -1760,6 +1789,7 @@ function applyIntegrationStatusPayload(payload) {
   state.telegramEnabled = Boolean(telegramStatus.enabled);
   state.telegramTokenConfigured = Boolean(telegramStatus.token_configured);
   state.telegramOwnerUserId = typeof telegramStatus.owner_user_id === "string" ? telegramStatus.owner_user_id : "";
+  state.telegramOwnerChatId = typeof telegramStatus.owner_chat_id === "string" ? telegramStatus.owner_chat_id : "";
   updateTelegramStatusLabel();
 }
 
@@ -2112,6 +2142,7 @@ function closeMemoryManagementModal() {
 
   memoryModal.classList.add("hidden");
   if ((!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
+    && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)) {
     document.body.style.overflow = "";
   }
@@ -2266,6 +2297,7 @@ function closeBrainModal() {
   brainModal.classList.add("hidden");
   if ((!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
+    && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
     && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))) {
     document.body.style.overflow = "";
   }
@@ -2393,6 +2425,7 @@ function closeShortTermMemoryModal() {
   if (
     (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
     && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
+    && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
   ) {
     document.body.style.overflow = "";
@@ -2482,6 +2515,460 @@ async function handleShortTermAction(action, suggestionId) {
     }
   } catch (error) {
     setStatus(normalizeErrorMessage(error, "Short term memory update failed."), true);
+  }
+}
+
+function getBrowserTimezone() {
+  const candidate = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : "UTC";
+}
+
+function formatNowWithSeconds() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mi = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+}
+
+function updateTimedJobsNowLabel() {
+  if (!(timedJobsNowNode instanceof HTMLElement)) {
+    return;
+  }
+  timedJobsNowNode.innerHTML = `<strong>Now:</strong> ${formatNowWithSeconds()}`;
+}
+
+function startTimedJobsClock() {
+  updateTimedJobsNowLabel();
+  if (state.timedJobsClockTimerId) {
+    window.clearInterval(state.timedJobsClockTimerId);
+  }
+  state.timedJobsClockTimerId = window.setInterval(updateTimedJobsNowLabel, 1000);
+}
+
+function stopTimedJobsClock() {
+  if (state.timedJobsClockTimerId) {
+    window.clearInterval(state.timedJobsClockTimerId);
+    state.timedJobsClockTimerId = null;
+  }
+}
+
+function todayDateInputValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function normalizeIncomingTimedJobs(rawJobs) {
+  if (!Array.isArray(rawJobs)) {
+    return [];
+  }
+  return rawJobs
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => ({
+      id: typeof entry.id === "string" ? entry.id : "",
+      title: typeof entry.title === "string" ? entry.title : "",
+      prompt: typeof entry.prompt === "string" ? entry.prompt : "",
+      interval: typeof entry.interval === "string" ? entry.interval : "daily",
+      start_date: typeof entry.start_date === "string" ? entry.start_date : todayDateInputValue(),
+      time_of_day: typeof entry.time_of_day === "string" ? entry.time_of_day.slice(0, 5) : "09:00",
+      timezone: typeof entry.timezone === "string" && entry.timezone.trim() ? entry.timezone.trim() : "UTC",
+      timezone_offset_minutes: Number.isFinite(Number(entry.timezone_offset_minutes))
+        ? Number(entry.timezone_offset_minutes)
+        : 0,
+      enabled: Boolean(entry.enabled),
+      channels: Array.isArray(entry.channels) ? entry.channels.map((channel) => String(channel)) : ["gateway"],
+      next_run_at: typeof entry.next_run_at === "string" ? entry.next_run_at : "",
+      last_run_at: typeof entry.last_run_at === "string" ? entry.last_run_at : "",
+      updated_at: typeof entry.updated_at === "string" ? entry.updated_at : "",
+    }))
+    .filter((entry) => Boolean(entry.id));
+}
+
+function normalizeTimedJobChannels(rawChannels) {
+  if (!Array.isArray(rawChannels)) {
+    return [];
+  }
+  return rawChannels
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => ({
+      id: typeof entry.id === "string" ? entry.id : "",
+      label: typeof entry.label === "string" ? entry.label : "",
+      description: typeof entry.description === "string" ? entry.description : "",
+      available: Boolean(entry.available),
+      default: Boolean(entry.default),
+    }))
+    .filter((entry) => Boolean(entry.id));
+}
+
+function resetTimedJobEditor() {
+  state.timedJobEditingId = "";
+  if (timedJobTitleInput instanceof HTMLInputElement) {
+    timedJobTitleInput.value = "";
+  }
+  if (timedJobPromptInput instanceof HTMLTextAreaElement) {
+    timedJobPromptInput.value = "";
+  }
+  if (timedJobIntervalSelect instanceof HTMLSelectElement) {
+    timedJobIntervalSelect.value = "daily";
+  }
+  if (timedJobStartDateInput instanceof HTMLInputElement) {
+    timedJobStartDateInput.value = todayDateInputValue();
+  }
+  if (timedJobTimeInput instanceof HTMLInputElement) {
+    timedJobTimeInput.value = "09:00";
+  }
+  if (timedJobTimezoneInput instanceof HTMLInputElement) {
+    timedJobTimezoneInput.value = getBrowserTimezone();
+  }
+  if (timedJobEnabledInput instanceof HTMLInputElement) {
+    timedJobEnabledInput.checked = true;
+  }
+  renderTimedJobChannelOptions(["gateway"]);
+}
+
+function renderTimedJobChannelOptions(selectedChannels = ["gateway"]) {
+  if (!(timedJobChannelsNode instanceof HTMLElement)) {
+    return;
+  }
+  timedJobChannelsNode.innerHTML = "";
+  if (!Array.isArray(state.timedJobChannels) || state.timedJobChannels.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "memory-modal-empty";
+    emptyNode.textContent = "No output channels available.";
+    timedJobChannelsNode.appendChild(emptyNode);
+    return;
+  }
+
+  const selectedSet = new Set(selectedChannels.map((entry) => String(entry)));
+  state.timedJobChannels.forEach((channel) => {
+    const wrapper = document.createElement("label");
+    wrapper.className = "timed-job-check";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.timedJobChannelId = channel.id;
+    input.disabled = !channel.available;
+    input.checked = channel.available && (selectedSet.has(channel.id) || (selectedSet.size === 0 && channel.default));
+
+    const text = document.createElement("span");
+    const suffix = channel.available ? "" : " (unavailable)";
+    text.textContent = `${channel.label || channel.id}${suffix}`;
+    if (channel.description) {
+      text.title = channel.description;
+    }
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(text);
+    timedJobChannelsNode.appendChild(wrapper);
+  });
+}
+
+function populateTimedJobEditor(job) {
+  if (!job || typeof job !== "object") {
+    resetTimedJobEditor();
+    return;
+  }
+  state.timedJobEditingId = typeof job.id === "string" ? job.id : "";
+  if (timedJobTitleInput instanceof HTMLInputElement) {
+    timedJobTitleInput.value = typeof job.title === "string" ? job.title : "";
+  }
+  if (timedJobPromptInput instanceof HTMLTextAreaElement) {
+    timedJobPromptInput.value = typeof job.prompt === "string" ? job.prompt : "";
+  }
+  if (timedJobIntervalSelect instanceof HTMLSelectElement) {
+    timedJobIntervalSelect.value = typeof job.interval === "string" ? job.interval : "daily";
+  }
+  if (timedJobStartDateInput instanceof HTMLInputElement) {
+    timedJobStartDateInput.value = typeof job.start_date === "string" && job.start_date ? job.start_date : todayDateInputValue();
+  }
+  if (timedJobTimeInput instanceof HTMLInputElement) {
+    timedJobTimeInput.value = typeof job.time_of_day === "string" && job.time_of_day ? job.time_of_day.slice(0, 5) : "09:00";
+  }
+  if (timedJobTimezoneInput instanceof HTMLInputElement) {
+    timedJobTimezoneInput.value = typeof job.timezone === "string" && job.timezone ? job.timezone : "UTC";
+  }
+  if (timedJobEnabledInput instanceof HTMLInputElement) {
+    timedJobEnabledInput.checked = Boolean(job.enabled);
+  }
+  renderTimedJobChannelOptions(Array.isArray(job.channels) ? job.channels : ["gateway"]);
+}
+
+function formatTimedJobMeta(job) {
+  const interval = typeof job.interval === "string" ? job.interval : "daily";
+  const nextRun = typeof job.next_run_at === "string" && job.next_run_at
+    ? formatMessageTimestamp(job.next_run_at)
+    : "-";
+  const channels = Array.isArray(job.channels) && job.channels.length > 0
+    ? job.channels.join(", ")
+    : "gateway";
+  const status = job.enabled ? "enabled" : "disabled";
+  return `${interval} | ${status} | next: ${nextRun} | channels: ${channels}`;
+}
+
+function renderTimedJobsList() {
+  if (!(timedJobsListNode instanceof HTMLElement)) {
+    return;
+  }
+  timedJobsListNode.innerHTML = "";
+  if (!Array.isArray(state.timedJobs) || state.timedJobs.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "memory-modal-empty";
+    emptyNode.textContent = "No timed jobs yet.";
+    timedJobsListNode.appendChild(emptyNode);
+    return;
+  }
+
+  state.timedJobs.forEach((job) => {
+    const card = document.createElement("article");
+    card.className = "timed-job-item";
+    card.dataset.timedJobId = job.id;
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "timed-job-item-row";
+
+    const titleNode = document.createElement("p");
+    titleNode.className = "timed-job-item-title";
+    titleNode.textContent = job.title || "Untitled timed job";
+
+    const actions = document.createElement("div");
+    actions.className = "short-term-item-actions";
+
+    const triggerNowButton = document.createElement("button");
+    triggerNowButton.type = "button";
+    triggerNowButton.className = "timed-job-trigger-link";
+    triggerNowButton.dataset.timedJobAction = "trigger-now";
+    triggerNowButton.dataset.timedJobId = job.id;
+    triggerNowButton.textContent = "trigger";
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "chat-history-action-btn";
+    editButton.dataset.timedJobAction = "edit";
+    editButton.dataset.timedJobId = job.id;
+    editButton.setAttribute("aria-label", "Edit timed job");
+    editButton.textContent = "✎";
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "chat-history-action-btn danger";
+    deleteButton.dataset.timedJobAction = "delete";
+    deleteButton.dataset.timedJobId = job.id;
+    deleteButton.setAttribute("aria-label", "Delete timed job");
+    deleteButton.textContent = "×";
+
+    actions.appendChild(triggerNowButton);
+    actions.appendChild(editButton);
+    actions.appendChild(deleteButton);
+    titleRow.appendChild(titleNode);
+    titleRow.appendChild(actions);
+
+    const metaNode = document.createElement("p");
+    metaNode.className = "timed-job-item-meta";
+    metaNode.textContent = formatTimedJobMeta(job);
+
+    const promptNode = document.createElement("p");
+    promptNode.className = "short-term-item-content";
+    promptNode.textContent = job.prompt || "(No prompt)";
+
+    card.appendChild(titleRow);
+    card.appendChild(metaNode);
+    card.appendChild(promptNode);
+    timedJobsListNode.appendChild(card);
+  });
+}
+
+async function fetchTimedJobs() {
+  const response = await fetch("/api/timed-jobs", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(await buildHttpErrorDetail(response, "Failed to load timed jobs."));
+  }
+  return response.json();
+}
+
+function collectTimedJobPayload() {
+  const title = timedJobTitleInput instanceof HTMLInputElement ? timedJobTitleInput.value.trim() : "";
+  const prompt = timedJobPromptInput instanceof HTMLTextAreaElement ? timedJobPromptInput.value.trim() : "";
+  const interval = timedJobIntervalSelect instanceof HTMLSelectElement ? timedJobIntervalSelect.value : "daily";
+  const startDate = timedJobStartDateInput instanceof HTMLInputElement ? timedJobStartDateInput.value : "";
+  const timeOfDay = timedJobTimeInput instanceof HTMLInputElement ? timedJobTimeInput.value : "";
+  const timezoneValue = timedJobTimezoneInput instanceof HTMLInputElement ? timedJobTimezoneInput.value.trim() : "";
+  const timezoneOffsetMinutes = -new Date().getTimezoneOffset();
+  const enabled = timedJobEnabledInput instanceof HTMLInputElement ? timedJobEnabledInput.checked : false;
+
+  const channels = [];
+  if (timedJobChannelsNode instanceof HTMLElement) {
+    const checkboxes = timedJobChannelsNode.querySelectorAll("input[type='checkbox'][data-timed-job-channel-id]");
+    checkboxes.forEach((checkbox) => {
+      if (!(checkbox instanceof HTMLInputElement)) {
+        return;
+      }
+      if (checkbox.checked && !checkbox.disabled && checkbox.dataset.timedJobChannelId) {
+        channels.push(checkbox.dataset.timedJobChannelId);
+      }
+    });
+  }
+
+  return {
+    title,
+    prompt,
+    interval,
+    start_date: startDate,
+    time_of_day: timeOfDay,
+    timezone: timezoneValue || "UTC",
+    timezone_offset_minutes: timezoneOffsetMinutes,
+    enabled,
+    channels,
+  };
+}
+
+async function saveTimedJob() {
+  const payload = collectTimedJobPayload();
+  if (!payload.prompt) {
+    setStatus("Timed job prompt is required.", true);
+    return;
+  }
+  if (!payload.start_date) {
+    setStatus("Timed job start date is required.", true);
+    return;
+  }
+  if (!payload.time_of_day) {
+    setStatus("Timed job time is required.", true);
+    return;
+  }
+  if (!Array.isArray(payload.channels) || payload.channels.length === 0) {
+    setStatus("Select at least one output channel.", true);
+    return;
+  }
+
+  const method = state.timedJobEditingId ? "PUT" : "POST";
+  const path = state.timedJobEditingId ? `/api/timed-jobs/${encodeURIComponent(state.timedJobEditingId)}` : "/api/timed-jobs";
+  const response = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await buildHttpErrorDetail(response, "Failed to save timed job."));
+  }
+}
+
+async function deleteTimedJob(jobId) {
+  const response = await fetch(`/api/timed-jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await buildHttpErrorDetail(response, "Failed to delete timed job."));
+  }
+}
+
+async function triggerTimedJobNow(jobId) {
+  const response = await fetch(`/api/timed-jobs/${encodeURIComponent(jobId)}/trigger`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(await buildHttpErrorDetail(response, "Failed to trigger timed job."));
+  }
+}
+
+async function loadTimedJobs(renderModal = false) {
+  try {
+    const payload = await fetchTimedJobs();
+    state.timedJobs = normalizeIncomingTimedJobs(payload.jobs);
+    state.timedJobChannels = normalizeTimedJobChannels(payload.channels);
+    if (renderModal) {
+      renderTimedJobChannelOptions(Array.isArray(collectTimedJobPayload().channels) ? collectTimedJobPayload().channels : ["gateway"]);
+      renderTimedJobsList();
+      if (timedJobsMetaNode instanceof HTMLElement) {
+        timedJobsMetaNode.textContent = `${state.timedJobs.length} jobs configured.`;
+      }
+    }
+  } catch (error) {
+    if (renderModal && timedJobsMetaNode instanceof HTMLElement) {
+      timedJobsMetaNode.textContent = normalizeErrorMessage(error, "Failed to load timed jobs.");
+    }
+    if (renderModal) {
+      throw error;
+    }
+  }
+}
+
+async function openTimedJobsModal() {
+  if (!(timedJobsModal instanceof HTMLElement)) {
+    return;
+  }
+  resetTimedJobEditor();
+  timedJobsModal.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  startTimedJobsClock();
+  await loadTimedJobs(true);
+  if (timedJobTitleInput instanceof HTMLInputElement) {
+    timedJobTitleInput.focus();
+  }
+}
+
+function closeTimedJobsModal() {
+  if (!(timedJobsModal instanceof HTMLElement)) {
+    return;
+  }
+  timedJobsModal.classList.add("hidden");
+  stopTimedJobsClock();
+  if (
+    (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
+    && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
+    && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))
+    && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
+  ) {
+    document.body.style.overflow = "";
+  }
+}
+
+async function handleTimedJobsListAction(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const actionNode = target.closest("[data-timed-job-action][data-timed-job-id]");
+  if (!(actionNode instanceof HTMLElement)) {
+    return;
+  }
+  const action = actionNode.dataset.timedJobAction;
+  const jobId = actionNode.dataset.timedJobId;
+  if (!action || !jobId) {
+    return;
+  }
+
+  const job = state.timedJobs.find((entry) => entry.id === jobId);
+  if (!job) {
+    return;
+  }
+
+  if (action === "edit") {
+    populateTimedJobEditor(job);
+    setStatus("Editing timed job.");
+    return;
+  }
+
+  if (action === "delete") {
+    try {
+      await deleteTimedJob(jobId);
+      await loadTimedJobs(true);
+      if (state.timedJobEditingId === jobId) {
+        resetTimedJobEditor();
+      }
+      setStatus("Timed job deleted.");
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Timed job delete failed."), true);
+    }
+    return;
+  }
+
+  if (action === "trigger-now") {
+    try {
+      await triggerTimedJobNow(jobId);
+      setStatus("Timed job triggered now.");
+      window.setTimeout(() => {
+        loadTimedJobs(true).catch(() => {});
+      }, 600);
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Timed job trigger failed."), true);
+    }
   }
 }
 
@@ -2748,7 +3235,11 @@ async function verifyIntegrationConfig(integrationId) {
     throw new Error(detail);
   }
 
-  return response.json();
+  const payload = await response.json();
+  if (integrationId === "telegram") {
+    await syncIntegrationStatus();
+  }
+  return payload;
 }
 
 async function fetchGitSshKey() {
@@ -3477,6 +3968,9 @@ async function loadGatewayMeta() {
     state.telegramOwnerUserId = typeof settings?.telegram_state?.owner_user_id === "string"
       ? settings.telegram_state.owner_user_id
       : "";
+    state.telegramOwnerChatId = typeof settings?.telegram_state?.owner_chat_id === "string"
+      ? settings.telegram_state.owner_chat_id
+      : "";
 
     state.providerLabel = activeProvider?.label ?? settings.active_provider_id ?? "";
     state.modelLabel = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.label ?? activeConfig?.model ?? "";
@@ -3504,6 +3998,7 @@ async function loadGatewayMeta() {
     startIntegrationStatusSync();
     startShortTermMemorySync();
     loadShortTermMemory(false);
+    loadTimedJobs(false);
     syncIntegrationStatus();
     updateComposerState();
     setStatus("");
@@ -3527,6 +4022,7 @@ async function loadGatewayMeta() {
     startIntegrationStatusSync();
     startShortTermMemorySync();
     loadShortTermMemory(false);
+    loadTimedJobs(false);
     updateComposerState();
     setStatus(error.message, true);
   }
@@ -4366,8 +4862,12 @@ async function handleMcpActionClick(event) {
 
     if (action === "verify") {
       if (configKind === "integration") {
-        await verifyIntegrationConfig(configId);
-        setStatus("Integration verified.");
+        const result = await verifyIntegrationConfig(configId);
+        const detail = typeof result?.detail === "string" ? result.detail.trim() : "";
+        setStatus(detail ? `Integration verified: ${detail}` : "Integration verified.");
+        if (configId === "telegram" && timedJobsModal instanceof HTMLElement && !timedJobsModal.classList.contains("hidden")) {
+          await loadTimedJobs(true);
+        }
       } else {
         await verifyMcpConfig(configId);
         setStatus("Tool verified.");
@@ -4409,6 +4909,17 @@ if (shortTermMemoryButton instanceof HTMLButtonElement) {
   });
 }
 
+if (timedJobsButton instanceof HTMLButtonElement) {
+  timedJobsButton.addEventListener("click", async () => {
+    toggleMenu(false);
+    try {
+      await openTimedJobsModal();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to open timed jobs."), true);
+    }
+  });
+}
+
 if (brainViewButton instanceof HTMLButtonElement) {
   brainViewButton.addEventListener("click", () => {
     toggleMenu(false);
@@ -4438,6 +4949,40 @@ if (shortTermMemoryCloseButton instanceof HTMLButtonElement) {
 
 if (shortTermMemoryBackdrop instanceof HTMLElement) {
   shortTermMemoryBackdrop.addEventListener("click", closeShortTermMemoryModal);
+}
+
+if (timedJobsCloseButton instanceof HTMLButtonElement) {
+  timedJobsCloseButton.addEventListener("click", closeTimedJobsModal);
+}
+
+if (timedJobsBackdrop instanceof HTMLElement) {
+  timedJobsBackdrop.addEventListener("click", closeTimedJobsModal);
+}
+
+if (timedJobSaveButton instanceof HTMLButtonElement) {
+  timedJobSaveButton.addEventListener("click", async () => {
+    try {
+      await saveTimedJob();
+      await loadTimedJobs(true);
+      resetTimedJobEditor();
+      setStatus("Timed job saved.");
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Timed job save failed."), true);
+    }
+  });
+}
+
+if (timedJobResetButton instanceof HTMLButtonElement) {
+  timedJobResetButton.addEventListener("click", () => {
+    resetTimedJobEditor();
+    setStatus("New timed job form ready.");
+  });
+}
+
+if (timedJobsListNode instanceof HTMLElement) {
+  timedJobsListNode.addEventListener("click", async (event) => {
+    await handleTimedJobsListAction(event);
+  });
 }
 
 if (shortTermMemoryRefreshButton instanceof HTMLButtonElement) {
@@ -4662,6 +5207,18 @@ if (mobileShortTermMemoryButton instanceof HTMLButtonElement) {
   });
 }
 
+if (mobileTimedJobsButton instanceof HTMLButtonElement) {
+  mobileTimedJobsButton.addEventListener("click", async () => {
+    toggleMobileSettingsMenu(false);
+    closeMobileDrawers();
+    try {
+      await openTimedJobsModal();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to open timed jobs."), true);
+    }
+  });
+}
+
 if (mobileBrainViewButton instanceof HTMLButtonElement) {
   mobileBrainViewButton.addEventListener("click", () => {
     toggleMobileSettingsMenu(false);
@@ -4722,6 +5279,11 @@ document.addEventListener("keydown", (event) => {
 
   if (mobileSettingsPopover instanceof HTMLElement && !mobileSettingsPopover.classList.contains("hidden")) {
     toggleMobileSettingsMenu(false);
+    return;
+  }
+
+  if (timedJobsModal instanceof HTMLElement && !timedJobsModal.classList.contains("hidden")) {
+    closeTimedJobsModal();
     return;
   }
 

@@ -716,10 +716,11 @@ button:disabled {
   height: auto;
   border: 0;
   border-radius: 0;
-  padding: 0.12rem 0.2rem;
+  padding: 0.08rem 0.22rem;
   background: transparent;
   color: #6d7b91;
-  font-size: 1.6rem;
+  font-size: 1.2rem;
+  font-weight: 600;
   line-height: 1;
   transition: color 0.2s ease;
 }
@@ -1037,6 +1038,145 @@ button:disabled {
 
 .short-term-action-decline:hover {
   background: #bf3737;
+}
+
+.timed-jobs-modal-card {
+  width: min(1240px, 97vw);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.timed-jobs-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(340px, 0.95fr) minmax(0, 1.35fr);
+  gap: 0.75rem;
+}
+
+.timed-jobs-editor,
+.timed-jobs-list-wrap {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fcfdff;
+  padding: 0.65rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
+#timed-jobs-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.timed-jobs-editor h3,
+.timed-jobs-list-wrap h3 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.timed-job-field {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.timed-job-field textarea,
+.timed-job-field input,
+.timed-job-field select {
+  margin: 0;
+}
+
+.timed-job-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.timed-job-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.timed-job-channel-title {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #6a778d;
+}
+
+.timed-job-channels {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.timed-job-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
+  font-size: 0.82rem;
+  color: #45586f;
+}
+
+.timed-job-check input {
+  width: auto;
+  margin: 0;
+}
+
+.timed-job-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.timed-job-actions button {
+  margin: 0;
+}
+
+.timed-job-trigger-link {
+  margin: 0;
+  padding: 0;
+  min-width: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #5a6f8b;
+  font-size: 0.78rem;
+  line-height: 1;
+  text-transform: lowercase;
+}
+
+.timed-job-trigger-link:hover {
+  background: transparent;
+  color: #314862;
+}
+
+.timed-job-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  background: #fff;
+  display: grid;
+  gap: 0.36rem;
+}
+
+.timed-job-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.timed-job-item-title {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.timed-job-item-meta {
+  margin: 0;
+  font-size: 0.74rem;
+  color: #6f7e93;
 }
 
 .memory-modal.hidden {
@@ -2010,22 +2150,24 @@ button:disabled {
   min-width: 2.2rem;
   padding: 0;
   border-radius: 999px;
-  background: transparent;
+  border: 1px solid var(--border);
+  background: #f8fbff;
   color: #6c7f96;
   box-shadow: none;
   transform: none;
-  font-size: 1.05rem;
+  font-size: 0.96rem;
+  font-weight: 700;
   line-height: 1;
 }
 
 .chat-composer .actions #mic-btn.is-listening {
+  border-color: #bb4a4a;
   background: #c73636;
   color: #ffffff;
-  border-radius: 0.45rem;
 }
 
 .chat-composer .actions #mic-btn:hover {
-  background: transparent;
+  background: #edf4fd;
   color: #435c79;
 }
 
@@ -2397,6 +2539,33 @@ button:disabled {
   .brain-modal-body {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(130px, 180px) minmax(0, 1fr);
+  }
+
+  .timed-jobs-layout {
+    display: block;
+  }
+
+  .timed-job-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .timed-jobs-modal-card {
+    overflow-y: auto;
+    max-height: 94vh;
+  }
+
+  .timed-jobs-editor,
+  .timed-jobs-list-wrap {
+    display: block;
+  }
+
+  .timed-jobs-list-wrap {
+    margin-top: 0.7rem;
+  }
+
+  #timed-jobs-list {
+    max-height: 40vh;
+    overflow-y: auto;
   }
 }
 

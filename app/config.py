@@ -1,12 +1,16 @@
 """Settings models and persistence helpers for the shared braindump SQLite database."""
 
 import asyncio
+import json
 import os
 import shutil
 import sqlite3
-from datetime import datetime, timezone
+import uuid
+from calendar import monthrange
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field
 
@@ -74,7 +78,28 @@ class DailyTokenUsage(BaseModel):
 
 class TelegramState(BaseModel):
     owner_user_id: str = ""
+    owner_chat_id: str = ""
     last_update_id: int = Field(default=0, ge=0)
+
+
+TimedJobInterval = Literal["daily", "weekly", "monthly", "once"]
+
+
+class TimedJob(BaseModel):
+    id: str
+    title: str = Field(default="", max_length=120)
+    prompt: str = Field(default="", max_length=5000)
+    interval: TimedJobInterval = "daily"
+    start_date: str = Field(default="")
+    time_of_day: str = Field(default="00:00")
+    timezone: str = Field(default="UTC")
+    timezone_offset_minutes: int = Field(default=0, ge=-840, le=840)
+    enabled: bool = False
+    channels: list[str] = Field(default_factory=list)
+    next_run_at: str = ""
+    last_run_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class Settings(BaseModel):
@@ -218,6 +243,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS telegram_state (
           id INTEGER PRIMARY KEY CHECK (id = 1),
           owner_user_id TEXT NOT NULL DEFAULT '',
+          owner_chat_id TEXT NOT NULL DEFAULT '',
           last_update_id INTEGER NOT NULL DEFAULT 0
         );
 
@@ -246,10 +272,30 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_conversation_turns_created ON conversation_turns(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS timed_jobs (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL DEFAULT '',
+          prompt TEXT NOT NULL DEFAULT '',
+          interval_type TEXT NOT NULL DEFAULT 'daily' CHECK (interval_type IN ('daily', 'weekly', 'monthly', 'once')),
+          start_date TEXT NOT NULL DEFAULT '',
+          time_of_day TEXT NOT NULL DEFAULT '00:00',
+          timezone TEXT NOT NULL DEFAULT 'UTC',
+          timezone_offset_minutes INTEGER NOT NULL DEFAULT 0,
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+          channels_json TEXT NOT NULL DEFAULT '[]',
+          next_run_at TEXT NOT NULL DEFAULT '',
+          last_run_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_timed_jobs_next_run ON timed_jobs(enabled, next_run_at);
     """)
 
     _ensure_settings_core_column(conn, "memory_extraction_interval", "INTEGER NOT NULL DEFAULT 10")
     _ensure_settings_core_column(conn, "user_message_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_timed_jobs_column(conn, "timezone_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
 
@@ -259,6 +305,22 @@ def _ensure_settings_core_column(conn: sqlite3.Connection, column_name: str, def
     if column_name in existing:
         return
     conn.execute(f"ALTER TABLE settings_core ADD COLUMN {column_name} {definition}")
+
+
+def _ensure_telegram_state_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
+    rows = conn.execute("PRAGMA table_info(telegram_state)").fetchall()
+    existing = {str(row["name"]) for row in rows}
+    if column_name in existing:
+        return
+    conn.execute(f"ALTER TABLE telegram_state ADD COLUMN {column_name} {definition}")
+
+
+def _ensure_timed_jobs_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
+    rows = conn.execute("PRAGMA table_info(timed_jobs)").fetchall()
+    existing = {str(row["name"]) for row in rows}
+    if column_name in existing:
+        return
+    conn.execute(f"ALTER TABLE timed_jobs ADD COLUMN {column_name} {definition}")
 
 
 async def ensure_settings_file() -> None:
@@ -350,7 +412,11 @@ def _load_settings_sync() -> Settings:
         
         # 8. Telegram
         tg = conn.execute("SELECT * FROM telegram_state WHERE id = 1").fetchone()
-        telegram_state = TelegramState(owner_user_id=tg["owner_user_id"], last_update_id=tg["last_update_id"])
+        telegram_state = TelegramState(
+            owner_user_id=tg["owner_user_id"],
+            owner_chat_id=tg["owner_chat_id"],
+            last_update_id=tg["last_update_id"],
+        )
         
         return Settings(
             bot_name=core["bot_name"],
@@ -454,8 +520,14 @@ def _save_settings_sync(settings: Settings) -> None:
             conn.execute("INSERT INTO daily_token_usage (date, tokens) VALUES (?, ?)", (item.date, item.tokens))
             
         # 8. Telegram
-        conn.execute("UPDATE telegram_state SET owner_user_id = ?, last_update_id = ? WHERE id = 1",
-            (settings.telegram_state.owner_user_id, settings.telegram_state.last_update_id))
+        conn.execute(
+            "UPDATE telegram_state SET owner_user_id = ?, owner_chat_id = ?, last_update_id = ? WHERE id = 1",
+            (
+                settings.telegram_state.owner_user_id,
+                settings.telegram_state.owner_chat_id,
+                settings.telegram_state.last_update_id,
+            ),
+        )
             
         conn.commit()
     except Exception:
@@ -519,6 +591,495 @@ def _sync_active_selection(settings: Settings) -> Settings:
             "active_chat_id": active_chat_id,
         }
     )
+
+
+def _normalize_timezone_name(raw_timezone: object) -> str:
+    value = str(raw_timezone).strip()
+    if not value:
+        return "UTC"
+    if value.upper() == "UTC":
+        return "UTC"
+    return value
+
+
+def _resolve_timezone(raw_timezone: object, raw_offset_minutes: object = 0) -> tuple[str, tzinfo]:
+    timezone_name = _normalize_timezone_name(raw_timezone)
+    if timezone_name == "UTC":
+        return "UTC", timezone.utc
+    try:
+        return timezone_name, ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        pass
+
+    try:
+        offset_minutes = int(str(raw_offset_minutes).strip() or "0")
+    except (TypeError, ValueError):
+        offset_minutes = 0
+    safe_offset = max(-840, min(840, offset_minutes))
+    if safe_offset == 0:
+        return "UTC", timezone.utc
+    sign = "+" if safe_offset >= 0 else "-"
+    abs_minutes = abs(safe_offset)
+    hours = abs_minutes // 60
+    minutes = abs_minutes % 60
+    return f"UTC{sign}{hours:02d}:{minutes:02d}", timezone(timedelta(minutes=safe_offset))
+
+
+def _normalize_interval(raw_interval: object) -> TimedJobInterval:
+    value = str(raw_interval).strip().lower()
+    if value == "weekly":
+        return "weekly"
+    if value == "monthly":
+        return "monthly"
+    if value == "once":
+        return "once"
+    return "daily"
+
+
+def _parse_start_date(raw_date: object) -> date:
+    value = str(raw_date).strip()
+    if not value:
+        return datetime.now(timezone.utc).date()
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return datetime.now(timezone.utc).date()
+
+
+def _parse_time_of_day(raw_time: object) -> time:
+    value = str(raw_time).strip()
+    if not value:
+        return time(hour=0, minute=0)
+    try:
+        parsed = time.fromisoformat(value)
+        return time(hour=parsed.hour, minute=parsed.minute)
+    except ValueError:
+        return time(hour=0, minute=0)
+
+
+def _normalize_channels(raw_channels: object) -> list[str]:
+    if not isinstance(raw_channels, list):
+        return ["gateway"]
+    allowed = {"gateway", "telegram"}
+    unique: list[str] = []
+    for entry in raw_channels:
+        channel_id = str(entry).strip().lower()
+        if channel_id not in allowed:
+            continue
+        if channel_id in unique:
+            continue
+        unique.append(channel_id)
+    if not unique:
+        return ["gateway"]
+    return unique
+
+
+def _make_local_datetime(local_date: date, local_time: time, tz: tzinfo) -> datetime:
+    return datetime(
+        local_date.year,
+        local_date.month,
+        local_date.day,
+        local_time.hour,
+        local_time.minute,
+        tzinfo=tz,
+    )
+
+
+def _next_month(year: int, month: int) -> tuple[int, int]:
+    if month == 12:
+        return year + 1, 1
+    return year, month + 1
+
+
+def _month_candidate(year: int, month: int, desired_day: int, local_time: time, tz: tzinfo) -> datetime:
+    last_day = monthrange(year, month)[1]
+    day = min(desired_day, last_day)
+    return datetime(year, month, day, local_time.hour, local_time.minute, tzinfo=tz)
+
+
+def _calculate_next_run_at(
+    *,
+    interval: TimedJobInterval,
+    start_date_value: date,
+    time_value: time,
+    timezone_name: str,
+    timezone_offset_minutes: int = 0,
+    now_utc: datetime,
+    last_run_at: str = "",
+) -> str:
+    _, tz = _resolve_timezone(timezone_name, timezone_offset_minutes)
+    now_local = now_utc.astimezone(tz)
+    base_local = _make_local_datetime(start_date_value, time_value, tz)
+
+    if interval == "once":
+        if last_run_at.strip():
+            return ""
+        if base_local <= now_local:
+            return now_utc.isoformat()
+        return base_local.astimezone(timezone.utc).isoformat()
+
+    if interval == "daily":
+        candidate = _make_local_datetime(now_local.date(), time_value, tz)
+        if candidate < base_local:
+            candidate = base_local
+        if candidate <= now_local:
+            candidate = candidate.replace(second=0, microsecond=0) + timedelta(days=1)
+        return candidate.astimezone(timezone.utc).isoformat()
+
+    if interval == "weekly":
+        target_weekday = base_local.weekday()
+        days_ahead = (target_weekday - now_local.weekday()) % 7
+        candidate_date = now_local.date() + timedelta(days=days_ahead)
+        candidate = _make_local_datetime(candidate_date, time_value, tz)
+        if candidate < base_local:
+            candidate = base_local
+        if candidate <= now_local:
+            candidate += timedelta(days=7)
+        return candidate.astimezone(timezone.utc).isoformat()
+
+    desired_day = base_local.day
+    candidate = _month_candidate(now_local.year, now_local.month, desired_day, time_value, tz)
+    if candidate < base_local:
+        candidate = base_local
+    while candidate <= now_local:
+        year, month = _next_month(candidate.year, candidate.month)
+        candidate = _month_candidate(year, month, desired_day, time_value, tz)
+    return candidate.astimezone(timezone.utc).isoformat()
+
+
+def _decode_channels_json(raw_value: object) -> list[str]:
+    try:
+        payload = json.loads(str(raw_value or "[]"))
+    except json.JSONDecodeError:
+        payload = []
+    return _normalize_channels(payload)
+
+
+def _row_to_timed_job(row: sqlite3.Row) -> TimedJob:
+    timezone_name, _ = _resolve_timezone(row["timezone"], row["timezone_offset_minutes"])
+    try:
+        timezone_offset_minutes = int(row["timezone_offset_minutes"])
+    except (TypeError, ValueError):
+        timezone_offset_minutes = 0
+    return TimedJob(
+        id=str(row["id"]),
+        title=str(row["title"]),
+        prompt=str(row["prompt"]),
+        interval=_normalize_interval(row["interval_type"]),
+        start_date=str(row["start_date"]),
+        time_of_day=str(row["time_of_day"]),
+        timezone=timezone_name,
+        timezone_offset_minutes=max(-840, min(840, timezone_offset_minutes)),
+        enabled=bool(row["enabled"]),
+        channels=_decode_channels_json(row["channels_json"]),
+        next_run_at=str(row["next_run_at"]),
+        last_run_at=str(row["last_run_at"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _timed_job_sort_key(job: TimedJob) -> tuple[int, str, str]:
+    if job.enabled and job.next_run_at.strip():
+        return (0, job.next_run_at, job.title.lower())
+    return (1, job.updated_at, job.title.lower())
+
+
+async def list_timed_jobs() -> list[TimedJob]:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_list_timed_jobs_sync)
+
+
+async def get_timed_job(timed_job_id: str) -> TimedJob | None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_get_timed_job_sync, timed_job_id)
+
+
+def _list_timed_jobs_sync() -> list[TimedJob]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        rows = conn.execute("SELECT * FROM timed_jobs ORDER BY id ASC").fetchall()
+        jobs = [_row_to_timed_job(row) for row in rows]
+        jobs.sort(key=_timed_job_sort_key)
+        return jobs
+    finally:
+        conn.close()
+
+
+def _get_timed_job_sync(timed_job_id: str) -> TimedJob | None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute("SELECT * FROM timed_jobs WHERE id = ?", (timed_job_id.strip(),)).fetchone()
+        if row is None:
+            return None
+        return _row_to_timed_job(row)
+    finally:
+        conn.close()
+
+
+def _sanitize_timed_job_payload(payload: dict[str, object], existing_id: str = "") -> TimedJob:
+    now_utc = datetime.now(timezone.utc)
+    raw_timezone = payload.get("timezone", "UTC")
+    raw_timezone_offset_minutes = payload.get("timezone_offset_minutes", 0)
+    timezone_name, _ = _resolve_timezone(raw_timezone, raw_timezone_offset_minutes)
+    try:
+        timezone_offset_minutes = int(str(raw_timezone_offset_minutes).strip() or "0")
+    except (TypeError, ValueError):
+        timezone_offset_minutes = 0
+    timezone_offset_minutes = max(-840, min(840, timezone_offset_minutes))
+    interval = _normalize_interval(payload.get("interval", "daily"))
+    start_date_value = _parse_start_date(payload.get("start_date", ""))
+    time_value = _parse_time_of_day(payload.get("time_of_day", ""))
+    enabled = bool(payload.get("enabled", False))
+    channels = _normalize_channels(payload.get("channels", ["gateway"]))
+    prompt = str(payload.get("prompt", "")).strip()
+    title = " ".join(str(payload.get("title", "")).split()).strip()
+    job_id = existing_id.strip() if existing_id.strip() else str(payload.get("id", "")).strip() or str(uuid.uuid4())
+    last_run_at = str(payload.get("last_run_at", "")).strip()
+    created_at = str(payload.get("created_at", "")).strip() or now_utc.isoformat()
+    updated_at = now_utc.isoformat()
+
+    safe_title = title[:120].strip()
+    safe_prompt = prompt[:5000].strip()
+    safe_start_date = start_date_value.isoformat()
+    safe_time_of_day = f"{time_value.hour:02d}:{time_value.minute:02d}"
+
+    if enabled:
+        next_run_at = _calculate_next_run_at(
+            interval=interval,
+            start_date_value=start_date_value,
+            time_value=time_value,
+            timezone_name=timezone_name,
+            timezone_offset_minutes=timezone_offset_minutes,
+            now_utc=now_utc,
+            last_run_at=last_run_at,
+        )
+        if interval == "once" and not next_run_at:
+            enabled = False
+    else:
+        next_run_at = ""
+
+    return TimedJob(
+        id=job_id,
+        title=safe_title,
+        prompt=safe_prompt,
+        interval=interval,
+        start_date=safe_start_date,
+        time_of_day=safe_time_of_day,
+        timezone=timezone_name,
+        timezone_offset_minutes=timezone_offset_minutes,
+        enabled=enabled,
+        channels=channels,
+        next_run_at=next_run_at,
+        last_run_at=last_run_at,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
+async def upsert_timed_job(payload: dict[str, object], *, timed_job_id: str = "") -> TimedJob:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_upsert_timed_job_sync, payload, timed_job_id)
+
+
+def _upsert_timed_job_sync(payload: dict[str, object], timed_job_id: str) -> TimedJob:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        existing_id = timed_job_id.strip() or str(payload.get("id", "")).strip()
+        existing_row = None
+        if existing_id:
+            existing_row = conn.execute("SELECT * FROM timed_jobs WHERE id = ?", (existing_id,)).fetchone()
+
+        merged_payload = dict(payload)
+        if existing_row is not None:
+            merged_payload.setdefault("created_at", str(existing_row["created_at"]))
+            merged_payload.setdefault("last_run_at", str(existing_row["last_run_at"]))
+            merged_payload["id"] = str(existing_row["id"])
+
+        job = _sanitize_timed_job_payload(merged_payload, existing_id=existing_id)
+
+        conn.execute(
+            """
+            INSERT INTO timed_jobs (
+              id, title, prompt, interval_type, start_date, time_of_day, timezone,
+              timezone_offset_minutes, enabled, channels_json, next_run_at, last_run_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              title = excluded.title,
+              prompt = excluded.prompt,
+              interval_type = excluded.interval_type,
+              start_date = excluded.start_date,
+              time_of_day = excluded.time_of_day,
+              timezone = excluded.timezone,
+              timezone_offset_minutes = excluded.timezone_offset_minutes,
+              enabled = excluded.enabled,
+              channels_json = excluded.channels_json,
+              next_run_at = excluded.next_run_at,
+              last_run_at = excluded.last_run_at,
+              created_at = excluded.created_at,
+              updated_at = excluded.updated_at
+            """,
+            (
+                job.id,
+                job.title,
+                job.prompt,
+                job.interval,
+                job.start_date,
+                job.time_of_day,
+                job.timezone,
+                job.timezone_offset_minutes,
+                int(job.enabled),
+                json.dumps(job.channels),
+                job.next_run_at,
+                job.last_run_at,
+                job.created_at,
+                job.updated_at,
+            ),
+        )
+        conn.commit()
+        return job
+    finally:
+        conn.close()
+
+
+async def delete_timed_job(timed_job_id: str) -> bool:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_delete_timed_job_sync, timed_job_id)
+
+
+def _delete_timed_job_sync(timed_job_id: str) -> bool:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        cursor = conn.execute("DELETE FROM timed_jobs WHERE id = ?", (timed_job_id.strip(),))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+async def list_due_timed_jobs(*, now_utc: datetime | None = None, limit: int = 25) -> list[TimedJob]:
+    await ensure_settings_file()
+    safe_now = now_utc or datetime.now(timezone.utc)
+    safe_limit = max(1, min(100, int(limit)))
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_list_due_timed_jobs_sync, safe_now, safe_limit)
+
+
+def _list_due_timed_jobs_sync(now_utc: datetime, limit: int) -> list[TimedJob]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM timed_jobs
+            WHERE enabled = 1
+              AND next_run_at != ''
+            ORDER BY next_run_at ASC
+            """
+        ).fetchall()
+
+        due: list[TimedJob] = []
+        for row in rows:
+            should_run = False
+            next_run_raw = str(row["next_run_at"]).strip()
+            if next_run_raw:
+                try:
+                    next_run = datetime.fromisoformat(next_run_raw)
+                    if next_run.tzinfo is None:
+                        next_run = next_run.replace(tzinfo=timezone.utc)
+                    if next_run <= now_utc:
+                        should_run = True
+                except ValueError:
+                    should_run = False
+
+            interval_type = _normalize_interval(row["interval_type"])
+            if not should_run and interval_type == "once":
+                last_run_at = str(row["last_run_at"]).strip()
+                if not last_run_at:
+                    start_date_value = _parse_start_date(row["start_date"])
+                    time_value = _parse_time_of_day(row["time_of_day"])
+                    _, tz = _resolve_timezone(row["timezone"], row["timezone_offset_minutes"])
+                    candidate = _make_local_datetime(start_date_value, time_value, tz).astimezone(timezone.utc)
+                    if candidate <= now_utc:
+                        should_run = True
+
+            if should_run:
+                due.append(_row_to_timed_job(row))
+            if len(due) >= limit:
+                break
+        return due
+    finally:
+        conn.close()
+
+
+async def mark_timed_job_executed(timed_job_id: str, *, executed_at_utc: datetime | None = None) -> TimedJob | None:
+    await ensure_settings_file()
+    safe_time = executed_at_utc or datetime.now(timezone.utc)
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_mark_timed_job_executed_sync, timed_job_id, safe_time)
+
+
+def _mark_timed_job_executed_sync(timed_job_id: str, executed_at_utc: datetime) -> TimedJob | None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute("SELECT * FROM timed_jobs WHERE id = ?", (timed_job_id.strip(),)).fetchone()
+        if row is None:
+            return None
+
+        job = _row_to_timed_job(row)
+        if not job.enabled:
+            return job
+
+        start_date_value = _parse_start_date(job.start_date)
+        time_value = _parse_time_of_day(job.time_of_day)
+        next_run_at = ""
+        enabled = job.enabled
+        if job.interval == "once":
+            enabled = False
+        else:
+            next_run_at = _calculate_next_run_at(
+                interval=job.interval,
+                start_date_value=start_date_value,
+                time_value=time_value,
+                timezone_name=_normalize_timezone_name(job.timezone),
+                timezone_offset_minutes=job.timezone_offset_minutes,
+                now_utc=executed_at_utc,
+                last_run_at=executed_at_utc.isoformat(),
+            )
+
+        updated_at = executed_at_utc.isoformat()
+        conn.execute(
+            """
+            UPDATE timed_jobs
+            SET enabled = ?,
+                next_run_at = ?,
+                last_run_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                int(enabled),
+                next_run_at,
+                executed_at_utc.isoformat(),
+                updated_at,
+                job.id,
+            ),
+        )
+        conn.commit()
+        return job.model_copy(
+            update={
+                "enabled": enabled,
+                "next_run_at": next_run_at,
+                "last_run_at": executed_at_utc.isoformat(),
+                "updated_at": updated_at,
+            }
+        )
+    finally:
+        conn.close()
 
 
 async def create_braindump_snapshot(target_path: Path) -> None:
