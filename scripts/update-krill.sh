@@ -10,7 +10,7 @@ BACKUP_FILE="${BACKUP_DIR}/braindump.db"
 
 # You can override this when running the script, e.g.:
 # KRILL_PUBLIC_BASE_URL="https://krill.example.com" ./scripts/update-krill.sh
-: "${KRILL_PUBLIC_BASE_URL:=http://localhost}"
+: "${KRILL_PUBLIC_BASE_URL:=}"
 
 mkdir -p "$BACKUP_DIR"
 
@@ -36,11 +36,19 @@ echo "🗑️ Löscht den alten Container..."
 docker rm "$CONTAINER_NAME" || true
 
 echo "✨ Startet den neuen Container..."
+ENV_ARGS=()
+if [ -n "$KRILL_PUBLIC_BASE_URL" ]; then
+  ENV_ARGS+=("-e" "KRILL_PUBLIC_BASE_URL=$KRILL_PUBLIC_BASE_URL")
+  echo "🌐 Nutze KRILL_PUBLIC_BASE_URL=$KRILL_PUBLIC_BASE_URL"
+else
+  echo "ℹ️ KRILL_PUBLIC_BASE_URL nicht gesetzt (verwende Request-Host zur Callback-Ermittlung)."
+fi
+
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
   -p 80:8055 \
-  -e KRILL_PUBLIC_BASE_URL="$KRILL_PUBLIC_BASE_URL" \
+  "${ENV_ARGS[@]}" \
   "$IMAGE_NAME"
 
 if [ -f "$BACKUP_FILE" ]; then

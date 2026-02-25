@@ -243,7 +243,14 @@ Why `KRILL_PUBLIC_BASE_URL` matters:
 
 - Google OAuth can reject callback URLs that use private LAN IPs (for example `http://192.168.x.x/...`) with `invalid_request`
 - Krill uses this env var to build a stable callback URL for OAuth (`/api/mcps/google/oauth/callback`)
-- use a browser-reachable host URL (local: `http://localhost`, production: your public `https://...` domain)
+- use a browser-reachable host URL (local host-browser: `http://localhost`, production: your public `https://...` domain)
+- do not set it to `localhost` if you access Krill from another device (phone/laptop), because callback on that device will point to itself
+
+Google OAuth deployment matrix (important):
+
+- Krill + browser on same machine (no Docker or Docker): use `http://localhost` (or `http://localhost:8055`) and register that exact callback URL in Google Cloud
+- Krill on machine A, browser on machine B via LAN IP (`192.168.x.x`): Google blocks private-IP callbacks; use a public HTTPS domain/tunnel for Krill and set `KRILL_PUBLIC_BASE_URL` to that URL
+- Temporary workaround for LAN setups: perform Google login once from machine A (host running Krill) via `localhost`; tokens are then stored in `braindump.db` and usable from other clients
 
 Important:
 
