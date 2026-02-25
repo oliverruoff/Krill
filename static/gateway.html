@@ -56,11 +56,31 @@
 
       <div class="gateway-body">
         <aside class="chat-history-panel">
-          <div class="chat-history-header">
-            <h2>Chats</h2>
-            <button type="button" id="new-chat-btn" class="new-chat-btn">New chat</button>
+          <div class="mobile-left-panel-header">
+            <div class="mobile-left-panel-brand">
+              <img src="/static/img/krill_icon.png" alt="Krill" class="mobile-left-panel-icon" />
+              <p id="mobile-left-assistant-name" class="mobile-left-assistant-name">Assistant</p>
+            </div>
+            <div class="mobile-left-panel-switchers">
+              <label class="switch-field" for="mobile-left-provider-select">
+                <span>Provider</span>
+                <select id="mobile-left-provider-select"></select>
+              </label>
+              <label class="switch-field" for="mobile-left-model-select">
+                <span>Model</span>
+                <select id="mobile-left-model-select"></select>
+              </label>
+            </div>
+            <p id="mobile-left-daily-token-usage" class="assistant-meta assistant-meta-subtle">Today: 0 tokens</p>
+            <p id="mobile-left-short-term-memory-status" class="assistant-meta assistant-meta-subtle">Short Term Memory: 0 pending</p>
           </div>
-          <div id="chat-history-list" class="chat-history-list" aria-label="Chat history"></div>
+          <div class="chat-history-content">
+            <div class="chat-history-header">
+              <h2>Chats</h2>
+              <button type="button" id="new-chat-btn" class="new-chat-btn">New chat</button>
+            </div>
+            <div id="chat-history-list" class="chat-history-list" aria-label="Chat history"></div>
+          </div>
         </aside>
 
         <section class="chat-panel">

@@ -25,12 +25,17 @@ const menuPopover = document.getElementById("menu-popover");
 const assistantTitleNode = document.getElementById("assistant-title");
 const assistantMetaNode = document.getElementById("assistant-meta");
 const mobileAssistantNameNode = document.getElementById("mobile-assistant-name");
+const mobileLeftAssistantNameNode = document.getElementById("mobile-left-assistant-name");
 const dailyTokenUsageNode = document.getElementById("daily-token-usage");
+const mobileLeftDailyTokenUsageNode = document.getElementById("mobile-left-daily-token-usage");
 const telegramStatusNode = document.getElementById("telegram-status");
 const shortTermMemoryStatusNode = document.getElementById("short-term-memory-status");
+const mobileLeftShortTermMemoryStatusNode = document.getElementById("mobile-left-short-term-memory-status");
 const appVersionNode = document.getElementById("app-version");
 const headerProviderSelect = document.getElementById("header-provider-select");
 const headerModelSelect = document.getElementById("header-model-select");
+const mobileLeftProviderSelect = document.getElementById("mobile-left-provider-select");
+const mobileLeftModelSelect = document.getElementById("mobile-left-model-select");
 const compactButton = document.getElementById("compact-btn");
 const currentChatTitleNode = document.getElementById("current-chat-title");
 const chatHistoryList = document.getElementById("chat-history-list");
@@ -88,6 +93,9 @@ const MOBILE_SWIPE_EDGE_PX = 24;
 const MOBILE_SWIPE_OPEN_THRESHOLD = 70;
 const MOBILE_SWIPE_CLOSE_THRESHOLD = 52;
 const CHAT_INPUT_MAX_HEIGHT_PX = 160;
+
+const providerSelectNodes = [headerProviderSelect, mobileLeftProviderSelect].filter((node) => node instanceof HTMLSelectElement);
+const modelSelectNodes = [headerModelSelect, mobileLeftModelSelect].filter((node) => node instanceof HTMLSelectElement);
 
 const state = {
   providers: [],
@@ -1374,6 +1382,9 @@ function updateAssistantHeader(settings) {
   if (mobileAssistantNameNode instanceof HTMLElement) {
     mobileAssistantNameNode.textContent = botName || "Assistant";
   }
+  if (mobileLeftAssistantNameNode instanceof HTMLElement) {
+    mobileLeftAssistantNameNode.textContent = botName || "Assistant";
+  }
   assistantMetaNode.textContent = `${providerText} connected - Active provider: ${activeProviderText} - Active model: ${modelText}`;
 }
 
@@ -1406,14 +1417,22 @@ function normalizeDailyTokenUsage(rawUsage) {
 }
 
 function updateDailyTokenUsageLabel() {
-  if (!(dailyTokenUsageNode instanceof HTMLElement)) {
+  const hasDesktopNode = dailyTokenUsageNode instanceof HTMLElement;
+  const hasMobileNode = mobileLeftDailyTokenUsageNode instanceof HTMLElement;
+  if (!hasDesktopNode && !hasMobileNode) {
     return;
   }
 
   const today = getTodayDateKey();
   const todayEntry = state.dailyTokenUsage.find((entry) => entry.date === today);
   const tokens = todayEntry ? Number(todayEntry.tokens || 0) : 0;
-  dailyTokenUsageNode.textContent = `Today: ${formatNumber(tokens)} tokens`;
+  const label = `Today: ${formatNumber(tokens)} tokens`;
+  if (hasDesktopNode) {
+    dailyTokenUsageNode.textContent = label;
+  }
+  if (hasMobileNode) {
+    mobileLeftDailyTokenUsageNode.textContent = label;
+  }
 }
 
 function updateTelegramStatusLabel() {
@@ -1440,13 +1459,26 @@ function updateTelegramStatusLabel() {
 }
 
 function updateShortTermMemoryBadge() {
-  if (!(shortTermMemoryStatusNode instanceof HTMLElement)) {
+  const hasDesktopNode = shortTermMemoryStatusNode instanceof HTMLElement;
+  const hasMobileNode = mobileLeftShortTermMemoryStatusNode instanceof HTMLElement;
+  if (!hasDesktopNode && !hasMobileNode) {
     return;
   }
   const pending = Math.max(0, Number(state.shortTermMemoryCount || 0));
   const suffix = state.shortTermMemoryExtracting ? " - identifying..." : "";
-  shortTermMemoryStatusNode.textContent = `Short Term Memory: ${formatNumber(pending)} pending${suffix}`;
-  shortTermMemoryStatusNode.classList.toggle("assistant-meta-alert", pending > 0);
+  const label = `Short Term Memory: ${formatNumber(pending)} pending${suffix}`;
+  if (hasDesktopNode) {
+    shortTermMemoryStatusNode.textContent = label;
+  }
+  if (hasMobileNode) {
+    mobileLeftShortTermMemoryStatusNode.textContent = label;
+  }
+  if (hasDesktopNode) {
+    shortTermMemoryStatusNode.classList.toggle("assistant-meta-alert", pending > 0);
+  }
+  if (hasMobileNode) {
+    mobileLeftShortTermMemoryStatusNode.classList.toggle("assistant-meta-alert", pending > 0);
+  }
 }
 
 async function loadAppVersion() {
@@ -1602,8 +1634,12 @@ function shouldCompactForLimit(messages, memoryBlock, tokenLimit) {
 }
 
 function setSwitchersDisabled(disabled) {
-  headerProviderSelect.disabled = disabled;
-  headerModelSelect.disabled = disabled;
+  providerSelectNodes.forEach((selectNode) => {
+    selectNode.disabled = disabled;
+  });
+  modelSelectNodes.forEach((selectNode) => {
+    selectNode.disabled = disabled;
+  });
 }
 
 function setCompactButtonDisabled(disabled) {
@@ -1615,19 +1651,25 @@ function setCompactButtonDisabled(disabled) {
 function renderProviderSwitcher(selectedProviderId = state.activeProviderId) {
   const configuredProviderIds = getConfiguredProviderIds();
   state.suppressSwitcherEvents = true;
-  headerProviderSelect.innerHTML = "";
+  providerSelectNodes.forEach((selectNode) => {
+    selectNode.innerHTML = "";
+  });
 
   configuredProviderIds.forEach((providerId) => {
     const provider = getProviderById(providerId);
-    const option = document.createElement("option");
-    option.value = providerId;
-    option.textContent = provider?.label ?? providerId;
-    headerProviderSelect.appendChild(option);
+    providerSelectNodes.forEach((selectNode) => {
+      const option = document.createElement("option");
+      option.value = providerId;
+      option.textContent = provider?.label ?? providerId;
+      selectNode.appendChild(option);
+    });
   });
 
   if (configuredProviderIds.length === 0) {
-    headerProviderSelect.value = "";
-    headerProviderSelect.disabled = true;
+    providerSelectNodes.forEach((selectNode) => {
+      selectNode.value = "";
+      selectNode.disabled = true;
+    });
     state.suppressSwitcherEvents = false;
     return "";
   }
@@ -1635,8 +1677,10 @@ function renderProviderSwitcher(selectedProviderId = state.activeProviderId) {
   const normalizedProvider = configuredProviderIds.includes(selectedProviderId)
     ? selectedProviderId
     : configuredProviderIds[0];
-  headerProviderSelect.disabled = false;
-  headerProviderSelect.value = normalizedProvider;
+  providerSelectNodes.forEach((selectNode) => {
+    selectNode.disabled = false;
+    selectNode.value = normalizedProvider;
+  });
   state.suppressSwitcherEvents = false;
   return normalizedProvider;
 }
@@ -1648,29 +1692,38 @@ function renderModelSwitcher(providerId, selectedModelId = "") {
   const normalizedSelected = selectedModelId || configModel || modelCandidates[0]?.id || "";
 
   state.suppressSwitcherEvents = true;
-  headerModelSelect.innerHTML = "";
+  modelSelectNodes.forEach((selectNode) => {
+    selectNode.innerHTML = "";
+  });
 
   modelCandidates.forEach((model) => {
-    const option = document.createElement("option");
-    option.value = model.id;
-    option.textContent = model.label;
-    headerModelSelect.appendChild(option);
+    modelSelectNodes.forEach((selectNode) => {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.label;
+      selectNode.appendChild(option);
+    });
   });
 
   if (normalizedSelected && !modelCandidates.some((model) => model.id === normalizedSelected)) {
-    const customOption = document.createElement("option");
-    customOption.value = normalizedSelected;
-    customOption.textContent = normalizedSelected;
-    headerModelSelect.appendChild(customOption);
+    modelSelectNodes.forEach((selectNode) => {
+      const customOption = document.createElement("option");
+      customOption.value = normalizedSelected;
+      customOption.textContent = normalizedSelected;
+      selectNode.appendChild(customOption);
+    });
   }
 
-  headerModelSelect.disabled = !providerId;
-  if (normalizedSelected) {
-    headerModelSelect.value = normalizedSelected;
-  }
+  modelSelectNodes.forEach((selectNode) => {
+    selectNode.disabled = !providerId;
+    if (normalizedSelected) {
+      selectNode.value = normalizedSelected;
+    }
+  });
   state.suppressSwitcherEvents = false;
 
-  return headerModelSelect.value || normalizedSelected;
+  const primaryModelSelect = modelSelectNodes[0];
+  return (primaryModelSelect instanceof HTMLSelectElement ? primaryModelSelect.value : "") || normalizedSelected;
 }
 
 function syncSwitcherControls() {
@@ -4043,6 +4096,7 @@ if (mobileSettingsMenuButton instanceof HTMLButtonElement) {
 if (mobileMemoryManagementButton instanceof HTMLButtonElement) {
   mobileMemoryManagementButton.addEventListener("click", () => {
     toggleMobileSettingsMenu(false);
+    closeMobileDrawers();
     openMemoryManagementModal();
   });
 }
@@ -4050,6 +4104,7 @@ if (mobileMemoryManagementButton instanceof HTMLButtonElement) {
 if (mobileShortTermMemoryButton instanceof HTMLButtonElement) {
   mobileShortTermMemoryButton.addEventListener("click", () => {
     toggleMobileSettingsMenu(false);
+    closeMobileDrawers();
     openShortTermMemoryModal();
   });
 }
@@ -4057,6 +4112,7 @@ if (mobileShortTermMemoryButton instanceof HTMLButtonElement) {
 if (mobileBrainViewButton instanceof HTMLButtonElement) {
   mobileBrainViewButton.addEventListener("click", () => {
     toggleMobileSettingsMenu(false);
+    closeMobileDrawers();
     openBrainModal();
   });
 }
@@ -4135,26 +4191,56 @@ menuPopover.addEventListener("click", () => {
   toggleMenu(false);
 });
 
-headerProviderSelect.addEventListener("change", async () => {
+async function handleProviderSelectChange(providerId) {
   if (state.suppressSwitcherEvents) {
     return;
   }
 
-  const nextProviderId = headerProviderSelect.value;
+  const nextProviderId = providerId;
   const configuredModel = state.settings?.provider_configs?.[nextProviderId]?.model ?? "";
   const nextModelId = renderModelSwitcher(nextProviderId, configuredModel);
   await switchActiveProviderModel(nextProviderId, nextModelId);
-});
+}
 
-headerModelSelect.addEventListener("change", async () => {
+async function handleModelSelectChange(providerId, modelId) {
   if (state.suppressSwitcherEvents) {
     return;
   }
 
-  const nextProviderId = headerProviderSelect.value;
-  const nextModelId = headerModelSelect.value;
+  const nextProviderId = providerId;
+  const nextModelId = modelId;
   await switchActiveProviderModel(nextProviderId, nextModelId);
-});
+}
+
+if (headerProviderSelect instanceof HTMLSelectElement) {
+  headerProviderSelect.addEventListener("change", async () => {
+    await handleProviderSelectChange(headerProviderSelect.value);
+  });
+}
+
+if (mobileLeftProviderSelect instanceof HTMLSelectElement) {
+  mobileLeftProviderSelect.addEventListener("change", async () => {
+    await handleProviderSelectChange(mobileLeftProviderSelect.value);
+  });
+}
+
+if (headerModelSelect instanceof HTMLSelectElement) {
+  headerModelSelect.addEventListener("change", async () => {
+    const providerFromTopbar = headerProviderSelect instanceof HTMLSelectElement
+      ? headerProviderSelect.value
+      : state.activeProviderId;
+    await handleModelSelectChange(providerFromTopbar, headerModelSelect.value);
+  });
+}
+
+if (mobileLeftModelSelect instanceof HTMLSelectElement) {
+  mobileLeftModelSelect.addEventListener("change", async () => {
+    const providerFromLeftPanel = mobileLeftProviderSelect instanceof HTMLSelectElement
+      ? mobileLeftProviderSelect.value
+      : state.activeProviderId;
+    await handleModelSelectChange(providerFromLeftPanel, mobileLeftModelSelect.value);
+  });
+}
 
 if (compactButton instanceof HTMLButtonElement) {
   compactButton.addEventListener("click", triggerManualCompaction);
