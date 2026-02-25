@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
 from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, load_settings, save_settings
+from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed, is_over_context_threshold
 from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from app.usage import add_daily_usage, get_today_token_usage
 
@@ -18,6 +19,10 @@ TELEGRAM_POLL_TIMEOUT_SECONDS = 25
 TELEGRAM_DRAIN_BATCH_TIMEOUT_SECONDS = 0
 TELEGRAM_DRAIN_MAX_BATCHES = 40
 TELEGRAM_UPDATES_PER_CYCLE = 5
+TELEGRAM_CONTEXT_WINDOW_WARNING = (
+    "Heads up: this chat is above 75% of the model context window. "
+    "Consider /new to start a fresh chat."
+)
 
 
 class TelegramBridgeWorker:
@@ -242,14 +247,11 @@ class TelegramBridgeWorker:
             source_chat_id=active_chat.id,
         )
 
-        history = [
-            {"role": message.role, "content": message.content}
-            for message in active_chat.messages
-            if message.role in {"user", "assistant"} and message.content.strip()
-        ]
+        ensure_runtime_context_seed(active_chat, settings)
+        history = build_model_history(active_chat)
 
         try:
-            engine_result, _ = await generate_chat_response(
+            engine_result, token_limit = await generate_chat_response(
                 settings=settings,
                 message=prompt,
                 history=history,
@@ -259,6 +261,8 @@ class TelegramBridgeWorker:
             used_tokens = engine_result["used_tokens"]
             used_tools = engine_result["used_mcp_tools"]
             trace_messages = engine_result["system_trace_messages"]
+            if is_over_context_threshold(used_tokens, token_limit, threshold=0.75):
+                text_response = f"{text_response}\n\n{TELEGRAM_CONTEXT_WINDOW_WARNING}" if text_response else TELEGRAM_CONTEXT_WINDOW_WARNING
         except Exception as exc:
             text_response = f"Hard error: {exc}"
             used_tokens = None

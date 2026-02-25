@@ -80,6 +80,8 @@ Telegram integration notes:
 - non-owner messages are silently ignored
 - Telegram chat sessions are ephemeral and isolated from Gateway chats
 - Telegram chat history is not written to `braindump.db`
+- Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway
+- Telegram replies include a context-window warning when usage reaches 75% of model limit (suggesting `/new`)
 
 ### 4) Orchestrator (reason + act loop)
 
@@ -124,10 +126,10 @@ Exact message workflow (Telegram):
 
 1. Telegram worker (`app/integrations/telegram/worker.py`) receives bot update
 2. Owner and mention/reply rules are enforced
-3. Telegram message is added to Telegram's in-memory chat session (ephemeral)
+3. Telegram message is added to Telegram's in-memory chat session (ephemeral), and runtime seed context is ensured
 4. Worker calls shared engine `generate_chat_response(...)`
 5. Shared engine uses the same runtime system prompt composition and `generate_with_tools(...)` path as Gateway
-6. Worker appends assistant result to Telegram in-memory chat and replies via Telegram Bot API
+6. Worker appends assistant result to Telegram in-memory chat and replies via Telegram Bot API (adds a `/new` hint if context usage is >= 75%)
 7. Telegram chat history is not written to Gateway chats or `braindump.db`
 
 SSE events include:
