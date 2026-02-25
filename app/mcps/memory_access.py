@@ -5,6 +5,7 @@ from typing import Any
 
 from app.config import load_settings
 from app.providers import get_provider
+from app.providers.resilience import generate_with_retries
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
 
@@ -85,7 +86,8 @@ class MemoryAccessMCP(MCPPlugin):
             "Return JSON only with no markdown."
         )
 
-        response_text, used_tokens = await provider.generate(
+        response_text, used_tokens = await generate_with_retries(
+            provider=provider,
             prompt=prompt,
             system_prompt=system_prompt,
             model=model_id,

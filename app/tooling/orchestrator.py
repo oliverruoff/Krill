@@ -9,6 +9,7 @@ from app.config import McpConfig, Settings
 from app.mcps.base import MCPPlugin, McpConfigField
 from app.mcps.registry import get_all_mcps
 from app.providers.base import LLMProvider
+from app.providers.resilience import generate_with_retries
 
 
 class ToolUsageEntry(TypedDict):
@@ -58,13 +59,36 @@ async def generate_with_tools(
     await trace("runtime_system_prompt", system_prompt)
     enabled_tools = _collect_enabled_tools(settings)
 
-    if not enabled_tools:
-        text, used_tokens = await provider.generate(
-            prompt=prompt,
-            system_prompt=system_prompt,
+    async def provider_generate(
+        *,
+        prompt_text: str,
+        system_prompt_text: str,
+        phase_label: str,
+    ) -> tuple[str, int | None]:
+        async def on_retry(attempt: int, max_attempts: int, delay_seconds: float, reason: str) -> None:
+            await trace(
+                "provider_retry",
+                (
+                    f"{phase_label}: retry {attempt + 1}/{max_attempts} in {delay_seconds:.1f}s"
+                    f" after provider error: {reason or 'unknown error'}"
+                ),
+            )
+
+        return await generate_with_retries(
+            provider=provider,
+            prompt=prompt_text,
+            system_prompt=system_prompt_text,
             model=model,
             api_key=api_key,
             history=history,
+            on_retry=on_retry,
+        )
+
+    if not enabled_tools:
+        text, used_tokens = await provider_generate(
+            prompt_text=prompt,
+            system_prompt_text=system_prompt,
+            phase_label="direct_response",
         )
         if isinstance(used_tokens, int):
             token_values.append(used_tokens)
@@ -96,12 +120,10 @@ async def generate_with_tools(
         )
         await trace("tool_planner_prompt", planner_prompt)
 
-        planner_response, planner_tokens = await provider.generate(
-            prompt=planner_prompt,
-            system_prompt=planner_system,
-            model=model,
-            api_key=api_key,
-            history=history,
+        planner_response, planner_tokens = await provider_generate(
+            prompt_text=planner_prompt,
+            system_prompt_text=planner_system,
+            phase_label=f"planner_step_{step_index}",
         )
         if isinstance(planner_tokens, int):
             token_values.append(planner_tokens)
@@ -196,12 +218,40 @@ async def generate_with_tools(
                 history=history,
                 user_message=prompt,
                 tool_call_payload=tool_call_payload,
+                tool_input_schema=cast(dict[str, object], tool_entry.get("input_schema", {})),
                 reminder_text=reminder_text,
                 current_local_time=current_local_time,
             )
             if isinstance(reminder_tokens, int):
                 token_values.append(reminder_tokens)
             tool_call_payload["arguments"] = tool_arguments
+
+        missing_required_arguments = _missing_required_arguments(
+            cast(dict[str, object], tool_entry.get("input_schema", {})),
+            tool_arguments,
+        )
+        if missing_required_arguments:
+            missing_payload = {
+                "mcp_id": mcp_id,
+                "tool_id": tool_id,
+                "arguments": tool_arguments,
+                "step": step_index,
+                "error": "missing_required_arguments",
+                "missing_required_arguments": missing_required_arguments,
+            }
+            await trace("tool_error", json.dumps(missing_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_call": tool_call_payload,
+                    "tool_error": {
+                        "type": "missing_required_arguments",
+                        "message": f"Missing required arguments: {', '.join(missing_required_arguments)}",
+                        "missing_required_arguments": missing_required_arguments,
+                    },
+                }
+            )
+            continue
 
         await trace("tool_call", json.dumps(tool_call_payload, ensure_ascii=True))
 
@@ -215,7 +265,26 @@ async def generate_with_tools(
                 f"MCP hard error: {plugin.display_name} ({tool_id}) exceeded timeout of {timeout_seconds}s."
             ) from exc
         except Exception as exc:
-            raise RuntimeError(f"MCP hard error: {plugin.display_name} ({tool_id}) failed: {exc}") from exc
+            tool_error_payload = {
+                "mcp_id": mcp_id,
+                "tool_id": tool_id,
+                "arguments": tool_arguments,
+                "step": step_index,
+                "error": "tool_execution_failed",
+                "detail": str(exc),
+            }
+            await trace("tool_error", json.dumps(tool_error_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_call": tool_call_payload,
+                    "tool_error": {
+                        "type": "tool_execution_failed",
+                        "message": str(exc),
+                    },
+                }
+            )
+            continue
 
         await trace("tool_result", json.dumps(tool_result, ensure_ascii=True))
         interaction_log.append({
@@ -226,12 +295,10 @@ async def generate_with_tools(
 
     final_prompt = _build_final_prompt_with_interactions(prompt, interaction_log)
     await trace("final_prompt", final_prompt)
-    final_response, final_tokens = await provider.generate(
-        prompt=final_prompt,
-        system_prompt=system_prompt,
-        model=model,
-        api_key=api_key,
-        history=history,
+    final_response, final_tokens = await provider_generate(
+        prompt_text=final_prompt,
+        system_prompt_text=system_prompt,
+        phase_label="final_response",
     )
     if isinstance(final_tokens, int):
         token_values.append(final_tokens)
@@ -396,22 +463,27 @@ async def _apply_tool_call_reminder(
     history: list[dict[str, str]],
     user_message: str,
     tool_call_payload: dict[str, object],
+    tool_input_schema: dict[str, object],
     reminder_text: str,
     current_local_time: str,
 ) -> tuple[dict[str, object], int | None]:
     prompt = (
-        "You selected a Google Services MCP tool call.\n"
+        "You selected an MCP tool call.\n"
         "Keep the same intent. Return JSON only in this shape: "
         '{"arguments":{...}}\n'
         f"Current datetime (server local): {current_local_time}\n"
         "If arguments contain relative dates, resolve them against this datetime and keep correct year/timezone.\n"
+        "Do not change tool identity. Keep arguments valid for the selected tool schema.\n"
         "User message:\n"
         f"{user_message}\n"
         "Selected tool call:\n"
-        f"{json.dumps(tool_call_payload, ensure_ascii=True)}"
+        f"{json.dumps(tool_call_payload, ensure_ascii=True)}\n"
+        "Selected tool input schema:\n"
+        f"{json.dumps(tool_input_schema, ensure_ascii=True)}"
     )
 
-    response_text, used_tokens = await provider.generate(
+    response_text, used_tokens = await generate_with_retries(
+        provider=provider,
         prompt=prompt,
         system_prompt=reminder_text,
         model=model,
@@ -438,3 +510,27 @@ async def _apply_tool_call_reminder(
         return cast(dict[str, object], existing_args), used_tokens if isinstance(used_tokens, int) else None
 
     return {}, used_tokens if isinstance(used_tokens, int) else None
+
+
+def _missing_required_arguments(input_schema: dict[str, object], arguments: dict[str, object]) -> list[str]:
+    required_raw = input_schema.get("required") if isinstance(input_schema, dict) else None
+    if not isinstance(required_raw, list):
+        return []
+
+    missing: list[str] = []
+    for item in required_raw:
+        if not isinstance(item, str):
+            continue
+        if item not in arguments:
+            missing.append(item)
+            continue
+
+        value = arguments.get(item)
+        if value is None:
+            missing.append(item)
+            continue
+
+        if isinstance(value, str) and not value.strip():
+            missing.append(item)
+
+    return missing

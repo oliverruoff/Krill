@@ -71,6 +71,7 @@ from .memory_extraction import (
     stop_memory_extraction_worker,
 )
 from .providers import get_provider, get_provider_options, is_supported_provider
+from .providers.resilience import generate_with_retries
 from .version import APP_VERSION
 
 
@@ -778,7 +779,8 @@ async def compact_chat(payload: CompactChatRequest) -> CompactChatResponse:
         return CompactChatResponse(memory_block="", history=[])
 
     try:
-        compacted_text, used_tokens = await provider.generate(
+        compacted_text, used_tokens = await generate_with_retries(
+            provider=provider,
             prompt=_build_compaction_prompt(payload.memory_block, payload.target_token_limit),
             system_prompt=_compaction_system_prompt(),
             model=provider_config.model,

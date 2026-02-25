@@ -2004,6 +2004,42 @@ button:disabled {
   flex: 1;
 }
 
+.chat-composer .actions #mic-btn {
+  flex: 0 0 auto;
+  width: 2.2rem;
+  min-width: 2.2rem;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #6c7f96;
+  box-shadow: none;
+  transform: none;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.chat-composer .actions #mic-btn.is-listening {
+  background: #c73636;
+  color: #ffffff;
+  border-radius: 0.45rem;
+}
+
+.chat-composer .actions #mic-btn:hover {
+  background: transparent;
+  color: #435c79;
+}
+
+.chat-composer .actions #mic-btn.is-listening:hover {
+  background: #af1f1f;
+  color: #ffffff;
+}
+
+.chat-composer .actions #mic-btn:focus,
+.chat-composer .actions #mic-btn:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 #chat-input {
   resize: none;
   min-height: 2.35rem;

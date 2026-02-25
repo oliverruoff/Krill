@@ -15,6 +15,7 @@ from app.config import (
     register_user_message_event,
 )
 from app.providers import get_provider
+from app.providers.resilience import generate_with_retries
 
 
 _EXTRACTION_LOCK = asyncio.Lock()
@@ -218,7 +219,8 @@ async def run_memory_extraction(*, trigger_count: int, interval: int, source_cha
                 return 0
 
             try:
-                response_text, _ = await provider.generate(
+                response_text, _ = await generate_with_retries(
+                    provider=provider,
                     prompt=_build_extraction_prompt(),
                     system_prompt="You are a precise memory extraction engine. Return valid JSON only.",
                     model=provider_config.model,
