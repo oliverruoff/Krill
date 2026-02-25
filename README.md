@@ -64,9 +64,16 @@ Current tools:
 
 - `brave_search`
 - `git_ops`
+- `home_assistant` (token-based Home Assistant access; defaults base URL to `http://homeassistant.local:8123`)
 - `google_services` (disabled by default, OAuth login, read-only/read-write modes)
 - `local_files` (enabled by default)
 - `memory_access` (enabled by default)
+
+Home Assistant MCP notes:
+
+- configure a Home Assistant long-lived token in the tool card
+- base URL defaults to `http://homeassistant.local:8123` if left empty
+- supports listing entities, checking state, triggering/calling services, listing automations, and creating/updating automations
 
 Google Services MCP notes:
 

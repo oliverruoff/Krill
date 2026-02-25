@@ -3,6 +3,7 @@
 from .base import MCPPlugin, McpConfigField, McpToolSpec
 from .brave_search import BraveSearchMCP
 from .git_ops import GitOpsMCP
+from .home_assistant import HomeAssistantMCP
 from .local_files import LocalFilesMCP
 from .memory_access import MemoryAccessMCP
 from .google_services import GoogleServicesMCP
@@ -11,6 +12,7 @@ from .google_services import GoogleServicesMCP
 _MCPS: dict[str, MCPPlugin] = {
     "brave_search": BraveSearchMCP(),
     "git_ops": GitOpsMCP(),
+    "home_assistant": HomeAssistantMCP(),
     "local_files": LocalFilesMCP(),
     "memory_access": MemoryAccessMCP(),
     "google_services": GoogleServicesMCP(),
