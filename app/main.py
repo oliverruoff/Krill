@@ -1,6 +1,7 @@
 """FastAPI entrypoint exposing setup, gateway, chat, and integration APIs."""
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File, Query, Request
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse, HTMLResponse
@@ -209,6 +211,7 @@ class ShortTermMemoryResolveRequest(BaseModel):
 _GOOGLE_OAUTH_STATE_TTL_SECONDS = 600
 _google_oauth_states: dict[str, dict[str, object]] = {}
 _google_oauth_lock = asyncio.Lock()
+_PUBLIC_BASE_URL_ENV = "KRILL_PUBLIC_BASE_URL"
 
 
 @app.on_event("startup")
@@ -458,7 +461,20 @@ async def start_google_oauth(request: Request) -> HTMLResponse:
     access_mode = normalize_google_access_mode(params.get(ACCESS_MODE_PARAM, ""))
     state_token = secrets.token_urlsafe(32)
     await _register_google_oauth_state(state_token, {"access_mode": access_mode})
-    redirect_uri = str(request.url_for("google_oauth_callback"))
+    redirect_uri = _build_google_oauth_redirect_uri(request)
+    if _is_blocked_private_ip_google_redirect_uri(redirect_uri):
+        return HTMLResponse(
+            content=_google_popup_html(
+                False,
+                (
+                    "Google OAuth blocks private-IP redirect URIs for this flow. "
+                    f"Current callback: {redirect_uri}. "
+                    "Use a public HTTPS domain/reverse-proxy URL or set "
+                    f"{_PUBLIC_BASE_URL_ENV}=http://localhost:8055 when accessing Krill locally."
+                ),
+            ),
+            status_code=422,
+        )
     auth_url = build_google_oauth_authorize_url(
         client_id=client_id,
         redirect_uri=redirect_uri,
@@ -494,7 +510,7 @@ async def google_oauth_callback(
     except RuntimeError as exc:
         return HTMLResponse(content=_google_popup_html(False, str(exc)), status_code=422)
 
-    redirect_uri = str(request.url_for("google_oauth_callback"))
+    redirect_uri = _build_google_oauth_redirect_uri(request)
 
     try:
         token_payload = await asyncio.to_thread(
@@ -948,6 +964,36 @@ def _chunk_text(text: str) -> list[str]:
         return [text]
 
     return [f"{token} " for token in tokens[:-1]] + [tokens[-1]]
+
+
+def _build_google_oauth_redirect_uri(request: Request) -> str:
+    override = os.getenv(_PUBLIC_BASE_URL_ENV, "").strip()
+    if not override:
+        return str(request.url_for("google_oauth_callback"))
+
+    normalized = override if override.startswith("http://") or override.startswith("https://") else f"https://{override}"
+    parsed = urlsplit(normalized)
+    if not parsed.scheme or not parsed.netloc:
+        return str(request.url_for("google_oauth_callback"))
+
+    base_path = parsed.path.rstrip("/")
+    callback_path = f"{base_path}/api/mcps/google/oauth/callback"
+    return urlunsplit((parsed.scheme, parsed.netloc, callback_path, "", ""))
+
+
+def _is_blocked_private_ip_google_redirect_uri(redirect_uri: str) -> bool:
+    hostname = (urlsplit(redirect_uri).hostname or "").strip().lower()
+    if not hostname:
+        return False
+    if hostname in {"localhost", "127.0.0.1", "::1"}:
+        return False
+
+    try:
+        ip_value = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+
+    return ip_value.is_private
 
 
 async def _register_google_oauth_state(state_token: str, payload: dict[str, object]) -> None:

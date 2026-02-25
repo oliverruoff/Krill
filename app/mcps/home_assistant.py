@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Mapping
 from urllib import error, parse, request
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
@@ -160,8 +161,9 @@ class HomeAssistantMCP(MCPPlugin):
             if exc.code in {401, 403}:
                 return False, "Home Assistant rejected the token (unauthorized)."
             return False, f"Home Assistant verification failed ({exc.code}): {detail}"
-        except error.URLError:
-            return False, f"Network error while contacting Home Assistant at {base_url}."
+        except error.URLError as exc:
+            reason = _url_error_reason(exc)
+            return False, f"Network error while contacting Home Assistant at {base_url}: {reason}"
         except Exception:
             return False, "Unexpected error while verifying Home Assistant connection."
 
@@ -201,7 +203,8 @@ class HomeAssistantMCP(MCPPlugin):
             detail = _read_http_error(exc)
             raise RuntimeError(f"Home Assistant API request failed ({exc.code}): {detail}") from exc
         except error.URLError as exc:
-            raise RuntimeError("Network error while contacting Home Assistant.") from exc
+            reason = _url_error_reason(exc)
+            raise RuntimeError(f"Network error while contacting Home Assistant: {reason}") from exc
 
         raise RuntimeError(f"Unsupported Home Assistant tool: {tool_id}")
 
@@ -221,7 +224,7 @@ def _ha_request_json(
     method: str,
     url: str,
     token: str,
-    payload: dict[str, object] | None,
+    payload: Mapping[str, object] | None,
 ) -> dict[str, object] | list[object]:
     body: bytes | None = None
     headers = {
@@ -307,7 +310,7 @@ def _trigger_entity(base_url: str, token: str, arguments: dict[str, object]) -> 
 
     if action == "trigger":
         if domain == "automation":
-            payload = {
+            payload: dict[str, object] = {
                 "entity_id": entity_id,
                 "skip_condition": skip_condition,
             }
@@ -318,7 +321,7 @@ def _trigger_entity(base_url: str, token: str, arguments: dict[str, object]) -> 
                 "result": result,
             }
         if domain == "script":
-            payload = {"entity_id": entity_id}
+            payload: dict[str, object] = {"entity_id": entity_id}
             result = _ha_request_json("POST", f"{base_url}/api/services/script/turn_on", token, payload)
             return {
                 "entity_id": entity_id,
@@ -330,7 +333,7 @@ def _trigger_entity(base_url: str, token: str, arguments: dict[str, object]) -> 
     if action not in {"toggle", "turn_on", "turn_off"}:
         raise RuntimeError("Invalid action. Use one of: toggle, turn_on, turn_off, trigger.")
 
-    payload = {"entity_id": entity_id}
+    payload: dict[str, object] = {"entity_id": entity_id}
     result = _ha_request_json("POST", f"{base_url}/api/services/homeassistant/{action}", token, payload)
     return {
         "entity_id": entity_id,
@@ -552,3 +555,14 @@ def _read_http_error(exc: error.HTTPError) -> str:
     if len(cleaned) > 240:
         return cleaned[:240] + "..."
     return cleaned
+
+
+def _url_error_reason(exc: error.URLError) -> str:
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, str) and reason.strip():
+        return reason.strip()
+    if reason is not None:
+        text = str(reason).strip()
+        if text:
+            return text
+    return "unknown network error"

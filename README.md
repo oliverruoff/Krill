@@ -81,10 +81,12 @@ Google Services MCP notes:
 - optional: server env vars can still be used as defaults:
   - `GOOGLE_OAUTH_CLIENT_ID` (fallback: `GOOGLE_CLIENT_ID`)
   - `GOOGLE_OAUTH_CLIENT_SECRET` (fallback: `GOOGLE_CLIENT_SECRET`)
+  - `KRILL_PUBLIC_BASE_URL` (optional OAuth callback base URL override; useful in Docker/reverse-proxy setups)
 - choose access mode:
   - unchecked **Add write access**: read Gmail and Calendar
   - checked **Add write access**: also send emails and create calendar events
 - click **Login Google** to complete OAuth consent
+- if Google OAuth shows private-IP redirect errors in Docker, set `KRILL_PUBLIC_BASE_URL` to a reachable host URL (for local host-browser use: `http://localhost:8055`)
 - OAuth tokens and resolved client credentials are persisted in `braindump.db` (`mcp_config_params`), so export/import keeps the connection usable
 
 Current integrations:
@@ -215,6 +217,38 @@ Run:
 ```bash
 docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
+
+### Updating Krill (Docker)
+
+If you use the provided updater script `scripts/update-krill.sh`, it now handles safe updates with data carry-over:
+
+1. pulls the latest image from GHCR
+2. copies current `/app/data/braindump.db` from the running container to `backups/braindump.db`
+3. recreates the container with the new image
+4. restores `braindump.db` into the new container and restarts once
+
+Run it with:
+
+```bash
+./scripts/update-krill.sh
+```
+
+Optional (recommended for OAuth in Docker/reverse-proxy setups):
+
+```bash
+KRILL_PUBLIC_BASE_URL="http://localhost" ./scripts/update-krill.sh
+```
+
+Why `KRILL_PUBLIC_BASE_URL` matters:
+
+- Google OAuth can reject callback URLs that use private LAN IPs (for example `http://192.168.x.x/...`) with `invalid_request`
+- Krill uses this env var to build a stable callback URL for OAuth (`/api/mcps/google/oauth/callback`)
+- use a browser-reachable host URL (local: `http://localhost`, production: your public `https://...` domain)
+
+Important:
+
+- if your external port is not `80`, include it (for example `http://localhost:8055`)
+- the exact callback URL must also be added to your Google OAuth client in Google Cloud Console
 
 ### Docker E2E API Test
 
