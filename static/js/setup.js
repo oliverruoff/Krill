@@ -99,7 +99,8 @@ function showConfigView() {
 
 function updateSystemPromptCounter() {
   const used = fields.systemPrompt.value.length;
-  fields.systemPromptCount.textContent = `${used}/200`;
+  const maxLength = fields.systemPrompt.maxLength > 0 ? fields.systemPrompt.maxLength : 400;
+  fields.systemPromptCount.textContent = `${used}/${maxLength}`;
 }
 
 function setImportingState(isImporting) {

@@ -79,7 +79,7 @@ class TelegramState(BaseModel):
 
 class Settings(BaseModel):
     bot_name: str = Field(default="MyBot", max_length=15)
-    system_prompt: str = Field(default="Talk english. Be playful, friendly and use emojis! :).", max_length=200)
+    system_prompt: str = Field(default="Talk english. Be playful, friendly and use emojis! :).", max_length=400)
     setup_completed: bool = False
     active_provider_id: str = ""
     active_model_id: str = ""
