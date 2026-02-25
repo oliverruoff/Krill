@@ -5,7 +5,7 @@ set -euo pipefail
 CONTAINER_NAME="krill-app"
 IMAGE_NAME="ghcr.io/oliverruoff/krill:latest"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKUP_DIR="${SCRIPT_DIR}/../backups"
+BACKUP_DIR="${PWD}/backups"
 BACKUP_FILE="${BACKUP_DIR}/braindump.db"
 
 # You can override this when running the script, e.g.:
