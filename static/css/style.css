@@ -1416,6 +1416,21 @@ button:disabled {
   align-items: center;
 }
 
+.mcp-title-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+  cursor: pointer;
+}
+
+.mcp-title-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .mcp-title {
   margin: 0;
   font-size: 0.82rem;
@@ -1455,6 +1470,90 @@ button:disabled {
   padding: 0.34rem 0.45rem;
   border-radius: 8px;
   font-size: 0.74rem;
+}
+
+.mcp-field select {
+  padding: 0.34rem 0.45rem;
+  border-radius: 8px;
+  font-size: 0.74rem;
+}
+
+.mcp-card-body.hidden {
+  display: none;
+}
+
+.mcp-expand-btn {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #6d7b91;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1;
+  min-width: 1rem;
+}
+
+.mcp-expand-btn:hover {
+  background: transparent;
+  color: #2f4057;
+}
+
+.mcp-guide {
+  border: 1px solid #d8e1ef;
+  border-radius: 8px;
+  background: #f7faff;
+  margin-top: 0.35rem;
+  padding: 0.42rem 0.5rem;
+  display: grid;
+  gap: 0.24rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.mcp-guide-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.mcp-guide-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #4e5f77;
+}
+
+.mcp-guide-list {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.71rem;
+  color: #5f6f87;
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mcp-guide-link {
+  font-size: 0.71rem;
+  color: #1b4baf;
+  text-decoration: none;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mcp-guide-link:hover {
+  text-decoration: underline;
+}
+
+.mcp-guide-body.hidden {
+  display: none;
 }
 
 .mcp-card-actions {

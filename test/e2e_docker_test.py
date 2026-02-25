@@ -360,6 +360,35 @@ def _persist_chat_to_settings(base_url: str, assistant_text: str) -> None:
     _ok("Chat persisted")
 
 
+def _set_google_mcp_fixture(base_url: str) -> None:
+    _step("Persisting Google MCP OAuth fixture params")
+    settings = _http_json("GET", f"{base_url}/api/settings")
+    if not isinstance(settings, dict):
+        raise E2EFailure("/api/settings returned invalid payload while setting Google MCP fixture")
+
+    raw_mcp_configs = settings.get("mcp_configs")
+    mcp_configs: dict[str, Any] = dict(raw_mcp_configs) if isinstance(raw_mcp_configs, dict) else {}
+    mcp_configs["google_services"] = {
+        "enabled": True,
+        "params": {
+            "access_mode": "read_write",
+            "client_id": "fixture-client-id.apps.googleusercontent.com",
+            "client_secret": "fixture-client-secret",
+            "access_token": "fixture-access-token",
+            "refresh_token": "fixture-refresh-token",
+            "token_expiry": "2099-01-01T00:00:00+00:00",
+            "connected_email": "fixture@example.com",
+            "scopes": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events",
+        },
+    }
+    settings["mcp_configs"] = mcp_configs
+
+    saved = _http_json("POST", f"{base_url}/api/settings", settings)
+    if not isinstance(saved, dict):
+        raise E2EFailure("Saving Google MCP fixture returned invalid payload")
+    _ok("Google MCP fixture params saved")
+
+
 def _download_braindump(base_url: str, output_path: Path) -> bytes:
     _step("Downloading braindump export")
     payload = _http_bytes("GET", f"{base_url}/api/braindump/download")
@@ -440,14 +469,14 @@ def _validate_restored_chat(base_url: str) -> None:
         isinstance(message, dict)
         and message.get("role") == "user"
         and isinstance(message.get("content"), str)
-        and message.get("content").strip().lower() == "hi"
+        and str(message.get("content", "")).strip().lower() == "hi"
         for message in messages
     )
     has_assistant = any(
         isinstance(message, dict)
         and message.get("role") == "assistant"
         and isinstance(message.get("content"), str)
-        and bool(message.get("content").strip())
+        and bool(str(message.get("content", "")).strip())
         for message in messages
     )
 
@@ -457,6 +486,39 @@ def _validate_restored_chat(base_url: str) -> None:
         raise E2EFailure("Restored chat does not contain non-empty assistant message")
 
     _ok("Restore validation passed")
+
+
+def _validate_restored_google_mcp(base_url: str) -> None:
+    _step("Validating restored Google MCP params")
+    settings = _http_json("GET", f"{base_url}/api/settings")
+    if not isinstance(settings, dict):
+        raise E2EFailure("/api/settings returned invalid payload while validating Google MCP restore")
+
+    mcp_configs = settings.get("mcp_configs")
+    if not isinstance(mcp_configs, dict):
+        raise E2EFailure("Restored settings missing mcp_configs")
+
+    google_config = mcp_configs.get("google_services")
+    if not isinstance(google_config, dict):
+        raise E2EFailure("Restored settings missing google_services MCP config")
+
+    params = google_config.get("params")
+    if not isinstance(params, dict):
+        raise E2EFailure("Restored google_services params payload is invalid")
+
+    expected_pairs = {
+        "access_mode": "read_write",
+        "client_id": "fixture-client-id.apps.googleusercontent.com",
+        "client_secret": "fixture-client-secret",
+        "access_token": "fixture-access-token",
+        "refresh_token": "fixture-refresh-token",
+        "connected_email": "fixture@example.com",
+    }
+    for key, expected in expected_pairs.items():
+        if str(params.get(key, "")) != expected:
+            raise E2EFailure(f"Restored google_services param mismatch for {key}")
+
+    _ok("Google MCP params restored from braindump")
 
 
 def _remove_container(name: str) -> None:
@@ -511,6 +573,7 @@ def main() -> int:
         )
 
         _persist_chat_to_settings(base_url_a, assistant_text)
+        _set_google_mcp_fixture(base_url_a)
         _validate_brain_view(base_url_a)
         exported_bytes = _download_braindump(base_url_a, exported_braindump_path)
 
@@ -518,6 +581,7 @@ def main() -> int:
         _wait_for_ready(base_url_b)
         _import_braindump(base_url_b, exported_bytes)
         _validate_restored_chat(base_url_b)
+        _validate_restored_google_mcp(base_url_b)
 
         print("\n[PASS] End-to-end Docker API test completed successfully.")
         print(f"[INFO] Exported braindump path: {exported_braindump_path}")

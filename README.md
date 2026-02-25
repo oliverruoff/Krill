@@ -64,8 +64,21 @@ Current tools:
 
 - `brave_search`
 - `git_ops`
+- `google_services` (disabled by default, OAuth login, read-only/read-write modes)
 - `local_files` (enabled by default)
 - `memory_access` (enabled by default)
+
+Google Services MCP notes:
+
+- configure OAuth client credentials directly in the Google Services tool card
+- optional: server env vars can still be used as defaults:
+  - `GOOGLE_OAUTH_CLIENT_ID` (fallback: `GOOGLE_CLIENT_ID`)
+  - `GOOGLE_OAUTH_CLIENT_SECRET` (fallback: `GOOGLE_CLIENT_SECRET`)
+- choose access mode:
+  - unchecked **Add write access**: read Gmail and Calendar
+  - checked **Add write access**: also send emails and create calendar events
+- click **Login Google** to complete OAuth consent
+- OAuth tokens and resolved client credentials are persisted in `braindump.db` (`mcp_config_params`), so export/import keeps the connection usable
 
 Current integrations:
 
@@ -219,6 +232,10 @@ The script builds the image, starts fresh containers, configures setup with Gemi
 - `POST /api/providers/verify` -> provider credential/model verification
 - `GET /api/mcps` -> available tools metadata
 - `POST /api/mcps/verify` -> tool verification (when applicable)
+- `GET /api/mcps/google/oauth/status` -> Google OAuth connection status
+- `GET /api/mcps/google/oauth/start` -> start Google OAuth login redirect flow
+- `GET /api/mcps/google/oauth/callback` -> OAuth callback endpoint
+- `POST /api/mcps/google/oauth/disconnect` -> revoke/clear Google OAuth tokens
 - `GET /api/integrations` -> available integration metadata
 - `POST /api/integrations/verify` -> integration verification
 - `GET /api/integrations/status` -> lightweight integration runtime status

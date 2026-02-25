@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Sequence, TypedDict, cast
 
 from app.config import McpConfig, Settings
@@ -78,13 +79,21 @@ async def generate_with_tools(
     interaction_log: list[dict[str, object]] = []
     normalized_recursion = max(1, min(20, int(max_tool_recursion)))
     timeout_seconds = max(5, min(300, int(tool_timeout_seconds)))
+    current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
     planner_system = "You are selecting tools for a user request. Return JSON only without markdown and without extra prose."
     await trace("tool_planner_system", planner_system)
 
     for step_index in range(1, normalized_recursion + 1):
         await trace("tool_step_status", f"Step {step_index}/{normalized_recursion}")
 
-        planner_prompt = _build_recursive_planner_prompt(prompt, enabled_tools, interaction_log, step_index, normalized_recursion)
+        planner_prompt = _build_recursive_planner_prompt(
+            prompt,
+            enabled_tools,
+            interaction_log,
+            step_index,
+            normalized_recursion,
+            current_local_time,
+        )
         await trace("tool_planner_prompt", planner_prompt)
 
         planner_response, planner_tokens = await provider.generate(
@@ -126,7 +135,39 @@ async def generate_with_tools(
 
         tool_entry = next((entry for entry in enabled_tools if entry["mcp_id"] == mcp_id and entry["tool_id"] == tool_id), None)
         if tool_entry is None:
-            raise RuntimeError("MCP hard error: Planner selected unavailable tool.")
+            available_for_mcp = sorted(
+                {
+                    str(entry["tool_id"])
+                    for entry in enabled_tools
+                    if str(entry.get("mcp_id", "")) == mcp_id
+                }
+            )
+            unavailable_payload = {
+                "mcp_id": mcp_id,
+                "tool_id": tool_id,
+                "arguments": tool_arguments,
+                "step": step_index,
+                "error": "planner_selected_unavailable_tool",
+                "available_tool_ids_for_mcp": available_for_mcp,
+            }
+            await trace("tool_error", json.dumps(unavailable_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_call": {
+                        "mcp_id": mcp_id,
+                        "tool_id": tool_id,
+                        "arguments": tool_arguments,
+                        "step": step_index,
+                    },
+                    "tool_error": {
+                        "type": "planner_selected_unavailable_tool",
+                        "message": "Planner selected a tool that is not currently available.",
+                        "available_tool_ids_for_mcp": available_for_mcp,
+                    },
+                }
+            )
+            continue
 
         plugin = cast(MCPPlugin, tool_entry["plugin"])
         config = cast(McpConfig, tool_entry["config"])
@@ -144,6 +185,24 @@ async def generate_with_tools(
             "arguments": tool_arguments,
             "step": step_index,
         }
+
+        reminder_text = _get_mcp_tool_call_reminder(plugin, tool_id, config.params)
+        if reminder_text:
+            await trace("mcp_tool_call_reminder", reminder_text)
+            tool_arguments, reminder_tokens = await _apply_tool_call_reminder(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                history=history,
+                user_message=prompt,
+                tool_call_payload=tool_call_payload,
+                reminder_text=reminder_text,
+                current_local_time=current_local_time,
+            )
+            if isinstance(reminder_tokens, int):
+                token_values.append(reminder_tokens)
+            tool_call_payload["arguments"] = tool_arguments
+
         await trace("tool_call", json.dumps(tool_call_payload, ensure_ascii=True))
 
         try:
@@ -209,7 +268,16 @@ def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
         if _missing_required_params(plugin.config_fields, config):
             continue
 
-        for tool in plugin.tool_specs():
+        tool_specs = plugin.tool_specs()
+        if hasattr(plugin, "tool_specs_for_config"):
+            try:
+                maybe_specs = getattr(plugin, "tool_specs_for_config")(config.params)
+                if isinstance(maybe_specs, list):
+                    tool_specs = maybe_specs
+            except Exception:
+                tool_specs = plugin.tool_specs()
+
+        for tool in tool_specs:
             entries.append(
                 {
                     "mcp_id": mcp_id,
@@ -244,6 +312,7 @@ def _build_recursive_planner_prompt(
     interaction_log: list[dict[str, object]],
     step_index: int,
     max_steps: int,
+    current_local_time: str,
 ) -> str:
     tool_payload = [
         {
@@ -265,6 +334,8 @@ def _build_recursive_planner_prompt(
         '{"action":"call_tool","mcp_id":"...","tool_id":"...","arguments":{...}}\n'
         "If you can answer now, return: "
         '{"action":"respond","final_answer":"..."}\n'
+        f"Current datetime (server local): {current_local_time}\n"
+        "When user asks relative dates (today/tomorrow/day after tomorrow), convert using this datetime and keep the correct year.\n"
         f"User message: {user_message}\n"
         f"Available tools: {json.dumps(tool_payload)}\n"
         f"Completed tool interactions so far: {json.dumps(interaction_log, ensure_ascii=True)}"
@@ -302,3 +373,68 @@ def _parse_planner_response(response_text: str) -> dict[str, object]:
         return {"action": "respond", "final_answer": ""}
 
     return {"action": "respond", "final_answer": ""}
+
+
+def _get_mcp_tool_call_reminder(plugin: MCPPlugin, tool_id: str, params: dict[str, str]) -> str:
+    reminder_factory = getattr(plugin, "tool_call_system_reminder", None)
+    if not callable(reminder_factory):
+        return ""
+    try:
+        reminder = reminder_factory(tool_id, params)
+    except Exception:
+        return ""
+    if isinstance(reminder, str):
+        return reminder.strip()
+    return ""
+
+
+async def _apply_tool_call_reminder(
+    *,
+    provider: LLMProvider,
+    model: str,
+    api_key: str,
+    history: list[dict[str, str]],
+    user_message: str,
+    tool_call_payload: dict[str, object],
+    reminder_text: str,
+    current_local_time: str,
+) -> tuple[dict[str, object], int | None]:
+    prompt = (
+        "You selected a Google Services MCP tool call.\n"
+        "Keep the same intent. Return JSON only in this shape: "
+        '{"arguments":{...}}\n'
+        f"Current datetime (server local): {current_local_time}\n"
+        "If arguments contain relative dates, resolve them against this datetime and keep correct year/timezone.\n"
+        "User message:\n"
+        f"{user_message}\n"
+        "Selected tool call:\n"
+        f"{json.dumps(tool_call_payload, ensure_ascii=True)}"
+    )
+
+    response_text, used_tokens = await provider.generate(
+        prompt=prompt,
+        system_prompt=reminder_text,
+        model=model,
+        api_key=api_key,
+        history=history,
+    )
+
+    parsed = _parse_planner_response(response_text)
+    maybe_args = parsed.get("arguments")
+    if isinstance(maybe_args, dict):
+        return cast(dict[str, object], maybe_args), used_tokens if isinstance(used_tokens, int) else None
+
+    try:
+        payload = json.loads(response_text)
+        if isinstance(payload, dict):
+            raw_args = payload.get("arguments")
+            if isinstance(raw_args, dict):
+                return cast(dict[str, object], raw_args), used_tokens if isinstance(used_tokens, int) else None
+    except Exception:
+        pass
+
+    existing_args = tool_call_payload.get("arguments")
+    if isinstance(existing_args, dict):
+        return cast(dict[str, object], existing_args), used_tokens if isinstance(used_tokens, int) else None
+
+    return {}, used_tokens if isinstance(used_tokens, int) else None

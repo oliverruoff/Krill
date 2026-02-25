@@ -5,13 +5,19 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, Field
 
 
+class McpConfigFieldOption(BaseModel):
+    value: str
+    label: str
+
+
 class McpConfigField(BaseModel):
     id: str
     label: str
-    type: Literal["text", "password"] = "text"
+    type: Literal["text", "password", "select"] = "text"
     required: bool = False
     placeholder: str = ""
     description: str = ""
+    options: list[McpConfigFieldOption] = Field(default_factory=list)
 
 
 class McpToolSpec(BaseModel):
@@ -40,4 +46,7 @@ class MCPPlugin(Protocol):
         ...
 
     async def call_tool(self, tool_id: str, arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
+        ...
+
+    def tool_call_system_reminder(self, tool_id: str, params: dict[str, str]) -> str:
         ...

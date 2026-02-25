@@ -135,6 +135,10 @@ const state = {
   telegramEnabled: false,
   telegramTokenConfigured: false,
   telegramOwnerUserId: "",
+  googleOauthStatus: null,
+  googleAutosaveTimerId: null,
+  googleGuideExpanded: false,
+  expandedConfigs: {},
   coreMemories: [],
   normalMemories: [],
   coreMemorySearchTerm: "",
@@ -2606,6 +2610,103 @@ async function verifyGitSshAccess() {
   }
 }
 
+async function fetchGoogleOauthStatus() {
+  const response = await fetch("/api/mcps/google/oauth/status", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Failed to load Google OAuth status.");
+  }
+  const payload = await response.json();
+  state.googleOauthStatus = payload && typeof payload === "object" ? payload : null;
+  return state.googleOauthStatus;
+}
+
+async function startGoogleOauthLogin() {
+  await persistMcpConfigsToSettings();
+  const popup = window.open("/api/mcps/google/oauth/start", "krill-google-oauth", "width=640,height=760");
+  if (!popup) {
+    throw new Error("Popup blocked. Allow popups for this site and try again.");
+  }
+
+  const previousStatus = JSON.stringify(state.googleOauthStatus || {});
+
+  await new Promise((resolve) => {
+    const intervalId = window.setInterval(async () => {
+      if (!popup || popup.closed) {
+        window.clearInterval(intervalId);
+        resolve();
+        return;
+      }
+    }, 1000);
+  });
+
+  await fetchGoogleOauthStatus();
+  const nextStatus = JSON.stringify(state.googleOauthStatus || {});
+  if (previousStatus !== nextStatus) {
+    setStatus("Google OAuth status updated.");
+  }
+  renderMcpPanel();
+}
+
+function scheduleGoogleMcpAutosave() {
+  if (state.googleAutosaveTimerId) {
+    window.clearTimeout(state.googleAutosaveTimerId);
+  }
+
+  state.googleAutosaveTimerId = window.setTimeout(async () => {
+    state.googleAutosaveTimerId = null;
+    try {
+      await persistMcpConfigsToSettings();
+      await fetchGoogleOauthStatus();
+      renderMcpPanel();
+    } catch (error) {
+      setStatus(`Google settings auto-save failed: ${error.message}`, true);
+    }
+  }, 250);
+}
+
+function getGoogleOauthStatusLabel() {
+  if (!state.googleOauthStatus || typeof state.googleOauthStatus !== "object") {
+    return "Google: not connected";
+  }
+
+  if (!state.googleOauthStatus.connected) {
+    return "Google: not connected";
+  }
+
+  const emailValue = typeof state.googleOauthStatus.email === "string" ? state.googleOauthStatus.email.trim() : "";
+  const modeValue = state.googleOauthStatus.access_mode === "read_write" ? "read-write" : "read-only";
+  if (emailValue) {
+    return `Google: connected as ${emailValue} (${modeValue})`;
+  }
+  return `Google: connected (${modeValue})`;
+}
+
+function getGoogleSetupGuideItems() {
+  return [
+    "In Google Cloud Console, open APIs & Services -> Library and enable both Gmail API and Google Calendar API for your project.",
+    "Open Google Cloud Console -> APIs & Services -> Credentials, then click Create Credentials -> OAuth client ID.",
+    "Choose Application type: Web application and create the client.",
+    "In OAuth client details, go to Authorized redirect URIs, click Add URI, then paste: http://127.0.0.1:8055/api/mcps/google/oauth/callback",
+    "Copy the generated Client ID and Client Secret into this tool's fields: Google OAuth Client ID and Google OAuth Client Secret.",
+    "Enable this tool, click Login Google, approve access, then click Verify.",
+    "If you enable write access (Mail & Calendar) later, click Relogin once to approve the extra write scopes.",
+  ];
+}
+
+function getConfigExpandKey(kind, configId) {
+  return `${kind}:${configId}`;
+}
+
+function isConfigExpanded(kind, configId) {
+  const key = getConfigExpandKey(kind, configId);
+  return Boolean(state.expandedConfigs[key]);
+}
+
+function toggleConfigExpanded(kind, configId) {
+  const key = getConfigExpandKey(kind, configId);
+  state.expandedConfigs[key] = !Boolean(state.expandedConfigs[key]);
+}
+
 function renderConfigPanel(container, items, getConfig, options) {
   if (!(container instanceof HTMLElement)) {
     return;
@@ -2631,9 +2732,20 @@ function renderConfigPanel(container, items, getConfig, options) {
     const titleRow = document.createElement("div");
     titleRow.className = "mcp-title-row";
 
+    const titleMain = document.createElement("div");
+    titleMain.className = "mcp-title-main";
+    titleMain.dataset.action = "expand";
+    titleMain.dataset.configKind = options.kind;
+    titleMain.dataset.configId = item.id;
+
     const title = document.createElement("p");
     title.className = "mcp-title";
     title.textContent = item.label;
+
+    titleMain.appendChild(title);
+
+    const titleControls = document.createElement("div");
+    titleControls.className = "mcp-title-controls";
 
     const toggleLabel = document.createElement("label");
     toggleLabel.className = "mcp-toggle";
@@ -2651,15 +2763,33 @@ function renderConfigPanel(container, items, getConfig, options) {
     toggleLabel.appendChild(toggleInput);
     toggleLabel.appendChild(toggleText);
 
-    titleRow.appendChild(title);
-    titleRow.appendChild(toggleLabel);
+    const expanded = isConfigExpanded(options.kind, item.id);
+    const expandButton = document.createElement("button");
+    expandButton.type = "button";
+    expandButton.className = "mcp-expand-btn";
+    expandButton.textContent = expanded ? "▴" : "▾";
+    expandButton.setAttribute("aria-label", expanded ? "Collapse" : "Expand");
+    expandButton.title = expanded ? "Collapse" : "Expand";
+    expandButton.dataset.action = "expand";
+    expandButton.dataset.configKind = options.kind;
+    expandButton.dataset.configId = item.id;
+
+    titleControls.appendChild(toggleLabel);
+    titleControls.appendChild(expandButton);
+
+    titleRow.appendChild(titleMain);
+    titleRow.appendChild(titleControls);
+
+    const cardBody = document.createElement("div");
+    cardBody.className = "mcp-card-body";
+    cardBody.classList.toggle("hidden", !expanded);
 
     const description = document.createElement("p");
     description.className = "mcp-description";
     description.textContent = typeof item.description === "string" ? item.description : "";
 
     card.appendChild(titleRow);
-    card.appendChild(description);
+    cardBody.appendChild(description);
 
     const fields = Array.isArray(item.config_fields) ? item.config_fields : [];
     fields.forEach((field) => {
@@ -2675,11 +2805,40 @@ function renderConfigPanel(container, items, getConfig, options) {
       fieldLabel.textContent = field.label || fieldId;
       fieldLabel.setAttribute("for", `${options.kind}-${item.id}-${fieldId}`);
 
-      const fieldInput = document.createElement("input");
+      let fieldInput;
+      if (field.type === "select") {
+        const selectNode = document.createElement("select");
+        const optionsList = Array.isArray(field.options) ? field.options : [];
+        optionsList.forEach((optionItem) => {
+          const optionValue = typeof optionItem?.value === "string" ? optionItem.value : "";
+          if (!optionValue) {
+            return;
+          }
+          const optionLabel = typeof optionItem?.label === "string" && optionItem.label
+            ? optionItem.label
+            : optionValue;
+          const optionNode = document.createElement("option");
+          optionNode.value = optionValue;
+          optionNode.textContent = optionLabel;
+          selectNode.appendChild(optionNode);
+        });
+        const storedValue = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
+        if (storedValue && Array.from(selectNode.options).some((optionNode) => optionNode.value === storedValue)) {
+          selectNode.value = storedValue;
+        } else if (selectNode.options.length > 0) {
+          selectNode.value = selectNode.options[0].value;
+          config.params[fieldId] = selectNode.value;
+        }
+        fieldInput = selectNode;
+      } else {
+        const inputNode = document.createElement("input");
+        inputNode.type = field.type === "password" ? "password" : "text";
+        inputNode.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
+        inputNode.placeholder = typeof field.placeholder === "string" ? field.placeholder : "";
+        fieldInput = inputNode;
+      }
+
       fieldInput.id = `${options.kind}-${item.id}-${fieldId}`;
-      fieldInput.type = field.type === "password" ? "password" : "text";
-      fieldInput.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
-      fieldInput.placeholder = typeof field.placeholder === "string" ? field.placeholder : "";
       fieldInput.dataset.action = "param";
       fieldInput.dataset.configKind = options.kind;
       fieldInput.dataset.configId = item.id;
@@ -2687,7 +2846,7 @@ function renderConfigPanel(container, items, getConfig, options) {
 
       fieldWrapper.appendChild(fieldLabel);
       fieldWrapper.appendChild(fieldInput);
-      card.appendChild(fieldWrapper);
+      cardBody.appendChild(fieldWrapper);
     });
 
     const actions = document.createElement("div");
@@ -2712,7 +2871,112 @@ function renderConfigPanel(container, items, getConfig, options) {
 
       actions.appendChild(sshKeyButton);
       actions.appendChild(verifyButton);
-      card.appendChild(actions);
+      cardBody.appendChild(actions);
+    } else if (options.kind === "mcp" && item.id === "google_services") {
+      const guideNode = document.createElement("div");
+      guideNode.className = "mcp-guide";
+
+      const guideHeader = document.createElement("div");
+      guideHeader.className = "mcp-guide-header";
+      guideHeader.dataset.action = "google-guide-toggle";
+      guideHeader.dataset.configKind = options.kind;
+      guideHeader.dataset.configId = item.id;
+
+      const guideTitle = document.createElement("p");
+      guideTitle.className = "mcp-guide-title";
+      guideTitle.textContent = "Google setup";
+
+      const guideToggle = document.createElement("button");
+      guideToggle.type = "button";
+      guideToggle.className = "mcp-expand-btn";
+      guideToggle.textContent = state.googleGuideExpanded ? "▴" : "▾";
+      guideToggle.setAttribute("aria-label", state.googleGuideExpanded ? "Collapse Google setup" : "Expand Google setup");
+      guideToggle.title = state.googleGuideExpanded ? "Collapse" : "Expand";
+      guideToggle.dataset.action = "google-guide-toggle";
+      guideToggle.dataset.configKind = options.kind;
+      guideToggle.dataset.configId = item.id;
+
+      guideHeader.appendChild(guideTitle);
+      guideHeader.appendChild(guideToggle);
+      guideNode.appendChild(guideHeader);
+
+      const consoleLink = document.createElement("a");
+      consoleLink.className = "mcp-guide-link";
+      consoleLink.href = "https://console.cloud.google.com/apis/credentials";
+      consoleLink.target = "_blank";
+      consoleLink.rel = "noopener noreferrer";
+      consoleLink.textContent = "Open Google Cloud Console";
+
+      const apiLibraryLink = document.createElement("a");
+      apiLibraryLink.className = "mcp-guide-link";
+      apiLibraryLink.href = "https://console.cloud.google.com/apis/library";
+      apiLibraryLink.target = "_blank";
+      apiLibraryLink.rel = "noopener noreferrer";
+      apiLibraryLink.textContent = "Open API Library (enable Gmail + Calendar APIs)";
+
+      const guideBody = document.createElement("div");
+      guideBody.className = "mcp-guide-body";
+      guideBody.classList.toggle("hidden", !state.googleGuideExpanded);
+
+      const guideList = document.createElement("ol");
+      guideList.className = "mcp-guide-list";
+      getGoogleSetupGuideItems().forEach((itemText) => {
+        const li = document.createElement("li");
+        li.textContent = itemText;
+        guideList.appendChild(li);
+      });
+
+      guideBody.appendChild(consoleLink);
+      guideBody.appendChild(apiLibraryLink);
+      guideBody.appendChild(guideList);
+      guideNode.appendChild(guideBody);
+      cardBody.appendChild(guideNode);
+
+      const statusNode = document.createElement("p");
+      statusNode.className = "mcp-description";
+      statusNode.textContent = getGoogleOauthStatusLabel();
+      cardBody.appendChild(statusNode);
+
+      if (config.params.access_mode !== "read_write" && config.params.access_mode !== "read_only") {
+        config.params.access_mode = "read_only";
+      }
+
+      const writeAccessLabel = document.createElement("label");
+      writeAccessLabel.className = "mcp-toggle";
+
+      const writeAccessInput = document.createElement("input");
+      writeAccessInput.type = "checkbox";
+      writeAccessInput.checked = config.params.access_mode === "read_write";
+      writeAccessInput.dataset.action = "google-write-access";
+      writeAccessInput.dataset.configKind = options.kind;
+      writeAccessInput.dataset.configId = item.id;
+
+      const writeAccessText = document.createElement("span");
+      writeAccessText.textContent = "write access (Mail & Calendar)";
+
+      writeAccessLabel.appendChild(writeAccessInput);
+      writeAccessLabel.appendChild(writeAccessText);
+      cardBody.appendChild(writeAccessLabel);
+
+      const loginButton = document.createElement("button");
+      loginButton.type = "button";
+      loginButton.className = "mcp-link-btn";
+      loginButton.textContent = Boolean(state.googleOauthStatus?.connected) ? "Relogin" : "Login Google";
+      loginButton.dataset.action = "google-login";
+      loginButton.dataset.configKind = options.kind;
+      loginButton.dataset.configId = item.id;
+
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "mcp-link-btn";
+      verifyButton.textContent = "Verify";
+      verifyButton.dataset.action = "verify";
+      verifyButton.dataset.configKind = options.kind;
+      verifyButton.dataset.configId = item.id;
+
+      actions.appendChild(loginButton);
+      actions.appendChild(verifyButton);
+      cardBody.appendChild(actions);
     } else if (!(options.kind === "mcp" && item.id === "local_files")) {
       const saveButton = document.createElement("button");
       saveButton.type = "button";
@@ -2732,8 +2996,10 @@ function renderConfigPanel(container, items, getConfig, options) {
 
       actions.appendChild(saveButton);
       actions.appendChild(verifyButton);
-      card.appendChild(actions);
+      cardBody.appendChild(actions);
     }
+
+    card.appendChild(cardBody);
 
     container.appendChild(card);
   });
@@ -3016,6 +3282,11 @@ async function loadGatewayMeta() {
     state.integrations = Array.isArray(integrations) ? integrations : [];
     state.mcpConfigs = normalizeIncomingMcpConfigs(settings.mcp_configs);
     state.integrationConfigs = normalizeIncomingMcpConfigs(settings.integration_configs);
+    try {
+      await fetchGoogleOauthStatus();
+    } catch (error) {
+      state.googleOauthStatus = null;
+    }
     syncTelegramFlagsFromIntegrationConfig();
     state.telegramOwnerUserId = typeof settings?.telegram_state?.owner_user_id === "string"
       ? settings.telegram_state.owner_user_id
@@ -3794,7 +4065,7 @@ function getIntegrationConfig(integrationId) {
 
 function handleMcpInputChange(event) {
   const target = event.target;
-  if (!(target instanceof HTMLInputElement)) {
+  if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) {
     return;
   }
 
@@ -3808,6 +4079,9 @@ function handleMcpInputChange(event) {
   const config = configKind === "integration" ? ensureIntegrationConfig(configId) : ensureMcpConfig(configId);
   if (action === "toggle") {
     config.enabled = target.checked;
+    if (configKind === "mcp" && configId === "google_services") {
+      scheduleGoogleMcpAutosave();
+    }
     if (configKind === "integration" && configId === "telegram") {
       syncTelegramFlagsFromIntegrationConfig();
       updateTelegramStatusLabel();
@@ -3821,10 +4095,22 @@ function handleMcpInputChange(event) {
       return;
     }
     config.params[fieldId] = target.value;
+    if (configKind === "mcp" && configId === "google_services") {
+      scheduleGoogleMcpAutosave();
+    }
     if (configKind === "integration" && configId === "telegram") {
       syncTelegramFlagsFromIntegrationConfig();
       updateTelegramStatusLabel();
     }
+    return;
+  }
+
+  if (action === "google-write-access" && configKind === "mcp" && configId === "google_services") {
+    if (!(target instanceof HTMLInputElement)) {
+      return;
+    }
+    config.params.access_mode = target.checked ? "read_write" : "read_only";
+    scheduleGoogleMcpAutosave();
   }
 }
 
@@ -3834,19 +4120,35 @@ async function handleMcpActionClick(event) {
     return;
   }
 
-  const button = target.closest("button[data-action][data-config-kind][data-config-id]");
-  if (!(button instanceof HTMLButtonElement)) {
+  const actionNode = target.closest("[data-action][data-config-kind][data-config-id]");
+  if (!(actionNode instanceof HTMLElement)) {
     return;
   }
 
-  const action = button.dataset.action;
-  const configKind = button.dataset.configKind;
-  const configId = button.dataset.configId;
+  const action = actionNode.dataset.action;
+  const configKind = actionNode.dataset.configKind;
+  const configId = actionNode.dataset.configId;
   if (!action || !configKind || !configId) {
     return;
   }
 
   try {
+    if (action === "expand") {
+      toggleConfigExpanded(configKind, configId);
+      if (configKind === "integration") {
+        renderIntegrationPanel();
+      } else {
+        renderMcpPanel();
+      }
+      return;
+    }
+
+    if (action === "google-guide-toggle" && configKind === "mcp" && configId === "google_services") {
+      state.googleGuideExpanded = !Boolean(state.googleGuideExpanded);
+      renderMcpPanel();
+      return;
+    }
+
     if (action === "save") {
       await persistMcpConfigsToSettings();
       setStatus(configKind === "integration" ? "Integration settings saved." : "Tool settings saved.");
@@ -3862,6 +4164,12 @@ async function handleMcpActionClick(event) {
     if (action === "verify-ssh") {
       await verifyGitSshAccess();
       setStatus("GitHub SSH access verified.");
+      return;
+    }
+
+    if (action === "google-login") {
+      await startGoogleOauthLogin();
+      setStatus(Boolean(state.googleOauthStatus?.connected) ? "Google account connected." : "Google login was closed.");
       return;
     }
 
@@ -4314,11 +4622,13 @@ if (systemTraceToggleButton instanceof HTMLButtonElement) {
 
 if (mcpList instanceof HTMLElement) {
   mcpList.addEventListener("input", handleMcpInputChange);
+  mcpList.addEventListener("change", handleMcpInputChange);
   mcpList.addEventListener("click", handleMcpActionClick);
 }
 
 if (integrationList instanceof HTMLElement) {
   integrationList.addEventListener("input", handleMcpInputChange);
+  integrationList.addEventListener("change", handleMcpInputChange);
   integrationList.addEventListener("click", handleMcpActionClick);
 }
 
