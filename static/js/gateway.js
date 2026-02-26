@@ -3360,13 +3360,13 @@ function getGoogleOauthStatusLabel() {
 
 function getGoogleSetupGuideItems() {
   return [
-    "In Google Cloud Console, open APIs & Services -> Library and enable both Gmail API and Google Calendar API for your project.",
+    "In Google Cloud Console, open APIs & Services -> Library and enable Gmail API, Google Calendar API, and Google Drive API for your project.",
     "Open Google Cloud Console -> APIs & Services -> Credentials, then click Create Credentials -> OAuth client ID.",
     "Choose Application type: Web application and create the client.",
     "In OAuth client details, go to Authorized redirect URIs, click Add URI, then paste: http://127.0.0.1:8055/api/mcps/google/oauth/callback",
     "Copy the generated Client ID and Client Secret into this tool's fields: Google OAuth Client ID and Google OAuth Client Secret.",
     "Enable this tool, click Login Google, approve access, then click Verify.",
-    "If you enable write access (Mail & Calendar) later, click Relogin once to approve the extra write scopes.",
+    "If you enable write access (Mail, Calendar & Drive) later, click Relogin once to approve the extra write scopes.",
   ];
 }
 
@@ -3589,7 +3589,7 @@ function renderConfigPanel(container, items, getConfig, options) {
       apiLibraryLink.href = "https://console.cloud.google.com/apis/library";
       apiLibraryLink.target = "_blank";
       apiLibraryLink.rel = "noopener noreferrer";
-      apiLibraryLink.textContent = "Open API Library (enable Gmail + Calendar APIs)";
+      apiLibraryLink.textContent = "Open API Library (enable Gmail + Calendar + Drive APIs)";
 
       const guideBody = document.createElement("div");
       guideBody.className = "mcp-guide-body";
@@ -3629,7 +3629,7 @@ function renderConfigPanel(container, items, getConfig, options) {
       writeAccessInput.dataset.configId = item.id;
 
       const writeAccessText = document.createElement("span");
-      writeAccessText.textContent = "write access (Mail & Calendar)";
+      writeAccessText.textContent = "write access (Mail, Calendar & Drive)";
 
       writeAccessLabel.appendChild(writeAccessInput);
       writeAccessLabel.appendChild(writeAccessText);

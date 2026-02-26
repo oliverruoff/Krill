@@ -66,7 +66,7 @@ Current tools:
 - `brave_search`
 - `git_ops`
 - `home_assistant` (token-based Home Assistant access; defaults base URL to `http://homeassistant.local:8123`)
-- `google_services` (disabled by default, OAuth login, read-only/read-write modes)
+- `google_services` (disabled by default, OAuth login, read-only/read-write modes for Gmail, Calendar, and Drive)
 - `local_files` (enabled by default)
 - `memory_access` (enabled by default)
 
@@ -79,13 +79,14 @@ Home Assistant MCP notes:
 Google Services MCP notes:
 
 - configure OAuth client credentials directly in the Google Services tool card
+- enable Gmail API, Google Calendar API, and Google Drive API in your Google Cloud project
 - optional: server env vars can still be used as defaults:
   - `GOOGLE_OAUTH_CLIENT_ID` (fallback: `GOOGLE_CLIENT_ID`)
   - `GOOGLE_OAUTH_CLIENT_SECRET` (fallback: `GOOGLE_CLIENT_SECRET`)
   - `KRILL_PUBLIC_BASE_URL` (optional OAuth callback base URL override; useful in Docker/reverse-proxy setups)
 - choose access mode:
-  - unchecked **Add write access**: read Gmail and Calendar
-  - checked **Add write access**: also send emails and create calendar events
+  - unchecked **Add write access**: read Gmail, Calendar, and Drive files
+  - checked **Add write access**: also send emails, create/update calendar events, and upload files to Drive
 - click **Login Google** to complete OAuth consent
 - if Google OAuth shows private-IP redirect errors in Docker, set `KRILL_PUBLIC_BASE_URL` to a reachable host URL (for local host-browser use: `http://localhost:8055`)
 - OAuth tokens and resolved client credentials are persisted in `braindump.db` (`mcp_config_params`), so export/import keeps the connection usable

@@ -378,7 +378,7 @@ def _set_google_mcp_fixture(base_url: str) -> None:
             "refresh_token": "fixture-refresh-token",
             "token_expiry": "2099-01-01T00:00:00+00:00",
             "connected_email": "fixture@example.com",
-            "scopes": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events",
+            "scopes": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive",
         },
     }
     settings["mcp_configs"] = mcp_configs
