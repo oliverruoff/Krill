@@ -1,9 +1,11 @@
-"""Local file MCP plugin for listing, globbing, grepping, and reading files."""
+"""Local file MCP plugin for filesystem search, edits, and command execution."""
 
 import asyncio
 import fnmatch
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
@@ -32,7 +34,7 @@ DEFAULT_EXCLUDED_DIR_NAMES = {
 class LocalFilesMCP(MCPPlugin):
     mcp_id = "local_files"
     display_name = "Local Files"
-    description = "Searches files and directories on disk, reads file contents, and scans codebases."
+    description = "Searches, reads, writes, edits, copies, moves, deletes, and executes local filesystem tasks."
     config_fields: list[McpConfigField] = []
 
     def tool_specs(self) -> list[McpToolSpec]:
@@ -113,7 +115,109 @@ class LocalFilesMCP(MCPPlugin):
                     "required": ["path"],
                 },
             ),
+            McpToolSpec(
+                id="write_file",
+                label="Write File",
+                description="Writes text content to a file path.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "minLength": 1},
+                        "content": {"type": "string"},
+                        "overwrite": {"type": "boolean"},
+                        "create_parent_dirs": {"type": "boolean"},
+                    },
+                    "required": ["path", "content"],
+                },
+            ),
+            McpToolSpec(
+                id="edit_file",
+                label="Edit File",
+                description="Edits a text file using find/replace.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "minLength": 1},
+                        "find": {"type": "string", "minLength": 1},
+                        "replace": {"type": "string"},
+                        "replace_all": {"type": "boolean"},
+                        "require_match": {"type": "boolean"},
+                    },
+                    "required": ["path", "find", "replace"],
+                },
+            ),
+            McpToolSpec(
+                id="copy_path",
+                label="Copy Path",
+                description="Copies a file or directory to a destination path.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "source_path": {"type": "string", "minLength": 1},
+                        "destination_path": {"type": "string", "minLength": 1},
+                        "overwrite": {"type": "boolean"},
+                        "recursive": {"type": "boolean"},
+                        "create_parent_dirs": {"type": "boolean"},
+                    },
+                    "required": ["source_path", "destination_path"],
+                },
+            ),
+            McpToolSpec(
+                id="move_path",
+                label="Move Path",
+                description="Moves a file or directory to a destination path.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "source_path": {"type": "string", "minLength": 1},
+                        "destination_path": {"type": "string", "minLength": 1},
+                        "overwrite": {"type": "boolean"},
+                        "create_parent_dirs": {"type": "boolean"},
+                    },
+                    "required": ["source_path", "destination_path"],
+                },
+            ),
+            McpToolSpec(
+                id="delete_path",
+                label="Delete Path",
+                description="Deletes a file or directory. Requires confirm=true.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "minLength": 1},
+                        "confirm": {"type": "boolean"},
+                        "recursive": {"type": "boolean"},
+                    },
+                    "required": ["path", "confirm"],
+                },
+            ),
+            McpToolSpec(
+                id="execute_command",
+                label="Execute Command",
+                description="Executes a shell command in a working directory.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "minLength": 1},
+                        "workdir": {"type": "string"},
+                        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
+                    },
+                    "required": ["command"],
+                },
+            ),
         ]
+
+    def tool_call_system_reminder(self, tool_id: str, params: dict[str, str]) -> str:
+        del params
+        if tool_id in {"list_directory", "glob_files", "search_content", "grep", "read_file"}:
+            return ""
+        return (
+            "Local Files safety reminder:\n"
+            "- For write/edit/copy/move/delete/execute actions, follow explicit user intent only.\n"
+            "- Do not perform destructive actions unless requested; require clear target paths.\n"
+            "- For delete_path, confirm must be true.\n"
+            "- Return JSON only with this shape: {\"arguments\":{...}}"
+        )
 
     async def verify(self, params: dict[str, str]) -> tuple[bool, str]:
         return True, "Local Files MCP is ready without setup."
@@ -178,10 +282,70 @@ class LocalFilesMCP(MCPPlugin):
                 "content": content,
             }
 
+        if tool_id == "write_file":
+            path = _resolve_path(_required_str(arguments, "path"), must_exist=False)
+            content = _required_string_like(arguments, "content")
+            overwrite = bool(arguments.get("overwrite", True))
+            create_parent_dirs = bool(arguments.get("create_parent_dirs", True))
+            result = await asyncio.to_thread(_write_file_text, path, content, overwrite, create_parent_dirs)
+            return result
+
+        if tool_id == "edit_file":
+            path = _resolve_base_path(_required_str(arguments, "path"))
+            find_value = _required_str(arguments, "find")
+            replace_value = _required_string_like(arguments, "replace")
+            replace_all = bool(arguments.get("replace_all", False))
+            require_match = bool(arguments.get("require_match", True))
+            result = await asyncio.to_thread(_edit_file_text, path, find_value, replace_value, replace_all, require_match)
+            return result
+
+        if tool_id == "copy_path":
+            source_path = _resolve_base_path(_required_str(arguments, "source_path"))
+            destination_path = _resolve_path(_required_str(arguments, "destination_path"), must_exist=False)
+            overwrite = bool(arguments.get("overwrite", False))
+            recursive = bool(arguments.get("recursive", False))
+            create_parent_dirs = bool(arguments.get("create_parent_dirs", True))
+            result = await asyncio.to_thread(
+                _copy_path,
+                source_path,
+                destination_path,
+                overwrite,
+                recursive,
+                create_parent_dirs,
+            )
+            return result
+
+        if tool_id == "move_path":
+            source_path = _resolve_base_path(_required_str(arguments, "source_path"))
+            destination_path = _resolve_path(_required_str(arguments, "destination_path"), must_exist=False)
+            overwrite = bool(arguments.get("overwrite", False))
+            create_parent_dirs = bool(arguments.get("create_parent_dirs", True))
+            result = await asyncio.to_thread(_move_path, source_path, destination_path, overwrite, create_parent_dirs)
+            return result
+
+        if tool_id == "delete_path":
+            path = _resolve_base_path(_required_str(arguments, "path"))
+            confirm = bool(arguments.get("confirm", False))
+            recursive = bool(arguments.get("recursive", False))
+            result = await asyncio.to_thread(_delete_path, path, confirm, recursive)
+            return result
+
+        if tool_id == "execute_command":
+            command = _required_str(arguments, "command")
+            workdir_raw = _optional_str(arguments, "workdir", str(BASE_DIR))
+            workdir = _resolve_base_path(workdir_raw)
+            timeout_seconds = _optional_int(arguments, "timeout_seconds", 45, 1, 300)
+            result = await asyncio.to_thread(_execute_command, command, workdir, timeout_seconds)
+            return result
+
         raise RuntimeError(f"Unsupported Local Files tool: {tool_id}")
 
 
 def _resolve_base_path(raw_path: str) -> Path:
+    return _resolve_path(raw_path, must_exist=True)
+
+
+def _resolve_path(raw_path: str, *, must_exist: bool) -> Path:
     candidates = _path_candidates(raw_path)
     for candidate in candidates:
         resolved = candidate.expanduser().resolve()
@@ -189,6 +353,9 @@ def _resolve_base_path(raw_path: str) -> Path:
             return resolved
 
     first = candidates[0].expanduser().resolve() if candidates else Path(raw_path).expanduser().resolve()
+    if not must_exist:
+        return first
+
     raise RuntimeError(f"Path does not exist: {first}")
 
 
@@ -411,11 +578,205 @@ def _is_excluded(path: Path) -> bool:
     return any(part in DEFAULT_EXCLUDED_DIR_NAMES for part in parts)
 
 
+def _write_file_text(path: Path, content: str, overwrite: bool, create_parent_dirs: bool) -> dict[str, object]:
+    if path.exists() and path.is_dir():
+        raise RuntimeError(f"Path is a directory, not a file: {path}")
+    if path.exists() and not overwrite:
+        raise RuntimeError(f"File already exists and overwrite is false: {path}")
+    if create_parent_dirs:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    elif not path.parent.exists():
+        raise RuntimeError(f"Parent directory does not exist: {path.parent}")
+
+    path.write_text(content, encoding="utf-8")
+    return {
+        "ok": True,
+        "action": "write_file",
+        "path": str(path),
+        "bytes_written": len(content.encode("utf-8")),
+    }
+
+
+def _edit_file_text(path: Path, find_value: str, replace_value: str, replace_all: bool, require_match: bool) -> dict[str, object]:
+    if not path.is_file():
+        raise RuntimeError(f"Path is not a file: {path}")
+    if _is_binary_file(path):
+        raise RuntimeError(f"Binary file cannot be edited as text: {path}")
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    matches = text.count(find_value)
+    if matches == 0 and require_match:
+        raise RuntimeError("Edit failed: 'find' text did not match any content.")
+
+    if replace_all:
+        updated = text.replace(find_value, replace_value)
+        replacements = matches
+    else:
+        updated = text.replace(find_value, replace_value, 1)
+        replacements = 1 if matches > 0 else 0
+
+    path.write_text(updated, encoding="utf-8")
+    return {
+        "ok": True,
+        "action": "edit_file",
+        "path": str(path),
+        "replacements": replacements,
+    }
+
+
+def _copy_path(
+    source_path: Path,
+    destination_path: Path,
+    overwrite: bool,
+    recursive: bool,
+    create_parent_dirs: bool,
+) -> dict[str, object]:
+    if not source_path.exists():
+        raise RuntimeError(f"Source path does not exist: {source_path}")
+
+    if create_parent_dirs:
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+    elif not destination_path.parent.exists():
+        raise RuntimeError(f"Destination parent directory does not exist: {destination_path.parent}")
+
+    if destination_path.exists():
+        if not overwrite:
+            raise RuntimeError(f"Destination already exists and overwrite is false: {destination_path}")
+        if destination_path.is_dir():
+            shutil.rmtree(destination_path)
+        else:
+            destination_path.unlink()
+
+    if source_path.is_dir():
+        if not recursive:
+            raise RuntimeError("Source is a directory. Set recursive=true to copy folders.")
+        shutil.copytree(source_path, destination_path)
+        copied_type = "dir"
+    else:
+        shutil.copy2(source_path, destination_path)
+        copied_type = "file"
+
+    return {
+        "ok": True,
+        "action": "copy_path",
+        "type": copied_type,
+        "source_path": str(source_path),
+        "destination_path": str(destination_path),
+    }
+
+
+def _move_path(source_path: Path, destination_path: Path, overwrite: bool, create_parent_dirs: bool) -> dict[str, object]:
+    if not source_path.exists():
+        raise RuntimeError(f"Source path does not exist: {source_path}")
+
+    if create_parent_dirs:
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+    elif not destination_path.parent.exists():
+        raise RuntimeError(f"Destination parent directory does not exist: {destination_path.parent}")
+
+    if destination_path.exists():
+        if not overwrite:
+            raise RuntimeError(f"Destination already exists and overwrite is false: {destination_path}")
+        if destination_path.is_dir():
+            shutil.rmtree(destination_path)
+        else:
+            destination_path.unlink()
+
+    moved = shutil.move(str(source_path), str(destination_path))
+    return {
+        "ok": True,
+        "action": "move_path",
+        "source_path": str(source_path),
+        "destination_path": str(Path(moved)),
+    }
+
+
+def _delete_path(path: Path, confirm: bool, recursive: bool) -> dict[str, object]:
+    if not confirm:
+        raise RuntimeError("Delete blocked: set confirm=true to perform hard delete.")
+    if not path.exists():
+        raise RuntimeError(f"Path does not exist: {path}")
+
+    target_type = "dir" if path.is_dir() else "file"
+    if path.is_dir():
+        if not recursive:
+            raise RuntimeError("Path is a directory. Set recursive=true to delete folders.")
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+    return {
+        "ok": True,
+        "action": "delete_path",
+        "path": str(path),
+        "type": target_type,
+        "deleted": True,
+    }
+
+
+def _execute_command(command: str, workdir: Path, timeout_seconds: int) -> dict[str, object]:
+    if not workdir.is_dir():
+        raise RuntimeError(f"Workdir is not a directory: {workdir}")
+
+    try:
+        completed = subprocess.run(
+            command,
+            shell=True,
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        stdout_text = _truncate_text(completed.stdout, 20000)
+        stderr_text = _truncate_text(completed.stderr, 20000)
+        return {
+            "ok": completed.returncode == 0,
+            "action": "execute_command",
+            "command": command,
+            "workdir": str(workdir),
+            "exit_code": completed.returncode,
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "timed_out": False,
+        }
+    except subprocess.TimeoutExpired as exc:
+        stdout_text = _truncate_text(exc.stdout if isinstance(exc.stdout, str) else "", 20000)
+        stderr_text = _truncate_text(exc.stderr if isinstance(exc.stderr, str) else "", 20000)
+        return {
+            "ok": False,
+            "action": "execute_command",
+            "command": command,
+            "workdir": str(workdir),
+            "exit_code": None,
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "timed_out": True,
+            "timeout_seconds": timeout_seconds,
+        }
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "\n...[truncated]"
+
+
 def _required_str(arguments: dict[str, object], key: str) -> str:
     value = arguments.get(key)
     if not isinstance(value, str) or not value.strip():
         raise RuntimeError(f"Missing required argument '{key}'.")
     return value.strip()
+
+
+def _required_string_like(arguments: dict[str, object], key: str) -> str:
+    if key not in arguments:
+        raise RuntimeError(f"Missing required argument '{key}'.")
+    value = arguments.get(key)
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    raise RuntimeError(f"Argument '{key}' must be a string.")
 
 
 def _optional_str(arguments: dict[str, object], key: str, default: str) -> str:

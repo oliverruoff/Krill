@@ -1186,6 +1186,17 @@ function normalizeToolUsage(toolUsage) {
     .filter((entry) => entry.mcp_id && entry.tool_id);
 }
 
+function getFrontendMcpLabel(mcpId, fallbackLabel = "") {
+  const normalizedId = typeof mcpId === "string" ? mcpId : "";
+  if (normalizedId === "local_files") {
+    return "Local Ops";
+  }
+  if (typeof fallbackLabel === "string" && fallbackLabel.trim()) {
+    return fallbackLabel;
+  }
+  return normalizedId;
+}
+
 function renderToolUsageLine(wrapper, toolUsage) {
   const normalized = normalizeToolUsage(toolUsage);
   if (normalized.length === 0) {
@@ -1195,7 +1206,7 @@ function renderToolUsageLine(wrapper, toolUsage) {
   const usageNode = document.createElement("p");
   usageNode.className = "tool-usage-note";
   const labels = normalized.map((entry) => {
-    const mcpLabel = entry.mcp_label || entry.mcp_id;
+    const mcpLabel = getFrontendMcpLabel(entry.mcp_id, entry.mcp_label);
     const toolLabel = entry.tool_label || entry.tool_id;
     return `${mcpLabel} (${toolLabel})`;
   });
@@ -3431,7 +3442,9 @@ function renderConfigPanel(container, items, getConfig, options) {
 
     const title = document.createElement("p");
     title.className = "mcp-title";
-    title.textContent = item.label;
+    title.textContent = options.kind === "mcp"
+      ? getFrontendMcpLabel(item.id, item.label)
+      : item.label;
 
     titleMain.appendChild(title);
 

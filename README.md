@@ -20,7 +20,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Use built-in tools ("MCPs") for real actions:
   - Brave Search (web search)
   - Git Operations (clone, status, branch, commit, pull/push, PR via `gh`)
-  - Local Files (directory listing, glob, grep/content search, file reads)
+  - Local Files (directory listing, glob/grep/search, file reads/writes/edits, copy/move/delete, command execution)
 - Use integrations for chat ingress channels:
   - Telegram (bot token based Telegram chat ingress)
 - Schedule timed jobs (daily/weekly/monthly/one-time) with hidden prompts and channel fan-out (Gateway, Telegram)
