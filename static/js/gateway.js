@@ -2889,6 +2889,20 @@ async function loadTimedJobs(renderModal = false) {
   }
 }
 
+async function refreshTimedJobsAfterMcpUsage(toolUsage) {
+  if (!Array.isArray(toolUsage) || toolUsage.length === 0) {
+    return;
+  }
+  const usedTimedJobsMcp = toolUsage.some(
+    (entry) => entry && typeof entry === "object" && String(entry.mcp_id || "") === "timed_jobs",
+  );
+  if (!usedTimedJobsMcp) {
+    return;
+  }
+  const renderModal = timedJobsModal instanceof HTMLElement && !timedJobsModal.classList.contains("hidden");
+  await loadTimedJobs(renderModal);
+}
+
 async function openTimedJobsModal() {
   if (!(timedJobsModal instanceof HTMLElement)) {
     return;
@@ -4332,6 +4346,12 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
   } catch (error) {
     setStatus(`Response complete, but chat history was not saved: ${error.message}`, true);
     return;
+  }
+
+  try {
+    await refreshTimedJobsAfterMcpUsage(context.toolUsage);
+  } catch {
+    // Best-effort sync only.
   }
 
   const userMessages = Array.isArray(chat.messages)

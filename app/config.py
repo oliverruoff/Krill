@@ -596,7 +596,7 @@ def _sync_active_selection(settings: Settings) -> Settings:
 def _normalize_timezone_name(raw_timezone: object) -> str:
     value = str(raw_timezone).strip()
     if not value:
-        return "UTC"
+        return ""
     if value.upper() == "UTC":
         return "UTC"
     return value
@@ -604,6 +604,26 @@ def _normalize_timezone_name(raw_timezone: object) -> str:
 
 def _resolve_timezone(raw_timezone: object, raw_offset_minutes: object = 0) -> tuple[str, tzinfo]:
     timezone_name = _normalize_timezone_name(raw_timezone)
+    if not timezone_name:
+        now_local = datetime.now().astimezone()
+        tz = now_local.tzinfo
+        zone_key = getattr(tz, "key", "")
+        if isinstance(zone_key, str) and zone_key.strip():
+            try:
+                return zone_key.strip(), ZoneInfo(zone_key.strip())
+            except ZoneInfoNotFoundError:
+                pass
+        offset = now_local.utcoffset() or timedelta(minutes=0)
+        offset_minutes = int(offset.total_seconds() // 60)
+        safe_offset = max(-840, min(840, offset_minutes))
+        if safe_offset == 0:
+            return "UTC", timezone.utc
+        sign = "+" if safe_offset >= 0 else "-"
+        abs_minutes = abs(safe_offset)
+        hours = abs_minutes // 60
+        minutes = abs_minutes % 60
+        return f"UTC{sign}{hours:02d}:{minutes:02d}", timezone(timedelta(minutes=safe_offset))
+
     if timezone_name == "UTC":
         return "UTC", timezone.utc
     try:

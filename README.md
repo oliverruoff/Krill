@@ -69,6 +69,7 @@ Current tools:
 - `google_services` (disabled by default, OAuth login, read-only/read-write modes for Gmail, Calendar, and Drive)
 - `local_files` (enabled by default)
 - `memory_access` (enabled by default)
+- `timed_jobs` (manage timed jobs via tools: list/get/create/update/delete/trigger)
 
 Home Assistant MCP notes:
 

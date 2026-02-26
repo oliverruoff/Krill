@@ -7,6 +7,7 @@ from .home_assistant import HomeAssistantMCP
 from .local_files import LocalFilesMCP
 from .memory_access import MemoryAccessMCP
 from .google_services import GoogleServicesMCP
+from .timed_jobs import TimedJobsMCP
 
 
 _MCPS: dict[str, MCPPlugin] = {
@@ -16,6 +17,7 @@ _MCPS: dict[str, MCPPlugin] = {
     "local_files": LocalFilesMCP(),
     "memory_access": MemoryAccessMCP(),
     "google_services": GoogleServicesMCP(),
+    "timed_jobs": TimedJobsMCP(),
 }
 
 

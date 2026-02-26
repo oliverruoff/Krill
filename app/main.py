@@ -220,7 +220,7 @@ class TimedJobWriteRequest(BaseModel):
     interval: Literal["daily", "weekly", "monthly", "once"] = "daily"
     start_date: str = ""
     time_of_day: str = "00:00"
-    timezone: str = "UTC"
+    timezone: str = ""
     timezone_offset_minutes: int = Field(default=0, ge=-840, le=840)
     enabled: bool = False
     channels: list[str] = Field(default_factory=lambda: ["gateway"])
