@@ -151,9 +151,64 @@ async def generate_with_tools(
         tool_id = plan.get("tool_id")
         arguments = plan.get("arguments")
 
-        if not isinstance(mcp_id, str) or not isinstance(tool_id, str) or not isinstance(arguments, dict):
-            raise RuntimeError("MCP hard error: Tool planner returned invalid call payload.")
-        tool_arguments = cast(dict[str, object], arguments)
+        if not isinstance(tool_id, str) or not tool_id.strip():
+            invalid_payload = {
+                "step": step_index,
+                "error": "planner_invalid_call_payload",
+                "detail": "Missing or invalid tool_id in planner response.",
+                "planner_payload": plan,
+            }
+            await trace("tool_error", json.dumps(invalid_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_error": {
+                        "type": "planner_invalid_call_payload",
+                        "message": "Missing or invalid tool_id in planner response.",
+                    },
+                }
+            )
+            continue
+
+        resolved_tool_id = tool_id.strip()
+        resolved_mcp_id = mcp_id.strip() if isinstance(mcp_id, str) else ""
+        tool_arguments = cast(dict[str, object], arguments) if isinstance(arguments, dict) else {}
+
+        if not resolved_mcp_id:
+            candidate_mcps = sorted(
+                {
+                    str(entry["mcp_id"])
+                    for entry in enabled_tools
+                    if str(entry.get("tool_id", "")) == resolved_tool_id
+                }
+            )
+            if len(candidate_mcps) == 1:
+                resolved_mcp_id = candidate_mcps[0]
+            else:
+                invalid_payload = {
+                    "step": step_index,
+                    "error": "planner_invalid_call_payload",
+                    "detail": "Missing or ambiguous mcp_id in planner response.",
+                    "tool_id": resolved_tool_id,
+                    "candidate_mcps": candidate_mcps,
+                    "planner_payload": plan,
+                }
+                await trace("tool_error", json.dumps(invalid_payload, ensure_ascii=True))
+                interaction_log.append(
+                    {
+                        "step": step_index,
+                        "tool_error": {
+                            "type": "planner_invalid_call_payload",
+                            "message": "Missing or ambiguous mcp_id in planner response.",
+                            "tool_id": resolved_tool_id,
+                            "candidate_mcps": candidate_mcps,
+                        },
+                    }
+                )
+                continue
+
+        mcp_id = resolved_mcp_id
+        tool_id = resolved_tool_id
 
         tool_entry = next((entry for entry in enabled_tools if entry["mcp_id"] == mcp_id and entry["tool_id"] == tool_id), None)
         if tool_entry is None:

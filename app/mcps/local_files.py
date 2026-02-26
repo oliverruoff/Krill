@@ -5,6 +5,7 @@ import fnmatch
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlparse, unquote
 
 from app.config import BASE_DIR
 
@@ -130,7 +131,8 @@ class LocalFilesMCP(MCPPlugin):
 
         if tool_id == "glob_files":
             pattern = _required_str(arguments, "pattern")
-            base_path = _resolve_base_path(_optional_str(arguments, "base_path", str(BASE_DIR)))
+            base_path_raw = _optional_str(arguments, "base_path", _optional_str(arguments, "path", str(BASE_DIR)))
+            base_path = _resolve_base_path(base_path_raw)
             max_results = _optional_int(arguments, "max_results", 500, 1, 5000)
             include_excluded = bool(arguments.get("include_excluded", False))
             results = await asyncio.to_thread(_glob_files, base_path, pattern, max_results, include_excluded)
@@ -142,7 +144,8 @@ class LocalFilesMCP(MCPPlugin):
 
         if tool_id == "search_content" or tool_id == "grep":
             pattern = _required_str(arguments, "pattern")
-            base_path = _resolve_base_path(_optional_str(arguments, "base_path", str(BASE_DIR)))
+            base_path_raw = _optional_str(arguments, "base_path", _optional_str(arguments, "path", str(BASE_DIR)))
+            base_path = _resolve_base_path(base_path_raw)
             include = _optional_str(arguments, "include", "")
             max_results = _optional_int(arguments, "max_results", 200, 1, 5000)
             include_excluded = bool(arguments.get("include_excluded", False))
@@ -179,10 +182,100 @@ class LocalFilesMCP(MCPPlugin):
 
 
 def _resolve_base_path(raw_path: str) -> Path:
-    path = Path(raw_path).expanduser().resolve()
-    if not path.exists():
-        raise RuntimeError(f"Path does not exist: {path}")
-    return path
+    candidates = _path_candidates(raw_path)
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if resolved.exists():
+            return resolved
+
+    first = candidates[0].expanduser().resolve() if candidates else Path(raw_path).expanduser().resolve()
+    raise RuntimeError(f"Path does not exist: {first}")
+
+
+def _path_candidates(raw_path: str) -> list[Path]:
+    text = str(raw_path or "").strip()
+    if not text:
+        return [BASE_DIR]
+
+    # Trim wrapping quotes often produced by copied shell snippets.
+    if len(text) >= 2 and ((text[0] == '"' and text[-1] == '"') or (text[0] == "'" and text[-1] == "'")):
+        text = text[1:-1].strip()
+
+    # Handle file:// URLs pasted from browsers/tools.
+    if text.lower().startswith("file://"):
+        parsed = urlparse(text)
+        file_path = unquote(parsed.path or "")
+        if parsed.netloc:
+            file_path = f"//{parsed.netloc}{file_path}"
+        if os.name == "nt" and file_path.startswith("/") and len(file_path) > 2 and file_path[2] == ":":
+            file_path = file_path[1:]
+        text = file_path.strip()
+
+    variants: list[str] = [text]
+
+    stripped_slash = text.rstrip("\\/")
+    if stripped_slash and stripped_slash != text:
+        variants.append(stripped_slash)
+
+    if "\\\\" in text:
+        variants.append(text.replace("\\\\", "\\"))
+
+    if "\\" in text:
+        variants.append(text.replace("\\", "/"))
+
+    if _looks_windows_absolute_path(text):
+        mapped = _map_windows_path_to_base_dir(text)
+        if mapped is not None:
+            variants.append(str(mapped))
+
+    results: list[Path] = []
+    seen: set[str] = set()
+    for variant in variants:
+        normalized = variant.strip()
+        if not normalized:
+            continue
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        path = Path(normalized)
+        results.append(path)
+        if not path.is_absolute() and not _looks_windows_absolute_path(normalized):
+            results.append(BASE_DIR / path)
+
+    return results or [BASE_DIR]
+
+
+def _looks_windows_absolute_path(value: str) -> bool:
+    return bool(re.match(r"^[a-zA-Z]:[\\/]", value))
+
+
+def _map_windows_path_to_base_dir(raw_path: str) -> Path | None:
+    text = raw_path.strip()
+    if not _looks_windows_absolute_path(text):
+        return None
+
+    without_drive = re.sub(r"^[a-zA-Z]:", "", text)
+    parts = [part for part in re.split(r"[\\/]+", without_drive) if part]
+    if not parts:
+        return None
+
+    base_name = BASE_DIR.name.casefold()
+    target_index = -1
+    for index, part in enumerate(parts):
+        if part.casefold() == base_name:
+            target_index = index
+            break
+
+    if target_index == -1:
+        return None
+
+    relative_parts = parts[target_index + 1 :]
+    if not relative_parts:
+        return BASE_DIR
+
+    return BASE_DIR.joinpath(*relative_parts)
 
 
 def _list_directory(path: Path, max_entries: int, include_excluded: bool) -> list[dict[str, str]]:
