@@ -3647,6 +3647,15 @@ function renderConfigPanel(container, items, getConfig, options) {
       } else {
         const inputNode = document.createElement("input");
         inputNode.type = field.type === "password" ? "password" : "text";
+        if (field.type === "password") {
+          inputNode.autocomplete = "new-password";
+          inputNode.name = `krill-ignore-${options.kind}-${item.id}-${fieldId}`;
+          inputNode.setAttribute("autocapitalize", "off");
+          inputNode.setAttribute("autocorrect", "off");
+          inputNode.spellcheck = false;
+          inputNode.setAttribute("data-lpignore", "true");
+          inputNode.setAttribute("data-1p-ignore", "true");
+        }
         inputNode.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
         inputNode.placeholder = typeof field.placeholder === "string" ? field.placeholder : "";
         fieldInput = inputNode;
