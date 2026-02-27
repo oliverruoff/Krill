@@ -262,6 +262,8 @@ class TelegramBridgeWorker:
                 message=prompt,
                 history=history,
                 memory_block=active_chat.memory_block,
+                source_channel="telegram",
+                source_chat_id=active_chat.id,
             )
             text_response = engine_result["text"]
             used_tokens = engine_result["used_tokens"]

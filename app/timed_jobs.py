@@ -223,6 +223,8 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
                     message=prompt,
                     history=model_history,
                     memory_block="",
+                    source_channel="timed_job",
+                    source_chat_id=job.id,
                 )
                 output_text = result["text"]
                 used_tokens = result["used_tokens"]

@@ -8,16 +8,18 @@ from pydantic import BaseModel, Field
 class McpConfigFieldOption(BaseModel):
     value: str
     label: str
+    disabled: bool = False
 
 
 class McpConfigField(BaseModel):
     id: str
     label: str
-    type: Literal["text", "password", "select"] = "text"
+    type: Literal["text", "password", "select", "multiselect"] = "text"
     required: bool = False
     placeholder: str = ""
     description: str = ""
     options: list[McpConfigFieldOption] = Field(default_factory=list)
+    options_source: str = ""
 
 
 class McpToolSpec(BaseModel):

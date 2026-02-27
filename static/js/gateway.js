@@ -3399,6 +3399,64 @@ function getConfigExpandKey(kind, configId) {
   return `${kind}:${configId}`;
 }
 
+function parseMultiselectParam(rawValue) {
+  if (typeof rawValue !== "string") {
+    return [];
+  }
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item || "").trim()).filter((item) => item.length > 0);
+    }
+  } catch (error) {
+    // Fallback to comma-separated legacy values.
+  }
+
+  return trimmed.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+function encodeMultiselectParam(values) {
+  if (!Array.isArray(values)) {
+    return "[]";
+  }
+  const normalized = [];
+  values.forEach((value) => {
+    const item = String(value || "").trim();
+    if (!item || normalized.includes(item)) {
+      return;
+    }
+    normalized.push(item);
+  });
+  return JSON.stringify(normalized);
+}
+
+function readMultiselectSelection(fieldsetNode) {
+  if (!(fieldsetNode instanceof HTMLElement)) {
+    return [];
+  }
+  const selected = [];
+  const boxes = fieldsetNode.querySelectorAll("input[type='checkbox'][data-multiselect-value]");
+  boxes.forEach((boxNode) => {
+    if (!(boxNode instanceof HTMLInputElement)) {
+      return;
+    }
+    if (!boxNode.checked) {
+      return;
+    }
+    const optionValue = String(boxNode.dataset.multiselectValue || "").trim();
+    if (!optionValue || selected.includes(optionValue)) {
+      return;
+    }
+    selected.push(optionValue);
+  });
+  return selected;
+}
+
 function isConfigExpanded(kind, configId) {
   const key = getConfigExpandKey(kind, configId);
   return Boolean(state.expandedConfigs[key]);
@@ -3534,6 +3592,52 @@ function renderConfigPanel(container, items, getConfig, options) {
           config.params[fieldId] = selectNode.value;
         }
         fieldInput = selectNode;
+      } else if (field.type === "multiselect") {
+        const fieldsetNode = document.createElement("div");
+        fieldsetNode.className = "mcp-multiselect";
+        fieldsetNode.dataset.action = "param-multiselect";
+        fieldsetNode.dataset.configKind = options.kind;
+        fieldsetNode.dataset.configId = item.id;
+        fieldsetNode.dataset.fieldId = fieldId;
+
+        const optionsList = Array.isArray(field.options) ? field.options : [];
+        const storedValues = parseMultiselectParam(config.params?.[fieldId]);
+        const selectedSet = new Set(storedValues);
+
+        optionsList.forEach((optionItem) => {
+          const optionValue = typeof optionItem?.value === "string" ? optionItem.value : "";
+          if (!optionValue) {
+            return;
+          }
+
+          const optionLabel = typeof optionItem?.label === "string" && optionItem.label
+            ? optionItem.label
+            : optionValue;
+          const optionDisabled = Boolean(optionItem?.disabled);
+
+          const optionRow = document.createElement("label");
+          optionRow.className = "mcp-toggle";
+
+          const optionInput = document.createElement("input");
+          optionInput.type = "checkbox";
+          optionInput.checked = selectedSet.has(optionValue) || optionDisabled;
+          optionInput.disabled = optionDisabled;
+          optionInput.dataset.action = "param-multiselect";
+          optionInput.dataset.configKind = options.kind;
+          optionInput.dataset.configId = item.id;
+          optionInput.dataset.fieldId = fieldId;
+          optionInput.dataset.multiselectValue = optionValue;
+
+          const optionText = document.createElement("span");
+          optionText.textContent = optionLabel;
+
+          optionRow.appendChild(optionInput);
+          optionRow.appendChild(optionText);
+          fieldsetNode.appendChild(optionRow);
+        });
+
+        config.params[fieldId] = encodeMultiselectParam(readMultiselectSelection(fieldsetNode));
+        fieldInput = fieldsetNode;
       } else {
         const inputNode = document.createElement("input");
         inputNode.type = field.type === "password" ? "password" : "text";
@@ -4822,6 +4926,20 @@ function handleMcpInputChange(event) {
       syncTelegramFlagsFromIntegrationConfig();
       updateTelegramStatusLabel();
     }
+    return;
+  }
+
+  if (action === "param-multiselect") {
+    const fieldId = target.dataset.fieldId;
+    if (!fieldId) {
+      return;
+    }
+    const cardNode = target.closest(".mcp-card");
+    if (!(cardNode instanceof HTMLElement)) {
+      return;
+    }
+    const fieldsetNode = cardNode.querySelector(`.mcp-multiselect[data-field-id='${fieldId}']`);
+    config.params[fieldId] = encodeMultiselectParam(readMultiselectSelection(fieldsetNode));
     return;
   }
 

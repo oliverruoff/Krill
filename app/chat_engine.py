@@ -6,6 +6,7 @@ from app.config import Settings
 from app.providers import get_provider, get_provider_model_limit
 from app.runtime_prompt import compose_runtime_system_prompt
 from app.tooling import generate_with_tools
+from app.tooling.runtime_context import reset_runtime_context, set_runtime_context
 
 
 class ChatEngineToolUsage(TypedDict):
@@ -41,6 +42,9 @@ async def generate_chat_response(
     api_key: str = "",
     bot_name: str = "",
     system_prompt: str = "",
+    source_channel: str = "gateway",
+    source_chat_id: str = "",
+    source_request_id: str = "",
     on_tool_step: ToolStepCallback | None = None,
 ) -> tuple[ChatEngineResult, int | None]:
     active_provider_id = provider_id.strip() if provider_id.strip() else settings.active_provider_id
@@ -59,18 +63,26 @@ async def generate_chat_response(
     )
     token_limit = get_provider_model_limit(active_provider_id, model_id)
 
-    orchestration = await generate_with_tools(
-        provider=provider,
-        settings=settings,
-        prompt=message,
-        system_prompt=runtime_system_prompt,
-        model=model_id,
-        api_key=api_key_value,
-        history=history,
-        max_tool_recursion=settings.tool_max_recursion,
-        tool_timeout_seconds=settings.tool_timeout_seconds,
-        on_tool_step=on_tool_step,
+    context_token = set_runtime_context(
+        source_channel=source_channel,
+        source_chat_id=source_chat_id,
+        source_request_id=source_request_id,
     )
+    try:
+        orchestration = await generate_with_tools(
+            provider=provider,
+            settings=settings,
+            prompt=message,
+            system_prompt=runtime_system_prompt,
+            model=model_id,
+            api_key=api_key_value,
+            history=history,
+            max_tool_recursion=settings.tool_max_recursion,
+            tool_timeout_seconds=settings.tool_timeout_seconds,
+            on_tool_step=on_tool_step,
+        )
+    finally:
+        reset_runtime_context(context_token)
 
     normalized_tools: list[ChatEngineToolUsage] = []
     raw_tools = orchestration.get("used_mcp_tools", [])

@@ -69,7 +69,18 @@ Current tools:
 - `google_services` (disabled by default, OAuth login, read-only/read-write modes for Gmail, Calendar, and Drive)
 - `local_files` (enabled by default)
 - `memory_access` (enabled by default)
+- `opencode` (disabled by default, delegates coding work to `npx opencode run`)
 - `timed_jobs` (manage timed jobs via tools: list/get/create/update/delete/trigger)
+
+OpenCode MCP notes:
+
+- select the OpenCode provider and model directly in the tool card
+- configure **Answer Channels** in the tool card with a multi-select control
+- `gateway` is always enabled and cannot be deselected
+- exposes planning/build tools (`opencode_plan`, `opencode_build`)
+- uses active Krill provider/model automatically (`openai`, `gemini`, `openrouter`)
+- Gemini integration for OpenCode uses API key env vars (`GEMINI_API_KEY` + `GOOGLE_API_KEY`)
+- OpenCode sessions are kept in-memory per channel/chat and reset on app/container restart
 
 Home Assistant MCP notes:
 
@@ -221,6 +232,8 @@ Run:
 ```bash
 docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
+
+The container image includes Node.js/npm so OpenCode MCP can execute `npx opencode run`.
 
 ### Updating Krill (Docker)
 

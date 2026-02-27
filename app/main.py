@@ -785,6 +785,8 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
                         api_key=payload.api_key,
                         bot_name=payload.bot_name,
                         system_prompt=payload.system_prompt,
+                        source_channel=payload.source_channel,
+                        source_chat_id=payload.source_chat_id,
                         on_tool_step=_emit_tool_step,
                     )
                 except Exception as exc:
