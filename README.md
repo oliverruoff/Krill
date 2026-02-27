@@ -100,6 +100,7 @@ Google Services MCP notes:
   - unchecked **Add write access**: read Gmail, Calendar, and Drive files
   - checked **Add write access**: also send emails, create/update calendar events, and upload files to Drive
 - click **Login Google** to complete OAuth consent
+- Gmail tools support attachments: list/download/save attachments from messages, and send email with base64 or local-file attachments (write mode required for sending)
 - if Google OAuth shows private-IP redirect errors in Docker, set `KRILL_PUBLIC_BASE_URL` to a reachable host URL (for local host-browser use: `http://localhost:8055`)
 - OAuth tokens and resolved client credentials are persisted in `braindump.db` (`mcp_config_params`), so export/import keeps the connection usable
 

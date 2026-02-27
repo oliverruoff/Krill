@@ -17,6 +17,7 @@ from urllib import error, parse, request
 from app.config import McpConfig, load_settings, save_settings
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
+from .git_ops import get_workspace_path
 
 
 GOOGLE_MCP_ID = "google_services"
@@ -214,6 +215,54 @@ class GoogleServicesMCP(MCPPlugin):
                 },
             ),
             McpToolSpec(
+                id="gmail_list_attachments",
+                label="Gmail List Attachments",
+                description="Lists attachment metadata for a Gmail message.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["message_id"],
+                },
+            ),
+            McpToolSpec(
+                id="gmail_download_attachment",
+                label="Gmail Download Attachment",
+                description="Downloads one Gmail attachment and returns base64 content.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "minLength": 1},
+                        "attachment_id": {"type": "string"},
+                        "file_name": {"type": "string"},
+                        "attachment_index": {"type": "integer", "minimum": 1},
+                        "max_bytes": {"type": "integer", "minimum": 1, "maximum": 20000000},
+                    },
+                    "required": ["message_id"],
+                },
+            ),
+            McpToolSpec(
+                id="gmail_save_attachment",
+                label="Gmail Save Attachment",
+                description="Downloads one Gmail attachment and saves it to a local file path.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "minLength": 1},
+                        "attachment_id": {"type": "string"},
+                        "file_name": {"type": "string"},
+                        "attachment_index": {"type": "integer", "minimum": 1},
+                        "output_file_name": {"type": "string"},
+                        "output_path": {"type": "string"},
+                        "output_dir": {"type": "string"},
+                        "overwrite": {"type": "boolean"},
+                        "max_bytes": {"type": "integer", "minimum": 1, "maximum": 20000000},
+                    },
+                    "required": ["message_id"],
+                },
+            ),
+            McpToolSpec(
                 id="calendar_list_events",
                 label="Calendar List Events",
                 description="Lists upcoming Google Calendar events.",
@@ -284,6 +333,31 @@ class GoogleServicesMCP(MCPPlugin):
                                 "to": {"type": "string", "minLength": 3},
                                 "subject": {"type": "string", "minLength": 1},
                                 "body_text": {"type": "string", "minLength": 1},
+                                "attachments_base64": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "file_name": {"type": "string", "minLength": 1},
+                                            "content_base64": {"type": "string", "minLength": 1},
+                                            "mime_type": {"type": "string"},
+                                        },
+                                        "required": ["file_name", "content_base64"],
+                                    },
+                                },
+                                "attachments_local_files": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "path": {"type": "string", "minLength": 1},
+                                            "file_name": {"type": "string"},
+                                            "mime_type": {"type": "string"},
+                                            "max_bytes": {"type": "integer", "minimum": 1, "maximum": 50000000},
+                                        },
+                                        "required": ["path"],
+                                    },
+                                },
                             },
                             "required": ["to", "subject", "body_text"],
                         },
@@ -413,6 +487,15 @@ class GoogleServicesMCP(MCPPlugin):
 
             if tool_id == "gmail_get_message":
                 return await asyncio.to_thread(_gmail_get_message, arguments, access_token)
+
+            if tool_id == "gmail_list_attachments":
+                return await asyncio.to_thread(_gmail_list_attachments, arguments, access_token)
+
+            if tool_id == "gmail_download_attachment":
+                return await asyncio.to_thread(_gmail_download_attachment, arguments, access_token)
+
+            if tool_id == "gmail_save_attachment":
+                return await asyncio.to_thread(_gmail_save_attachment, arguments, access_token)
 
             if tool_id == "calendar_list_events":
                 return await asyncio.to_thread(_calendar_list_events, arguments, access_token)
@@ -609,6 +692,82 @@ def _gmail_get_message(arguments: dict[str, object], access_token: str) -> dict[
     return result
 
 
+def _gmail_list_attachments(arguments: dict[str, object], access_token: str) -> dict[str, object]:
+    message_id = _required_str(arguments, "message_id")
+    payload = _gmail_get_message_payload(message_id=message_id, access_token=access_token)
+    attachments = _gmail_collect_attachments(payload)
+    return {
+        "message_id": message_id,
+        "count": len(attachments),
+        "attachments": attachments,
+    }
+
+
+def _gmail_download_attachment(arguments: dict[str, object], access_token: str) -> dict[str, object]:
+    message_id = _required_str(arguments, "message_id")
+    max_bytes = _optional_int(arguments, "max_bytes", 5_000_000, 1, 20_000_000)
+    attachment = _gmail_resolve_attachment(arguments, access_token=access_token, message_id=message_id)
+    file_bytes = _gmail_fetch_attachment_bytes(
+        message_id=message_id,
+        attachment_id=str(attachment.get("attachment_id", "")),
+        access_token=access_token,
+        max_bytes=max_bytes,
+    )
+    size_raw = attachment.get("size")
+    size_value = size_raw if isinstance(size_raw, int) and size_raw >= 0 else 0
+    return {
+        "message_id": message_id,
+        "attachment_id": str(attachment.get("attachment_id", "")),
+        "file_name": str(attachment.get("file_name", "")),
+        "mime_type": str(attachment.get("mime_type", "application/octet-stream")),
+        "size": size_value,
+        "downloaded_bytes": len(file_bytes),
+        "content_base64": base64.b64encode(file_bytes).decode("utf-8"),
+    }
+
+
+def _gmail_save_attachment(arguments: dict[str, object], access_token: str) -> dict[str, object]:
+    message_id = _required_str(arguments, "message_id")
+    max_bytes = _optional_int(arguments, "max_bytes", 5_000_000, 1, 20_000_000)
+    overwrite = _optional_bool(arguments, "overwrite", False)
+    attachment = _gmail_resolve_attachment(arguments, access_token=access_token, message_id=message_id)
+    attachment_id = str(attachment.get("attachment_id", "")).strip()
+    attachment_name = str(attachment.get("file_name", "")).strip()
+    mime_type = str(attachment.get("mime_type", "application/octet-stream")).strip() or "application/octet-stream"
+    file_bytes = _gmail_fetch_attachment_bytes(
+        message_id=message_id,
+        attachment_id=attachment_id,
+        access_token=access_token,
+        max_bytes=max_bytes,
+    )
+
+    output_path = _optional_str(arguments, "output_path", "")
+    output_dir = _optional_str(arguments, "output_dir", "")
+    explicit_name = _optional_str(arguments, "output_file_name", "")
+    safe_name = explicit_name or attachment_name or f"gmail_attachment_{attachment_id}.bin"
+    destination = _resolve_attachment_output_path(output_path=output_path, output_dir=output_dir, file_name=safe_name)
+
+    if destination.exists() and destination.is_dir():
+        destination = destination / safe_name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    existed_before = destination.exists()
+    if existed_before and not overwrite:
+        raise RuntimeError(f"Destination file already exists: {destination}. Set overwrite=true to replace it.")
+
+    with destination.open("wb") as handle:
+        handle.write(file_bytes)
+
+    return {
+        "message_id": message_id,
+        "attachment_id": attachment_id,
+        "file_name": safe_name,
+        "mime_type": mime_type,
+        "saved_path": str(destination),
+        "saved_bytes": len(file_bytes),
+        "overwritten": bool(existed_before and overwrite),
+    }
+
+
 def _gmail_send_message(arguments: dict[str, object], access_token: str) -> dict[str, object]:
     to_value = _required_str(arguments, "to")
     subject_value = _required_str(arguments, "subject")
@@ -618,6 +777,19 @@ def _gmail_send_message(arguments: dict[str, object], access_token: str) -> dict
     email_msg["To"] = to_value
     email_msg["Subject"] = subject_value
     email_msg.set_content(body_text)
+
+    attachments = _gmail_parse_send_attachments(arguments)
+    for attachment in attachments:
+        mime_type = str(attachment.get("mime_type", "application/octet-stream"))
+        maintype, subtype = _split_mime_type(mime_type)
+        content_raw = attachment.get("content")
+        content_bytes = bytes(content_raw) if isinstance(content_raw, (bytes, bytearray)) else b""
+        email_msg.add_attachment(
+            content_bytes,
+            maintype=maintype,
+            subtype=subtype,
+            filename=str(attachment.get("file_name", "attachment.bin")),
+        )
 
     encoded_message = base64.urlsafe_b64encode(email_msg.as_bytes()).decode("utf-8").rstrip("=")
     payload = _google_api_request_json(
@@ -633,7 +805,200 @@ def _gmail_send_message(arguments: dict[str, object], access_token: str) -> dict
         "status": "sent",
         "to": to_value,
         "subject": subject_value,
+        "attachment_count": len(attachments),
     }
+
+
+def _gmail_get_message_payload(*, message_id: str, access_token: str) -> dict[str, object]:
+    encoded_id = parse.quote(message_id, safe="")
+    return _google_api_get_json(
+        f"{GOOGLE_GMAIL_BASE_URL}/users/me/messages/{encoded_id}?{parse.urlencode({'format': 'full'})}",
+        access_token=access_token,
+    )
+
+
+def _gmail_collect_attachments(payload: dict[str, object]) -> list[dict[str, object]]:
+    wrapper = payload.get("payload") if isinstance(payload, dict) else None
+    if not isinstance(wrapper, dict):
+        return []
+
+    items: list[dict[str, object]] = []
+    _gmail_collect_attachments_from_part(wrapper, items)
+    return items
+
+
+def _gmail_collect_attachments_from_part(part: dict[str, object], items: list[dict[str, object]]) -> None:
+    body = part.get("body") if isinstance(part, dict) else None
+    attachment_id = ""
+    if isinstance(body, dict):
+        attachment_id = str(body.get("attachmentId", "")).strip()
+
+    if attachment_id:
+        filename = str(part.get("filename", "")).strip()
+        mime_type = str(part.get("mimeType", "")).strip() or "application/octet-stream"
+        size_raw = body.get("size") if isinstance(body, dict) else 0
+        size_value = int(size_raw) if isinstance(size_raw, int) and size_raw >= 0 else 0
+        item: dict[str, object] = {
+            "attachment_id": attachment_id,
+            "file_name": filename,
+            "mime_type": mime_type,
+            "size": size_value,
+            "part_id": str(part.get("partId", "")).strip(),
+        }
+        if str(part.get("disposition", "")).strip():
+            item["disposition"] = str(part.get("disposition", "")).strip()
+        items.append(item)
+
+    parts = part.get("parts")
+    if isinstance(parts, list):
+        for child in parts:
+            if isinstance(child, dict):
+                _gmail_collect_attachments_from_part(child, items)
+
+
+def _gmail_resolve_attachment(
+    arguments: dict[str, object],
+    *,
+    access_token: str,
+    message_id: str,
+) -> dict[str, object]:
+    payload = _gmail_get_message_payload(message_id=message_id, access_token=access_token)
+    attachments = _gmail_collect_attachments(payload)
+    if not attachments:
+        raise RuntimeError("No attachments found in this Gmail message.")
+
+    attachment_id = _optional_str(arguments, "attachment_id", "")
+    file_name = _optional_str(arguments, "file_name", "")
+    attachment_index = _optional_int(arguments, "attachment_index", 0, 0, 1000)
+
+    if attachment_id:
+        for item in attachments:
+            if str(item.get("attachment_id", "")).strip() == attachment_id:
+                return item
+        raise RuntimeError(f"Attachment id not found in message: {attachment_id}")
+
+    if file_name:
+        matches = [item for item in attachments if str(item.get("file_name", "")).strip().casefold() == file_name.casefold()]
+        if not matches:
+            raise RuntimeError(f"No attachment found with file_name '{file_name}'.")
+        if len(matches) > 1:
+            raise RuntimeError("Multiple attachments match this file_name. Specify attachment_id or attachment_index.")
+        return matches[0]
+
+    if attachment_index > 0:
+        idx = attachment_index - 1
+        if 0 <= idx < len(attachments):
+            return attachments[idx]
+        raise RuntimeError(f"attachment_index out of range (1..{len(attachments)}).")
+
+    if len(attachments) == 1:
+        return attachments[0]
+
+    raise RuntimeError("Multiple attachments found. Specify attachment_id, file_name, or attachment_index.")
+
+
+def _gmail_fetch_attachment_bytes(*, message_id: str, attachment_id: str, access_token: str, max_bytes: int) -> bytes:
+    encoded_message_id = parse.quote(message_id, safe="")
+    encoded_attachment_id = parse.quote(attachment_id, safe="")
+    payload = _google_api_get_json(
+        f"{GOOGLE_GMAIL_BASE_URL}/users/me/messages/{encoded_message_id}/attachments/{encoded_attachment_id}",
+        access_token=access_token,
+    )
+    raw_data = str(payload.get("data", "")).strip() if isinstance(payload, dict) else ""
+    if not raw_data:
+        raise RuntimeError("Attachment payload returned no data.")
+    file_bytes = _base64url_decode(raw_data)
+    if len(file_bytes) > max_bytes:
+        raise RuntimeError(
+            f"Attachment exceeds max_bytes ({len(file_bytes)} > {max_bytes}). Increase max_bytes or choose a smaller file."
+        )
+    return file_bytes
+
+
+def _resolve_attachment_output_path(*, output_path: str, output_dir: str, file_name: str) -> Path:
+    if output_path.strip():
+        return Path(output_path).expanduser().resolve()
+
+    if output_dir.strip():
+        return Path(output_dir).expanduser().resolve() / file_name
+
+    workspace = get_workspace_path()
+    return (workspace / "downloads" / "gmail_attachments" / file_name).resolve()
+
+
+def _gmail_parse_send_attachments(arguments: dict[str, object]) -> list[dict[str, object]]:
+    attachments: list[dict[str, object]] = []
+
+    raw_base64_items = arguments.get("attachments_base64")
+    if isinstance(raw_base64_items, list):
+        for item in raw_base64_items:
+            if not isinstance(item, dict):
+                continue
+            file_name = _required_str(item, "file_name")
+            content_base64 = _required_str(item, "content_base64")
+            mime_type = _optional_str(item, "mime_type", "")
+            try:
+                content = base64.b64decode(content_base64, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise RuntimeError(f"Invalid base64 payload for attachment '{file_name}'.") from exc
+            if not mime_type:
+                guessed_mime = mimetypes.guess_type(file_name)[0]
+                mime_type = guessed_mime or "application/octet-stream"
+            attachments.append({"file_name": file_name, "mime_type": mime_type, "content": content})
+
+    raw_local_items = arguments.get("attachments_local_files")
+    if isinstance(raw_local_items, list):
+        for item in raw_local_items:
+            if not isinstance(item, dict):
+                continue
+            path_value = _required_str(item, "path")
+            override_name = _optional_str(item, "file_name", "")
+            mime_type = _optional_str(item, "mime_type", "")
+            max_bytes = _optional_int(item, "max_bytes", 20_000_000, 1, 50_000_000)
+
+            file_path = Path(path_value).expanduser().resolve()
+            if not file_path.exists():
+                raise RuntimeError(f"Local attachment path does not exist: {file_path}")
+            if not file_path.is_file():
+                raise RuntimeError(f"Local attachment path is not a file: {file_path}")
+
+            file_size = file_path.stat().st_size
+            if file_size > max_bytes:
+                raise RuntimeError(
+                    f"Local attachment exceeds max_bytes ({file_size} > {max_bytes}) for file {file_path}."
+                )
+
+            with file_path.open("rb") as handle:
+                content = handle.read()
+
+            file_name = override_name or file_path.name
+            if not mime_type:
+                guessed_mime = mimetypes.guess_type(file_name)[0]
+                mime_type = guessed_mime or "application/octet-stream"
+            attachments.append({"file_name": file_name, "mime_type": mime_type, "content": content})
+
+    return attachments
+
+
+def _split_mime_type(mime_type: str) -> tuple[str, str]:
+    normalized = mime_type.strip().lower() or "application/octet-stream"
+    if "/" not in normalized:
+        return "application", "octet-stream"
+    main, sub = normalized.split("/", 1)
+    main = main.strip() or "application"
+    sub = sub.strip() or "octet-stream"
+    return main, sub
+
+
+def _base64url_decode(value: str) -> bytes:
+    normalized = value.strip().replace("-", "+").replace("_", "/")
+    padding = (-len(normalized)) % 4
+    if padding:
+        normalized += "=" * padding
+    try:
+        return base64.b64decode(normalized, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise RuntimeError("Invalid base64url attachment payload.") from exc
 
 
 def _calendar_list_events(arguments: dict[str, object], access_token: str) -> dict[str, object]:
