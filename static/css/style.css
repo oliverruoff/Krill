@@ -1255,9 +1255,9 @@ button:disabled {
   border-radius: 12px;
   background: #fcfdff;
   padding: 0.65rem;
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
-  gap: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
 }
 
 .memory-column-header {
@@ -1279,9 +1279,16 @@ button:disabled {
 }
 
 .memory-search-label {
+  display: block;
+  margin: 0.1rem 0 0;
   font-size: 0.72rem;
   color: #6a778d;
   font-weight: 600;
+}
+
+.memory-column > input[type="text"] {
+  width: 100%;
+  margin: 0;
 }
 
 .memory-add-row {
@@ -1296,6 +1303,7 @@ button:disabled {
 
 .memory-modal-list {
   min-height: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
   display: grid;
   align-content: start;
@@ -2504,7 +2512,6 @@ button:disabled {
   }
 
   .memory-column {
-    grid-template-rows: auto auto auto auto minmax(0, 1fr);
     gap: 0.6rem;
     padding: 0.72rem;
   }
@@ -2515,7 +2522,7 @@ button:disabled {
   }
 
   .memory-search-label {
-    margin-bottom: -0.1rem;
+    margin-bottom: 0;
   }
 
   .memory-add-row {
