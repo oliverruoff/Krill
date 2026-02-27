@@ -160,7 +160,10 @@ const state = {
   telegramOwnerUserId: "",
   telegramOwnerChatId: "",
   googleOauthStatus: null,
-  googleAutosaveTimerId: null,
+  mcpAutosaveTimerId: null,
+  mcpAutosavePendingId: "",
+  mcpAutosaveQueuedId: "",
+  mcpAutosaveInFlight: false,
   googleGuideExpanded: false,
   expandedConfigs: {},
   coreMemories: [],
@@ -1195,6 +1198,15 @@ function getFrontendMcpLabel(mcpId, fallbackLabel = "") {
     return fallbackLabel;
   }
   return normalizedId;
+}
+
+function getMcpDisplayLabel(mcpId) {
+  const normalizedId = typeof mcpId === "string" ? mcpId : "";
+  if (!normalizedId) {
+    return "Tool";
+  }
+  const mcp = Array.isArray(state.mcps) ? state.mcps.find((entry) => entry?.id === normalizedId) : null;
+  return getFrontendMcpLabel(normalizedId, typeof mcp?.label === "string" ? mcp.label : normalizedId);
 }
 
 function renderToolUsageLine(wrapper, toolUsage) {
@@ -3355,21 +3367,52 @@ async function startGoogleOauthLogin() {
   renderMcpPanel();
 }
 
-function scheduleGoogleMcpAutosave() {
-  if (state.googleAutosaveTimerId) {
-    window.clearTimeout(state.googleAutosaveTimerId);
+async function runMcpAutosave(mcpId) {
+  if (!mcpId) {
+    return;
   }
 
-  state.googleAutosaveTimerId = window.setTimeout(async () => {
-    state.googleAutosaveTimerId = null;
-    try {
-      await persistMcpConfigsToSettings();
-      await fetchGoogleOauthStatus();
-      renderMcpPanel();
-    } catch (error) {
-      setStatus(`Google settings auto-save failed: ${error.message}`, true);
+  if (state.mcpAutosaveInFlight) {
+    state.mcpAutosaveQueuedId = mcpId;
+    return;
+  }
+
+  state.mcpAutosaveInFlight = true;
+  try {
+    await persistMcpConfigsToSettings();
+    const label = getMcpDisplayLabel(mcpId);
+    const message = `MCP: ${label} saved.`;
+    setStatus(message);
+    showToast(message);
+  } catch (error) {
+    setStatus(`MCP save failed: ${error.message}`, true);
+  } finally {
+    state.mcpAutosaveInFlight = false;
+    if (state.mcpAutosaveQueuedId) {
+      const queuedId = state.mcpAutosaveQueuedId;
+      state.mcpAutosaveQueuedId = "";
+      scheduleMcpAutosave(queuedId);
     }
-  }, 250);
+  }
+}
+
+function scheduleMcpAutosave(mcpId) {
+  const normalizedId = typeof mcpId === "string" ? mcpId.trim() : "";
+  if (!normalizedId) {
+    return;
+  }
+
+  state.mcpAutosavePendingId = normalizedId;
+  if (state.mcpAutosaveTimerId) {
+    window.clearTimeout(state.mcpAutosaveTimerId);
+  }
+
+  state.mcpAutosaveTimerId = window.setTimeout(async () => {
+    state.mcpAutosaveTimerId = null;
+    const pendingId = state.mcpAutosavePendingId;
+    state.mcpAutosavePendingId = "";
+    await runMcpAutosave(pendingId);
+  }, 300);
 }
 
 function getGoogleOauthStatusLabel() {
@@ -3800,7 +3843,23 @@ function renderConfigPanel(container, items, getConfig, options) {
       actions.appendChild(loginButton);
       actions.appendChild(verifyButton);
       cardBody.appendChild(actions);
-    } else if (!(options.kind === "mcp" && item.id === "local_files")) {
+    } else if (options.kind === "mcp") {
+      if (item.id === "local_files") {
+        card.appendChild(cardBody);
+        container.appendChild(card);
+        return;
+      }
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "mcp-link-btn";
+      verifyButton.textContent = "Verify";
+      verifyButton.dataset.action = "verify";
+      verifyButton.dataset.configKind = options.kind;
+      verifyButton.dataset.configId = item.id;
+
+      actions.appendChild(verifyButton);
+      cardBody.appendChild(actions);
+    } else {
       const saveButton = document.createElement("button");
       saveButton.type = "button";
       saveButton.className = "mcp-link-btn";
@@ -4918,8 +4977,8 @@ function handleMcpInputChange(event) {
   const config = configKind === "integration" ? ensureIntegrationConfig(configId) : ensureMcpConfig(configId);
   if (action === "toggle") {
     config.enabled = target.checked;
-    if (configKind === "mcp" && configId === "google_services") {
-      scheduleGoogleMcpAutosave();
+    if (configKind === "mcp") {
+      scheduleMcpAutosave(configId);
     }
     if (configKind === "integration" && configId === "telegram") {
       syncTelegramFlagsFromIntegrationConfig();
@@ -4934,8 +4993,8 @@ function handleMcpInputChange(event) {
       return;
     }
     config.params[fieldId] = target.value;
-    if (configKind === "mcp" && configId === "google_services") {
-      scheduleGoogleMcpAutosave();
+    if (configKind === "mcp") {
+      scheduleMcpAutosave(configId);
     }
     if (configKind === "integration" && configId === "telegram") {
       syncTelegramFlagsFromIntegrationConfig();
@@ -4955,6 +5014,9 @@ function handleMcpInputChange(event) {
     }
     const fieldsetNode = cardNode.querySelector(`.mcp-multiselect[data-field-id='${fieldId}']`);
     config.params[fieldId] = encodeMultiselectParam(readMultiselectSelection(fieldsetNode));
+    if (configKind === "mcp") {
+      scheduleMcpAutosave(configId);
+    }
     return;
   }
 
@@ -4963,7 +5025,7 @@ function handleMcpInputChange(event) {
       return;
     }
     config.params.access_mode = target.checked ? "read_write" : "read_only";
-    scheduleGoogleMcpAutosave();
+    scheduleMcpAutosave(configId);
   }
 }
 
