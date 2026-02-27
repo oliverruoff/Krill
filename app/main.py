@@ -45,6 +45,7 @@ from .integrations import (
 from .mcps.git_ops import (
     SSH_PRIVATE_PARAM,
     SSH_PUBLIC_PARAM,
+    ensure_ssh_keypair,
     get_or_create_ssh_public_key,
     get_workspace_path,
     verify_github_ssh_access,
@@ -240,6 +241,7 @@ _PUBLIC_BASE_URL_ENV = "KRILL_PUBLIC_BASE_URL"
 @app.on_event("startup")
 async def startup_event() -> None:
     await ensure_settings_file()
+    await _rehydrate_git_ssh_material()
     await start_memory_extraction_worker()
     await start_timed_jobs_worker()
     for integration in get_runtime_integrations():
@@ -315,6 +317,7 @@ async def import_braindump(file: UploadFile = File(...)):
         content = await file.read()
         tmp_path.write_bytes(content)
         await import_braindump_db(tmp_path)
+        await _rehydrate_git_ssh_material()
         return {"ok": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Import failed: {exc}")
@@ -357,6 +360,7 @@ async def update_settings(settings: Settings) -> Settings:
     existing = await load_settings()
     settings = settings.model_copy(update={"user_message_count": existing.user_message_count})
     _merge_google_managed_oauth_params(existing, settings)
+    _merge_git_managed_ssh_params(existing, settings)
     _validate_settings_payload(settings)
     return await save_settings(settings)
 
@@ -978,6 +982,55 @@ def _merge_google_managed_oauth_params(existing: Settings, incoming: Settings) -
                 merged_params[key] = existing_value
 
     incoming.mcp_configs[GOOGLE_MCP_ID] = McpConfig(enabled=incoming_google.enabled, params=merged_params)
+
+
+def _merge_git_managed_ssh_params(existing: Settings, incoming: Settings) -> None:
+    existing_git = existing.mcp_configs.get("git_ops")
+    incoming_git = incoming.mcp_configs.get("git_ops")
+    if incoming_git is None:
+        if existing_git is not None:
+            incoming.mcp_configs["git_ops"] = existing_git
+        return
+
+    if existing_git is None:
+        return
+
+    existing_params = dict(existing_git.params)
+    merged_params = dict(incoming_git.params)
+
+    for managed_key in (SSH_PRIVATE_PARAM, SSH_PUBLIC_PARAM):
+        incoming_value = str(merged_params.get(managed_key, "") or "").strip()
+        existing_value = str(existing_params.get(managed_key, "") or "").strip()
+        if incoming_value:
+            continue
+        if existing_value:
+            merged_params[managed_key] = existing_value
+
+    incoming.mcp_configs["git_ops"] = McpConfig(enabled=incoming_git.enabled, params=merged_params)
+
+
+async def _rehydrate_git_ssh_material() -> None:
+    settings = await load_settings()
+    git_config = settings.mcp_configs.get("git_ops")
+    if git_config is None:
+        return
+
+    params = dict(git_config.params)
+    configured_private = str(params.get(SSH_PRIVATE_PARAM, "") or "").strip()
+    configured_public = str(params.get(SSH_PUBLIC_PARAM, "") or "").strip()
+    if not configured_private and not configured_public:
+        return
+
+    workspace = get_workspace_path()
+    private_key, public_key = await ensure_ssh_keypair(params, workspace)
+
+    if private_key == configured_private and public_key == configured_public:
+        return
+
+    params[SSH_PRIVATE_PARAM] = private_key
+    params[SSH_PUBLIC_PARAM] = public_key
+    settings.mcp_configs["git_ops"] = McpConfig(enabled=git_config.enabled, params=params)
+    await save_settings(settings)
 
 
 def _validate_integration_configs(settings: Settings) -> None:

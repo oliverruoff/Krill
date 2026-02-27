@@ -131,7 +131,9 @@ class OpenCodeMCP(MCPPlugin):
         command = ["npx", "-y", "opencode-ai", "run", "--format", "json", "--model", opencode_model]
 
         session_key = (source_channel, source_chat_id)
-        previous_session_id = self._session_by_chat.get(session_key, "")
+        previous_session_id = _normalize_session_id(self._session_by_chat.get(session_key, ""))
+        if not previous_session_id and session_key in self._session_by_chat:
+            self._session_by_chat.pop(session_key, None)
         if previous_session_id and not new_session:
             command.extend(["--session", previous_session_id])
 
@@ -142,12 +144,24 @@ class OpenCodeMCP(MCPPlugin):
         env = _build_opencode_env(provider_id=provider_id, api_key=api_key)
         env = await _add_git_ssh_env(env=env, settings=settings)
 
-        result = await _run_opencode(command=command, workdir=workdir, env=env, timeout_seconds=timeout_seconds)
+        fallback_used = False
+        fallback_reason = ""
+        try:
+            result = await _run_opencode(command=command, workdir=workdir, env=env, timeout_seconds=timeout_seconds)
+        except RuntimeError as exc:
+            error_text = str(exc)
+            if "ProviderModelNotFoundError" not in error_text:
+                raise
+            fallback_used = True
+            fallback_reason = "Selected model is unavailable in OpenCode; retried with provider default model."
+            fallback_command = _without_model_flag(command)
+            result = await _run_opencode(command=fallback_command, workdir=workdir, env=env, timeout_seconds=timeout_seconds)
+
         parsed = _parse_opencode_output(result["stdout"])
 
-        session_id = parsed.get("session_id", "")
-        if isinstance(session_id, str) and session_id.strip():
-            self._session_by_chat[session_key] = session_id.strip()
+        session_id = _normalize_session_id(parsed.get("session_id", ""))
+        if session_id:
+            self._session_by_chat[session_key] = session_id
         elif previous_session_id and not new_session:
             session_id = previous_session_id
 
@@ -162,9 +176,21 @@ class OpenCodeMCP(MCPPlugin):
         }
         if workdir_note:
             response["workdir_note"] = workdir_note
+        if fallback_used:
+            response["model_fallback_used"] = True
+            response["model_fallback_reason"] = fallback_reason
         stderr_text = str(result.get("stderr", "") or "").strip()
         if stderr_text:
             response["stderr"] = stderr_text
+
+        text_value = str(response.get("text", "") or "").strip()
+        question_value = str(response.get("question", "") or "").strip()
+        if not text_value and not question_value and stderr_text:
+            response["status"] = "error"
+            if "ProviderModelNotFoundError" in stderr_text:
+                response["error"] = "Selected provider/model is not available in OpenCode."
+            elif "sessionID" in stderr_text and "ZodError" in stderr_text:
+                response["error"] = "OpenCode session id was invalid; started without session continuation."
         return response
 
     async def _ensure_opencode_available(self, *, force: bool) -> None:
@@ -211,6 +237,15 @@ def _optional_int(arguments: dict[str, object], key: str, default: int, min_valu
     if not isinstance(value, int):
         return default
     return max(min_value, min(max_value, value))
+
+
+def _normalize_session_id(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    session_id = value.strip()
+    if not session_id.startswith("ses"):
+        return ""
+    return session_id
 
 
 def _resolve_selected_provider(settings: Settings, params: dict[str, str]) -> tuple[str, str, str]:
@@ -322,6 +357,20 @@ def _verify_opencode_cli() -> None:
     if completed.returncode != 0:
         detail = (completed.stderr or "").strip() or (completed.stdout or "").strip() or "unknown error"
         raise RuntimeError(detail)
+
+
+def _without_model_flag(command: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    skip_next = False
+    for item in command:
+        if skip_next:
+            skip_next = False
+            continue
+        if item == "--model":
+            skip_next = True
+            continue
+        cleaned.append(item)
+    return cleaned
 
 
 async def _add_git_ssh_env(*, env: dict[str, str], settings: Settings) -> dict[str, str]:
@@ -442,8 +491,6 @@ def _parse_opencode_output(stdout_text: str) -> dict[str, object]:
 
 
 def _find_first_string(payload: object, candidate_keys: set[str]) -> str:
-    if isinstance(payload, str) and payload.strip():
-        return payload.strip()
     if isinstance(payload, dict):
         for key, value in payload.items():
             if key in candidate_keys and isinstance(value, str) and value.strip():

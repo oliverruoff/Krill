@@ -416,9 +416,31 @@ def _ensure_ssh_keypair_sync(params: dict[str, str], workspace: Path) -> tuple[s
     configured_private = params.get(SSH_PRIVATE_PARAM, "").strip()
     configured_public = params.get(SSH_PUBLIC_PARAM, "").strip()
 
-    if configured_private and configured_public:
-        materialize_ssh_keypair(workspace, configured_private, configured_public)
-        return configured_private, configured_public
+    if configured_private:
+        private_key.write_text(configured_private + "\n", encoding="utf-8")
+        try:
+            os.chmod(private_key, 0o600)
+        except Exception:
+            pass
+
+        public_value = configured_public
+        if not public_value:
+            public_value = _derive_public_key_from_private_key_file(private_key)
+
+        materialize_ssh_keypair(workspace, configured_private, public_value)
+        return configured_private, public_value
+
+    if configured_public:
+        if private_key.exists():
+            private_content = private_key.read_text(encoding="utf-8").strip()
+            if private_content:
+                materialize_ssh_keypair(workspace, private_content, configured_public)
+                return private_content, configured_public
+        raise RuntimeError("SSH private key is missing. Generate a new SSH key and re-add it on GitHub.")
+
+    if private_key.exists() and not public_key.exists():
+        derived_public = _derive_public_key_from_private_key_file(private_key)
+        materialize_ssh_keypair(workspace, private_key.read_text(encoding="utf-8").strip(), derived_public)
 
     if not private_key.exists() or not public_key.exists():
         subprocess.run(
@@ -478,6 +500,23 @@ def _read_public_key_if_exists(workspace: Path) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8").strip()
+
+
+def _derive_public_key_from_private_key_file(private_key_path: Path) -> str:
+    completed = subprocess.run(
+        ["ssh-keygen", "-y", "-f", str(private_key_path)],
+        capture_output=True,
+        text=True,
+        timeout=25,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or "").strip() or (completed.stdout or "").strip() or "unknown error"
+        raise RuntimeError(f"Failed to derive SSH public key from private key: {detail}")
+    public_key = (completed.stdout or "").strip()
+    if not public_key:
+        raise RuntimeError("Derived SSH public key is empty.")
+    return public_key
 
 
 async def verify_github_ssh_access(workspace: Path, private_key_content: str) -> tuple[bool, str]:
