@@ -9,6 +9,7 @@ from uuid import uuid4
 from app.chat_engine import generate_chat_response
 from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, load_settings, save_settings
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed, is_over_context_threshold
+from app.providers import get_provider_model_limit
 from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from app.usage import add_daily_usage, get_today_token_usage
 
@@ -194,9 +195,19 @@ class TelegramBridgeWorker:
         if command == "usage":
             active = _get_active_chat(self._telegram_chats, self._active_chat_id)
             self._active_chat_id = active.id if active is not None else ""
-            chat_tokens = active.total_tokens_used if active is not None else 0
+            context_tokens = _estimate_chat_context_tokens(active)
+            provider_id = settings.active_provider_id.strip()
+            provider_config = settings.provider_configs.get(provider_id)
+            model_id = provider_config.model.strip() if provider_config is not None else ""
+            token_limit = get_provider_model_limit(provider_id, model_id) if provider_id and model_id else None
+            usage_line = f"Session context: {context_tokens}"
+            if isinstance(token_limit, int) and token_limit > 0:
+                used_percent = round((context_tokens / token_limit) * 100)
+                if context_tokens > 0 and used_percent == 0:
+                    used_percent = 1
+                usage_line = f"Session context: {context_tokens} / {token_limit} ({used_percent}%)"
             daily_tokens = get_today_token_usage(settings)
-            return f"Usage\nChat tokens: {chat_tokens}\nToday tokens: {daily_tokens}"
+            return f"Usage\n{usage_line}\nToday tokens: {daily_tokens}"
 
         if command == "help":
             return (
@@ -479,3 +490,20 @@ def _chunk_telegram_text(text: str, max_len: int = 3500) -> list[str]:
         chunks.append(remaining[:split_at].strip())
         remaining = remaining[split_at:].lstrip()
     return [chunk for chunk in chunks if chunk]
+
+
+def _estimate_chat_context_tokens(chat: ChatSession | None) -> int:
+    if chat is None:
+        return 0
+
+    memory_block = chat.memory_block if isinstance(chat.memory_block, str) else ""
+    memory_tokens = max(0, (len(memory_block) + 3) // 4)
+    history_tokens = 0
+    for item in chat.messages:
+        role = item.role if isinstance(item.role, str) else ""
+        if role not in {"user", "assistant"}:
+            continue
+        content = item.content if isinstance(item.content, str) else ""
+        history_tokens += max(0, (len(role) + len(content) + 3) // 4)
+
+    return max(0, memory_tokens + history_tokens)
