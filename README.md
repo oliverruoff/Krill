@@ -85,7 +85,7 @@ Home Assistant MCP notes:
 
 - configure a Home Assistant long-lived token in the tool card
 - base URL defaults to `http://homeassistant.local:8123` if left empty
-- supports listing entities, checking state, triggering/calling services, listing automations, and creating/updating automations
+- supports listing entities, checking state, triggering/calling services (with optional `return_response`), full todo list item management, listing automations, and creating/updating automations
 
 Google Services MCP notes:
 

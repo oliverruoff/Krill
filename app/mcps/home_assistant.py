@@ -91,8 +91,90 @@ class HomeAssistantMCP(MCPPlugin):
                         "service": {"type": "string", "minLength": 1},
                         "service_data": {"type": "object"},
                         "target": {"type": "object"},
+                        "return_response": {"type": "boolean"},
                     },
                     "required": ["domain", "service"],
+                },
+            ),
+            McpToolSpec(
+                id="get_todo_items",
+                label="Get Todo Items",
+                description="Reads items from a Home Assistant todo list entity.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {"type": "string", "minLength": 1},
+                        "status": {
+                            "oneOf": [
+                                {"type": "string", "enum": ["needs_action", "completed"]},
+                                {
+                                    "type": "array",
+                                    "items": {"type": "string", "enum": ["needs_action", "completed"]},
+                                    "minItems": 1,
+                                },
+                            ]
+                        },
+                    },
+                    "required": ["entity_id"],
+                },
+            ),
+            McpToolSpec(
+                id="add_todo_item",
+                label="Add Todo Item",
+                description="Adds one item to a Home Assistant todo list.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {"type": "string", "minLength": 1},
+                        "item": {"type": "string", "minLength": 1},
+                        "due_date": {"type": "string"},
+                        "due_datetime": {"type": "string"},
+                        "description": {"type": "string"},
+                    },
+                    "required": ["entity_id", "item"],
+                },
+            ),
+            McpToolSpec(
+                id="update_todo_item",
+                label="Update Todo Item",
+                description="Updates one item in a Home Assistant todo list.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {"type": "string", "minLength": 1},
+                        "item": {"type": "string", "minLength": 1},
+                        "rename": {"type": "string"},
+                        "status": {"type": "string", "enum": ["needs_action", "completed"]},
+                        "due_date": {"type": "string"},
+                        "due_datetime": {"type": "string"},
+                        "description": {"type": "string"},
+                    },
+                    "required": ["entity_id", "item"],
+                },
+            ),
+            McpToolSpec(
+                id="remove_todo_item",
+                label="Remove Todo Item",
+                description="Removes one item from a Home Assistant todo list.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {"type": "string", "minLength": 1},
+                        "item": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["entity_id", "item"],
+                },
+            ),
+            McpToolSpec(
+                id="remove_completed_todo_items",
+                label="Remove Completed Todo Items",
+                description="Removes all completed items from a Home Assistant todo list.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["entity_id"],
                 },
             ),
             McpToolSpec(
@@ -138,7 +220,7 @@ class HomeAssistantMCP(MCPPlugin):
 
     def tool_call_system_reminder(self, tool_id: str, params: dict[str, str]) -> str:
         del params
-        if tool_id in {"list_entities", "get_entity_state", "list_automations", "get_automation"}:
+        if tool_id in {"list_entities", "get_entity_state", "get_todo_items", "list_automations", "get_automation"}:
             return ""
         return (
             "Home Assistant safety reminder:\n"
@@ -190,6 +272,21 @@ class HomeAssistantMCP(MCPPlugin):
 
             if tool_id == "call_service":
                 return await asyncio.to_thread(_call_service, base_url, token, arguments)
+
+            if tool_id == "get_todo_items":
+                return await asyncio.to_thread(_get_todo_items, base_url, token, arguments)
+
+            if tool_id == "add_todo_item":
+                return await asyncio.to_thread(_add_todo_item, base_url, token, arguments)
+
+            if tool_id == "update_todo_item":
+                return await asyncio.to_thread(_update_todo_item, base_url, token, arguments)
+
+            if tool_id == "remove_todo_item":
+                return await asyncio.to_thread(_remove_todo_item, base_url, token, arguments)
+
+            if tool_id == "remove_completed_todo_items":
+                return await asyncio.to_thread(_remove_completed_todo_items, base_url, token, arguments)
 
             if tool_id == "list_automations":
                 return await asyncio.to_thread(_list_automations, base_url, token, arguments)
@@ -345,6 +442,7 @@ def _trigger_entity(base_url: str, token: str, arguments: dict[str, object]) -> 
 def _call_service(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
     domain = _required_str(arguments, "domain")
     service = _required_str(arguments, "service")
+    return_response = bool(arguments.get("return_response", False))
     service_data = arguments.get("service_data")
     target = arguments.get("target")
 
@@ -359,17 +457,175 @@ def _call_service(base_url: str, token: str, arguments: dict[str, object]) -> di
             if key not in payload:
                 payload[key] = value
 
-    result = _ha_request_json(
-        "POST",
-        f"{base_url}/api/services/{parse.quote(domain, safe='')}/{parse.quote(service, safe='')}",
-        token,
-        payload,
-    )
+    result = _ha_service_call(base_url, token, domain, service, payload, return_response=return_response)
     return {
         "domain": domain,
         "service": service,
+        "return_response": return_response,
         "result": result,
     }
+
+
+def _get_todo_items(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
+    entity_id = _required_str(arguments, "entity_id")
+    payload: dict[str, object] = {"entity_id": entity_id}
+    status = _normalize_todo_status(arguments.get("status"))
+    if status:
+        payload["status"] = status
+
+    result = _ha_service_call(base_url, token, "todo", "get_items", payload, return_response=True)
+    items = _extract_todo_items_from_service_response(result, entity_id)
+    return {
+        "entity_id": entity_id,
+        "status_filter": status,
+        "count": len(items),
+        "items": items,
+        "result": result,
+    }
+
+
+def _add_todo_item(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
+    entity_id = _required_str(arguments, "entity_id")
+    item = _required_str(arguments, "item")
+    payload: dict[str, object] = {"entity_id": entity_id, "item": item}
+    _assign_optional_string(payload, arguments, "due_date")
+    _assign_optional_string(payload, arguments, "due_datetime")
+    _assign_optional_string(payload, arguments, "description")
+    _validate_todo_due_fields(payload)
+
+    result = _ha_service_call(base_url, token, "todo", "add_item", payload)
+    return {
+        "entity_id": entity_id,
+        "item": item,
+        "result": result,
+    }
+
+
+def _update_todo_item(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
+    entity_id = _required_str(arguments, "entity_id")
+    item = _required_str(arguments, "item")
+    payload: dict[str, object] = {"entity_id": entity_id, "item": item}
+    _assign_optional_string(payload, arguments, "rename")
+    _assign_optional_string(payload, arguments, "status")
+    _assign_optional_string(payload, arguments, "due_date")
+    _assign_optional_string(payload, arguments, "due_datetime")
+    _assign_optional_string(payload, arguments, "description")
+    _validate_todo_due_fields(payload)
+    _validate_todo_status_field(payload, "status")
+
+    update_fields = {"rename", "status", "due_date", "due_datetime", "description"}
+    if not any(field in payload for field in update_fields):
+        raise RuntimeError("At least one update field is required: rename, status, due_date, due_datetime, or description.")
+
+    result = _ha_service_call(base_url, token, "todo", "update_item", payload)
+    return {
+        "entity_id": entity_id,
+        "item": item,
+        "result": result,
+    }
+
+
+def _remove_todo_item(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
+    entity_id = _required_str(arguments, "entity_id")
+    item = _required_str(arguments, "item")
+    payload: dict[str, object] = {"entity_id": entity_id, "item": item}
+    result = _ha_service_call(base_url, token, "todo", "remove_item", payload)
+    return {
+        "entity_id": entity_id,
+        "item": item,
+        "result": result,
+    }
+
+
+def _remove_completed_todo_items(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
+    entity_id = _required_str(arguments, "entity_id")
+    payload: dict[str, object] = {"entity_id": entity_id}
+    result = _ha_service_call(base_url, token, "todo", "remove_completed_items", payload)
+    return {
+        "entity_id": entity_id,
+        "result": result,
+    }
+
+
+def _ha_service_call(
+    base_url: str,
+    token: str,
+    domain: str,
+    service: str,
+    payload: dict[str, object],
+    *,
+    return_response: bool = False,
+) -> dict[str, object] | list[object]:
+    endpoint = f"{base_url}/api/services/{parse.quote(domain, safe='')}/{parse.quote(service, safe='')}"
+    if return_response:
+        endpoint += "?return_response"
+    return _ha_request_json("POST", endpoint, token, payload)
+
+
+def _extract_todo_items_from_service_response(result: dict[str, object] | list[object], entity_id: str) -> list[dict[str, object]]:
+    if not isinstance(result, dict):
+        return []
+    service_response = result.get("service_response")
+    if not isinstance(service_response, dict):
+        return []
+
+    entity_payload = service_response.get(entity_id)
+    if not isinstance(entity_payload, dict):
+        return []
+
+    maybe_items = entity_payload.get("items")
+    if not isinstance(maybe_items, list):
+        return []
+
+    items: list[dict[str, object]] = []
+    for raw_item in maybe_items:
+        if isinstance(raw_item, dict):
+            items.append(raw_item)
+    return items
+
+
+def _normalize_todo_status(value: object) -> list[str]:
+    if value is None:
+        return []
+    allowed = {"needs_action", "completed"}
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise RuntimeError("Invalid todo status. Use one of: needs_action, completed.")
+        return [normalized]
+    if isinstance(value, list):
+        normalized_statuses: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise RuntimeError("Invalid todo status list. Values must be strings.")
+            normalized = item.strip().lower()
+            if normalized not in allowed:
+                raise RuntimeError("Invalid todo status. Use one of: needs_action, completed.")
+            if normalized not in normalized_statuses:
+                normalized_statuses.append(normalized)
+        return normalized_statuses
+    raise RuntimeError("Invalid todo status. Use a string or list of strings.")
+
+
+def _assign_optional_string(payload: dict[str, object], arguments: dict[str, object], key: str) -> None:
+    value = arguments.get(key)
+    if isinstance(value, str) and value.strip():
+        payload[key] = value.strip()
+
+
+def _validate_todo_due_fields(payload: dict[str, object]) -> None:
+    if "due_date" in payload and "due_datetime" in payload:
+        raise RuntimeError("Only one of 'due_date' or 'due_datetime' may be provided.")
+
+
+def _validate_todo_status_field(payload: dict[str, object], key: str) -> None:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        return
+    normalized = value.strip().lower()
+    if normalized not in {"needs_action", "completed"}:
+        raise RuntimeError("Invalid todo status. Use one of: needs_action, completed.")
+    payload[key] = normalized
 
 
 def _list_automations(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
