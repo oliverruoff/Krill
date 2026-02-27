@@ -3234,6 +3234,9 @@ async function verifyMcpConfig(mcpId) {
 
     throw new Error(detail);
   }
+
+  const payload = await response.json();
+  return payload;
 }
 
 async function verifyIntegrationConfig(integrationId) {
@@ -3310,6 +3313,9 @@ async function verifyGitSshAccess() {
     }
     throw new Error(detail);
   }
+
+  const payload = await response.json();
+  return payload;
 }
 
 async function fetchGoogleOauthStatus() {
@@ -5000,8 +5006,11 @@ async function handleMcpActionClick(event) {
     }
 
     if (action === "verify-ssh") {
-      await verifyGitSshAccess();
-      setStatus("GitHub SSH access verified.");
+      const result = await verifyGitSshAccess();
+      const detail = typeof result?.detail === "string" ? result.detail.trim() : "";
+      const message = detail ? `GitHub SSH verified: ${detail}` : "GitHub SSH access verified.";
+      setStatus(message);
+      showToast(message);
       return;
     }
 
@@ -5015,13 +5024,18 @@ async function handleMcpActionClick(event) {
       if (configKind === "integration") {
         const result = await verifyIntegrationConfig(configId);
         const detail = typeof result?.detail === "string" ? result.detail.trim() : "";
-        setStatus(detail ? `Integration verified: ${detail}` : "Integration verified.");
+        const message = detail ? `Integration verified: ${detail}` : "Integration verified.";
+        setStatus(message);
+        showToast(message);
         if (configId === "telegram" && timedJobsModal instanceof HTMLElement && !timedJobsModal.classList.contains("hidden")) {
           await loadTimedJobs(true);
         }
       } else {
-        await verifyMcpConfig(configId);
-        setStatus("Tool verified.");
+        const result = await verifyMcpConfig(configId);
+        const detail = typeof result?.detail === "string" ? result.detail.trim() : "";
+        const message = detail ? `Tool verified: ${detail}` : "Tool verified.";
+        setStatus(message);
+        showToast(message);
       }
       return;
     }

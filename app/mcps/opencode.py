@@ -5,13 +5,15 @@ import contextlib
 import json
 import os
 import shutil
+import subprocess
+import time
 from pathlib import Path
 
-from app.config import Settings, load_settings
+from app.config import BASE_DIR, IntegrationConfig, Settings, load_settings
 from app.tooling.runtime_context import get_runtime_context
 
 from .base import MCPPlugin, McpConfigField, McpConfigFieldOption, McpToolSpec
-from .git_ops import get_workspace_path
+from .git_ops import SSH_PRIVATE_PARAM, ensure_ssh_keypair, get_workspace_path
 
 
 class OpenCodeMCP(MCPPlugin):
@@ -51,6 +53,8 @@ class OpenCodeMCP(MCPPlugin):
 
     def __init__(self) -> None:
         self._session_by_chat: dict[tuple[str, str], str] = {}
+        self._health_ok_until: float = 0.0
+        self._last_health_error: str = ""
 
     def tool_specs(self) -> list[McpToolSpec]:
         prompt_schema = {
@@ -102,6 +106,11 @@ class OpenCodeMCP(MCPPlugin):
         if not npx_bin:
             return False, "npx is not available. Install Node.js/npm in the runtime container first."
 
+        try:
+            await self._ensure_opencode_available(force=True)
+        except Exception as exc:
+            return False, str(exc)
+
         settings = await load_settings()
         provider_id, model_id, _ = _resolve_selected_provider(settings, params)
         if not provider_id:
@@ -141,9 +150,10 @@ class OpenCodeMCP(MCPPlugin):
         timeout_seconds = _optional_int(arguments, "timeout_seconds", 300, 10, 1200)
 
         settings = await load_settings()
+        await self._ensure_opencode_available(force=False)
         provider_id, model_id, api_key = _resolve_selected_provider(settings, params)
         opencode_model = _map_opencode_model(provider_id, model_id)
-        command = ["npx", "-y", "opencode", "run", "--format", "json", "--model", opencode_model]
+        command = ["npx", "-y", "opencode-ai", "run", "--format", "json", "--model", opencode_model]
 
         session_key = (source_channel, source_chat_id)
         previous_session_id = self._session_by_chat.get(session_key, "")
@@ -153,8 +163,9 @@ class OpenCodeMCP(MCPPlugin):
         mode_instruction = _mode_instruction(tool_id)
         command.append(f"{mode_instruction}\n\nUser request:\n{prompt}")
 
-        workdir = _resolve_workdir(repo_id=repo_id, workdir_arg=workdir_arg)
+        workdir, workdir_note = _resolve_workdir(repo_id=repo_id, workdir_arg=workdir_arg)
         env = _build_opencode_env(provider_id=provider_id, api_key=api_key)
+        env = await _add_git_ssh_env(env=env, settings=settings)
 
         result = await _run_opencode(command=command, workdir=workdir, env=env, timeout_seconds=timeout_seconds)
         parsed = _parse_opencode_output(result["stdout"])
@@ -174,10 +185,40 @@ class OpenCodeMCP(MCPPlugin):
             "model": opencode_model,
             "workdir": str(workdir),
         }
+        if workdir_note:
+            response["workdir_note"] = workdir_note
         stderr_text = str(result.get("stderr", "") or "").strip()
         if stderr_text:
             response["stderr"] = stderr_text
+
+        try:
+            await _dispatch_additional_channels(
+                channels=allowed_channels,
+                source_channel=source_channel,
+                source_chat_id=source_chat_id,
+                response=response,
+                settings=settings,
+            )
+        except Exception as exc:
+            response["channel_dispatch_warning"] = str(exc)
         return response
+
+    async def _ensure_opencode_available(self, *, force: bool) -> None:
+        now = time.monotonic()
+        if not force and not self._last_health_error and now < self._health_ok_until:
+            return
+        if not force and self._last_health_error and now < self._health_ok_until:
+            raise RuntimeError(self._last_health_error)
+
+        try:
+            await asyncio.to_thread(_verify_opencode_cli)
+        except Exception as exc:
+            self._health_ok_until = time.monotonic() + 30.0
+            self._last_health_error = f"OpenCode CLI is unavailable: {exc}"
+            raise RuntimeError(self._last_health_error) from exc
+
+        self._last_health_error = ""
+        self._health_ok_until = time.monotonic() + 600.0
 
 
 def _parse_allowed_channels(params: dict[str, str]) -> set[str]:
@@ -296,10 +337,12 @@ def _build_opencode_env(*, provider_id: str, api_key: str) -> dict[str, str]:
     return env
 
 
-def _resolve_workdir(*, repo_id: str, workdir_arg: str) -> Path:
+def _resolve_workdir(*, repo_id: str, workdir_arg: str) -> tuple[Path, str]:
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
+    base_dir = BASE_DIR.resolve()
 
+    note = ""
     if repo_id:
         candidate = (workspace / repo_id).resolve()
     elif workdir_arg:
@@ -309,10 +352,117 @@ def _resolve_workdir(*, repo_id: str, workdir_arg: str) -> Path:
         candidate = workspace
 
     if candidate != workspace and workspace not in candidate.parents:
-        raise RuntimeError("OpenCode workdir must stay inside Krill workspace.")
+        if candidate == base_dir or base_dir in candidate.parents:
+            candidate = workspace
+            note = "Requested workdir was outside workspace and was auto-adjusted to workspace root."
+        else:
+            candidate = workspace
+            note = "Requested workdir was invalid and was auto-adjusted to workspace root."
     if not candidate.exists() or not candidate.is_dir():
         raise RuntimeError(f"OpenCode workdir does not exist: {candidate}")
-    return candidate
+    return candidate, note
+
+
+def _verify_opencode_cli() -> None:
+    completed = subprocess.run(
+        ["npx", "-y", "opencode-ai", "--version"],
+        capture_output=True,
+        text=True,
+        timeout=25,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or "").strip() or (completed.stdout or "").strip() or "unknown error"
+        raise RuntimeError(detail)
+
+
+async def _add_git_ssh_env(*, env: dict[str, str], settings: Settings) -> dict[str, str]:
+    updated = dict(env)
+    workspace = get_workspace_path()
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    git_config = settings.mcp_configs.get("git_ops")
+    git_params = dict(git_config.params) if git_config is not None else {}
+    private_key = str(git_params.get(SSH_PRIVATE_PARAM, "") or "").strip()
+    if private_key:
+        await ensure_ssh_keypair(git_params, workspace)
+        key_path = workspace / ".ssh" / "krill_ed25519"
+        updated["GIT_SSH_COMMAND"] = (
+            f"ssh -i {key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+        )
+    return updated
+
+
+async def _dispatch_additional_channels(
+    *,
+    channels: set[str],
+    source_channel: str,
+    source_chat_id: str,
+    response: dict[str, object],
+    settings: Settings,
+) -> None:
+    if "telegram" in channels and source_channel != "telegram":
+        await _dispatch_telegram(source_channel=source_channel, source_chat_id=source_chat_id, response=response, settings=settings)
+
+
+async def _dispatch_telegram(
+    *,
+    source_channel: str,
+    source_chat_id: str,
+    response: dict[str, object],
+    settings: Settings,
+) -> None:
+    from app.integrations.telegram.client import telegram_send_message
+
+    telegram_config = settings.integration_configs.get("telegram") or IntegrationConfig()
+    if not telegram_config.enabled:
+        return
+
+    token = str(telegram_config.params.get("bot_token", "") or "").strip()
+    if not token:
+        return
+
+    raw_chat_id = settings.telegram_state.owner_chat_id.strip() or settings.telegram_state.owner_user_id.strip()
+    if not raw_chat_id:
+        return
+
+    try:
+        chat_id = int(raw_chat_id)
+    except Exception:
+        return
+
+    status = str(response.get("status", "") or "ok").strip().lower()
+    text = str(response.get("text", "") or "").strip()
+    question = str(response.get("question", "") or "").strip()
+    summary = text or question or "(empty response)"
+    message = (
+        "OpenCode update from Krill\n"
+        f"source: {source_channel}:{source_chat_id or '-'}\n"
+        f"status: {status}\n\n"
+        f"{summary}"
+    )
+
+    for chunk in _chunk_telegram_text(message):
+        await asyncio.to_thread(telegram_send_message, token, chat_id, chunk)
+
+
+def _chunk_telegram_text(text: str, max_len: int = 3500) -> list[str]:
+    if len(text) <= max_len:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+        split_at = remaining.rfind("\n", 0, max_len)
+        if split_at <= 0:
+            split_at = remaining.rfind(" ", 0, max_len)
+        if split_at <= 0:
+            split_at = max_len
+        chunks.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].lstrip()
+    return [chunk for chunk in chunks if chunk]
 
 
 def _mode_instruction(tool_id: str) -> str:

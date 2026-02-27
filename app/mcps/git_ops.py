@@ -158,6 +158,7 @@ class GitOpsMCP(MCPPlugin):
 
         if tool_id == "checkout_repo":
             repo_url = _required_str(arguments, "repo_url")
+            clone_url = _normalize_clone_url(repo_url, private_key)
             repo_id = _derive_repo_id(repo_url)
             repo_path = workspace / repo_id
 
@@ -168,11 +169,12 @@ class GitOpsMCP(MCPPlugin):
                     "status": "already_exists",
                 }
 
-            await _run_command(["git", "clone", repo_url, str(repo_path)], workspace, env, 120)
+            await _run_command(["git", "clone", clone_url, str(repo_path)], workspace, env, 120)
             return {
                 "repo_id": repo_id,
                 "path": str(repo_path),
                 "status": "cloned",
+                "clone_url": clone_url,
             }
 
         if tool_id == "list_repos":
@@ -368,6 +370,25 @@ def _command_env(private_key_content: str) -> dict[str, str]:
         f'ssh -i "{private_key_path}" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'
     )
     return env
+
+
+def _normalize_clone_url(repo_url: str, private_key_content: str) -> str:
+    trimmed = repo_url.strip()
+    if not private_key_content.strip():
+        return trimmed
+
+    github_https_prefix = "https://github.com/"
+    if not trimmed.lower().startswith(github_https_prefix):
+        return trimmed
+
+    suffix = trimmed[len(github_https_prefix) :].strip()
+    if not suffix:
+        return trimmed
+    if suffix.endswith("/"):
+        suffix = suffix[:-1]
+    if not suffix.endswith(".git"):
+        suffix = f"{suffix}.git"
+    return f"git@github.com:{suffix}"
 
 
 def _ssh_dir(workspace: Path) -> Path:

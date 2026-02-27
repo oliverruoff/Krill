@@ -104,7 +104,14 @@ async def generate_with_tools(
     normalized_recursion = max(1, min(20, int(max_tool_recursion)))
     timeout_seconds = max(5, min(300, int(tool_timeout_seconds)))
     current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
-    planner_system = "You are selecting tools for a user request. Return JSON only without markdown and without extra prose."
+    planner_context = system_prompt.strip()
+    if len(planner_context) > 4000:
+        planner_context = planner_context[:4000] + "\n...[truncated runtime context]"
+    planner_system = (
+        "You are selecting tools for a user request. Return JSON only without markdown and without extra prose.\n"
+        "Use the runtime context below (identity/preferences/memory) when selecting tools and arguments.\n"
+        f"Runtime context:\n{planner_context}"
+    )
     await trace("tool_planner_system", planner_system)
 
     for step_index in range(1, normalized_recursion + 1):
