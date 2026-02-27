@@ -437,10 +437,12 @@ async def compact_memories(payload: MemoryCompactionRequest) -> MemoryCompaction
     if not compactable:
         raise HTTPException(status_code=422, detail="No memories available to compact for this type.")
 
-    prompt, required_timestamps = _build_memory_compaction_prompt(payload.memory_type, compactable)
+    source_lines, required_timestamps, source_by_marker = _build_memory_compaction_source(compactable)
+    prompt = _build_memory_compaction_prompt(payload.memory_type, source_lines, required_timestamps)
 
+    first_used_tokens: int | None = None
     try:
-        compacted_text, used_tokens = await generate_with_retries(
+        compacted_text, first_used_tokens = await generate_with_retries(
             provider=provider,
             prompt=prompt,
             system_prompt=_memory_compaction_system_prompt(),
@@ -453,17 +455,39 @@ async def compact_memories(payload: MemoryCompactionRequest) -> MemoryCompaction
 
     compacted_memory = str(compacted_text).strip()
     if not compacted_memory:
-        raise HTTPException(status_code=422, detail="Memory compaction failed: Provider returned empty compacted memory.")
+        compacted_memory = _build_lossless_fallback_memory(source_lines)
 
     missing_timestamps = [stamp for stamp in required_timestamps if stamp not in compacted_memory]
     if missing_timestamps:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Memory compaction failed: Missing timestamp markers in compacted memory. "
-                "Please retry."
-            ),
+        retry_used_tokens: int | None = None
+        retry_prompt = _build_memory_compaction_retry_prompt(
+            payload.memory_type,
+            source_lines,
+            required_timestamps,
+            compacted_memory,
         )
+        try:
+            retry_text, retry_used_tokens = await generate_with_retries(
+                provider=provider,
+                prompt=retry_prompt,
+                system_prompt=_memory_compaction_system_prompt(),
+                model=provider_config.model,
+                api_key=provider_config.api_key,
+                history=[],
+            )
+            retried = str(retry_text).strip()
+            if retried:
+                compacted_memory = retried
+        except Exception:
+            pass
+
+        missing_timestamps = [stamp for stamp in required_timestamps if stamp not in compacted_memory]
+        if missing_timestamps:
+            compacted_memory = _append_missing_marker_entries(compacted_memory, missing_timestamps, source_by_marker)
+
+        used_tokens = _sum_token_values(first_used_tokens, retry_used_tokens)
+    else:
+        used_tokens = first_used_tokens
 
     compacted_entry = MemoryEntry(content=compacted_memory, created_at=datetime.now(timezone.utc).isoformat())
     if payload.memory_type == "core":
@@ -1169,15 +1193,27 @@ def _memory_compaction_system_prompt() -> str:
     )
 
 
-def _build_memory_compaction_prompt(memory_type: Literal["core", "normal"], memories: list[MemoryEntry]) -> tuple[str, list[str]]:
+def _build_memory_compaction_source(memories: list[MemoryEntry]) -> tuple[list[str], list[str], dict[str, str]]:
     lines: list[str] = []
     required_timestamps: list[str] = []
+    by_marker: dict[str, str] = {}
 
     for entry in memories:
         timestamp = entry.created_at.strip() or "unknown"
         marker = f"[ts:{timestamp}]"
         required_timestamps.append(marker)
-        lines.append(f"{marker} {entry.content.strip()}")
+        source_line = f"{marker} {entry.content.strip()}"
+        lines.append(source_line)
+        by_marker[marker] = source_line
+
+    return lines, required_timestamps, by_marker
+
+
+def _build_memory_compaction_prompt(
+    memory_type: Literal["core", "normal"],
+    source_lines: list[str],
+    required_timestamps: list[str],
+) -> str:
 
     memory_label = "core" if memory_type == "core" else "normal"
     prompt_lines = [
@@ -1190,11 +1226,68 @@ def _build_memory_compaction_prompt(memory_type: Literal["core", "normal"], memo
         "Output rules:",
         "- Return plain text only (no markdown code fences).",
         "- Include every timestamp marker at least once in the output.",
+        "- Do not rewrite, alter, or drop any timestamp marker text.",
         "- Keep wording compact and structured.",
+        "Required timestamp markers:",
+        *required_timestamps,
         "Source memories:",
-        *lines,
+        *source_lines,
     ]
-    return "\n".join(prompt_lines), required_timestamps
+    return "\n".join(prompt_lines)
+
+
+def _build_memory_compaction_retry_prompt(
+    memory_type: Literal["core", "normal"],
+    source_lines: list[str],
+    required_timestamps: list[str],
+    previous_output: str,
+) -> str:
+    memory_label = "core" if memory_type == "core" else "normal"
+    prompt_lines = [
+        f"Repair this {memory_label} memory compaction output.",
+        "The previous attempt missed one or more required timestamp markers.",
+        "Rules:",
+        "- Keep every concrete fact from source memories.",
+        "- Keep output compact and deduplicated.",
+        "- Include every required timestamp marker exactly as listed.",
+        "- Return plain text only.",
+        "Required timestamp markers:",
+        *required_timestamps,
+        "Previous output:",
+        previous_output,
+        "Source memories:",
+        *source_lines,
+    ]
+    return "\n".join(prompt_lines)
+
+
+def _append_missing_marker_entries(base_text: str, missing_markers: list[str], source_by_marker: dict[str, str]) -> str:
+    normalized_base = base_text.strip()
+    fallback_lines: list[str] = []
+    for marker in missing_markers:
+        source_line = source_by_marker.get(marker)
+        if source_line:
+            fallback_lines.append(source_line)
+
+    if not fallback_lines:
+        return normalized_base
+
+    suffix = "\n".join(fallback_lines)
+    if not normalized_base:
+        return f"Missing marker carry-over:\n{suffix}"
+
+    return f"{normalized_base}\n\nMissing marker carry-over:\n{suffix}"
+
+
+def _build_lossless_fallback_memory(source_lines: list[str]) -> str:
+    return "Compaction fallback (lossless carry-over):\n" + "\n".join(source_lines)
+
+
+def _sum_token_values(*values: int | None) -> int | None:
+    ints = [value for value in values if isinstance(value, int) and value >= 0]
+    if not ints:
+        return None
+    return sum(ints)
 
 
 def _chunk_text(text: str) -> list[str]:
