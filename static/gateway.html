@@ -156,12 +156,15 @@
           <section class="memory-column" aria-labelledby="core-memory-column-title">
             <div class="memory-column-header">
               <h3 id="core-memory-column-title">Core Memories</h3>
-              <p id="core-memory-token-count" class="memory-token-subtle">Estimated tokens: 0</p>
+              <div class="memory-column-meta">
+                <p id="core-memory-token-count" class="memory-token-subtle">Estimated tokens: 0</p>
+                <button type="button" id="compact-core-memory-btn" class="memory-compact-btn" aria-label="Compaction for core memories">Compaction</button>
+              </div>
             </div>
             <label class="memory-search-label" for="core-memory-search">Search core memories</label>
-            <input id="core-memory-search" type="text" maxlength="200" placeholder="Search core memories" />
+            <input id="core-memory-search" type="text" maxlength="1000000" placeholder="Search core memories" />
             <div class="memory-add-row">
-              <input id="core-memory-input" type="text" maxlength="200" placeholder="Add core memory (max 200 chars)" />
+              <input id="core-memory-input" type="text" maxlength="1000000" placeholder="Add core memory" />
               <button type="button" id="add-core-memory-btn" class="memory-add-btn" aria-label="Add core memory">+</button>
             </div>
             <div id="core-memory-list" class="memory-modal-list" aria-live="polite"></div>
@@ -170,12 +173,15 @@
           <section class="memory-column" aria-labelledby="normal-memory-column-title">
             <div class="memory-column-header">
               <h3 id="normal-memory-column-title">Normal Memories</h3>
-              <p id="normal-memory-token-count" class="memory-token-subtle">Estimated tokens: 0</p>
+              <div class="memory-column-meta">
+                <p id="normal-memory-token-count" class="memory-token-subtle">Estimated tokens: 0</p>
+                <button type="button" id="compact-normal-memory-btn" class="memory-compact-btn" aria-label="Compaction for normal memories">Compaction</button>
+              </div>
             </div>
             <label class="memory-search-label" for="normal-memory-search">Search normal memories</label>
-            <input id="normal-memory-search" type="text" maxlength="200" placeholder="Search normal memories" />
+            <input id="normal-memory-search" type="text" maxlength="1000000" placeholder="Search normal memories" />
             <div class="memory-add-row">
-              <input id="normal-memory-input" type="text" maxlength="200" placeholder="Add normal memory (max 200 chars)" />
+              <input id="normal-memory-input" type="text" maxlength="1000000" placeholder="Add normal memory" />
               <button type="button" id="add-normal-memory-btn" class="memory-add-btn" aria-label="Add normal memory">+</button>
             </div>
             <div id="normal-memory-list" class="memory-modal-list" aria-live="polite"></div>

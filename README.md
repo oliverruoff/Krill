@@ -28,6 +28,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - See live tool/system trace messages while execution runs
 - Stop running tool chains and clear queued work for the active chat
 - Track token usage per chat and per day
+- Manage core/normal memories with per-type compaction in Memory Management (timestamp-preserving, lossless-oriented summarization)
 
 ## How Krill Works (Technical)
 

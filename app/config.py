@@ -37,7 +37,7 @@ class ProviderConfig(BaseModel):
 
 
 class MemoryEntry(BaseModel):
-    content: str = Field(default="", max_length=200)
+    content: str = Field(default="", max_length=1000000)
     created_at: str = ""
 
 

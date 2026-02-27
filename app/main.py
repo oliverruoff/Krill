@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from .chat_engine import generate_chat_response
 from .config import (
     IntegrationConfig,
+    MemoryEntry,
     McpConfig,
     Settings,
     TimedJob,
@@ -215,6 +216,19 @@ class ShortTermMemoryResolveRequest(BaseModel):
     items: list[ShortTermMemoryResolveItem] = Field(default_factory=list)
 
 
+class MemoryCompactionRequest(BaseModel):
+    memory_type: Literal["core", "normal"]
+
+
+class MemoryCompactionResponse(BaseModel):
+    ok: bool = True
+    memory_type: Literal["core", "normal"]
+    used_tokens: int | None = None
+    compacted_count: int = 0
+    core_memories: list[dict[str, str]] = Field(default_factory=list)
+    normal_memories: list[dict[str, str]] = Field(default_factory=list)
+
+
 class TimedJobWriteRequest(BaseModel):
     title: str = Field(default="", max_length=120)
     prompt: str = Field(default="", max_length=5000)
@@ -401,6 +415,70 @@ async def get_short_term_memory() -> dict[str, object]:
 async def resolve_short_term_memory(payload: ShortTermMemoryResolveRequest) -> dict[str, object]:
     changed = await resolve_short_term_memories([item.model_dump() for item in payload.items])
     return {"ok": True, "changed": changed}
+
+
+@app.post("/api/memory/compact", response_model=MemoryCompactionResponse)
+async def compact_memories(payload: MemoryCompactionRequest) -> MemoryCompactionResponse:
+    settings = await load_settings()
+    if not _is_setup_complete(settings):
+        raise HTTPException(status_code=422, detail="Setup is not complete.")
+
+    active_provider_id = settings.active_provider_id
+    provider_config = settings.provider_configs.get(active_provider_id)
+    if provider_config is None:
+        raise HTTPException(status_code=422, detail="Active provider is not configured.")
+
+    provider = get_provider(active_provider_id)
+    if provider is None:
+        raise HTTPException(status_code=422, detail="Active provider is unavailable.")
+
+    source_memories = settings.core_memories if payload.memory_type == "core" else settings.normal_memories
+    compactable = [entry for entry in source_memories if entry.content.strip()]
+    if not compactable:
+        raise HTTPException(status_code=422, detail="No memories available to compact for this type.")
+
+    prompt, required_timestamps = _build_memory_compaction_prompt(payload.memory_type, compactable)
+
+    try:
+        compacted_text, used_tokens = await generate_with_retries(
+            provider=provider,
+            prompt=prompt,
+            system_prompt=_memory_compaction_system_prompt(),
+            model=provider_config.model,
+            api_key=provider_config.api_key,
+            history=[],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Memory compaction failed: {exc}") from exc
+
+    compacted_memory = str(compacted_text).strip()
+    if not compacted_memory:
+        raise HTTPException(status_code=422, detail="Memory compaction failed: Provider returned empty compacted memory.")
+
+    missing_timestamps = [stamp for stamp in required_timestamps if stamp not in compacted_memory]
+    if missing_timestamps:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Memory compaction failed: Missing timestamp markers in compacted memory. "
+                "Please retry."
+            ),
+        )
+
+    compacted_entry = MemoryEntry(content=compacted_memory, created_at=datetime.now(timezone.utc).isoformat())
+    if payload.memory_type == "core":
+        settings.core_memories = [compacted_entry]
+    else:
+        settings.normal_memories = [compacted_entry]
+
+    persisted = await save_settings(settings)
+    return MemoryCompactionResponse(
+        memory_type=payload.memory_type,
+        used_tokens=used_tokens,
+        compacted_count=len(compactable),
+        core_memories=[entry.model_dump() for entry in persisted.core_memories],
+        normal_memories=[entry.model_dump() for entry in persisted.normal_memories],
+    )
 
 
 @app.post("/api/providers/verify", response_model=VerifyProviderResponse)
@@ -1081,6 +1159,42 @@ def _build_compaction_prompt(existing_memory: str, target_token_limit: int) -> s
         lines.append(existing_memory.strip())
 
     return "\n".join(lines)
+
+
+def _memory_compaction_system_prompt() -> str:
+    return (
+        "You are a lossless memory compactor. Compress memory text aggressively while preserving every concrete fact. "
+        "Never invent information. Remove duplicates only when the factual meaning is identical. "
+        "Preserve timestamp provenance by retaining all timestamp markers exactly as provided."
+    )
+
+
+def _build_memory_compaction_prompt(memory_type: Literal["core", "normal"], memories: list[MemoryEntry]) -> tuple[str, list[str]]:
+    lines: list[str] = []
+    required_timestamps: list[str] = []
+
+    for entry in memories:
+        timestamp = entry.created_at.strip() or "unknown"
+        marker = f"[ts:{timestamp}]"
+        required_timestamps.append(marker)
+        lines.append(f"{marker} {entry.content.strip()}")
+
+    memory_label = "core" if memory_type == "core" else "normal"
+    prompt_lines = [
+        f"Compact the following {memory_label} memories into one dense memory entry.",
+        "Goals:",
+        "- Keep every concrete fact.",
+        "- Remove duplicate statements.",
+        "- Minimize token usage as much as possible.",
+        "- Keep all timestamp markers exactly as provided so provenance is preserved.",
+        "Output rules:",
+        "- Return plain text only (no markdown code fences).",
+        "- Include every timestamp marker at least once in the output.",
+        "- Keep wording compact and structured.",
+        "Source memories:",
+        *lines,
+    ]
+    return "\n".join(prompt_lines), required_timestamps
 
 
 def _chunk_text(text: str) -> list[str]:

@@ -8,6 +8,7 @@ const EDITABLE_CHAT_TITLE_MAX_LENGTH = 24;
 const CHAT_SYNC_INTERVAL_MS = 5000;
 const INTEGRATION_STATUS_SYNC_INTERVAL_MS = 8000;
 const RUNTIME_CONTEXT_SYSTEM_TYPE = "runtime_context_seed";
+const MEMORY_MAX_LENGTH = 1000000;
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -103,6 +104,8 @@ const coreMemoryInput = document.getElementById("core-memory-input");
 const normalMemoryInput = document.getElementById("normal-memory-input");
 const addCoreMemoryButton = document.getElementById("add-core-memory-btn");
 const addNormalMemoryButton = document.getElementById("add-normal-memory-btn");
+const compactCoreMemoryButton = document.getElementById("compact-core-memory-btn");
+const compactNormalMemoryButton = document.getElementById("compact-normal-memory-btn");
 const coreMemoryList = document.getElementById("core-memory-list");
 const normalMemoryList = document.getElementById("normal-memory-list");
 let toastNode = document.getElementById("toast");
@@ -174,6 +177,7 @@ const state = {
   normalMemoryEditingIndex: -1,
   coreMemoryEditDraft: "",
   normalMemoryEditDraft: "",
+  memoryCompactionType: "",
   brainTables: [],
   selectedBrainTable: "",
   brainLoading: false,
@@ -768,7 +772,7 @@ function normalizeIncomingMemories(rawMemories) {
   return rawMemories
     .filter((memory) => memory && typeof memory === "object")
     .map((memory) => {
-      const content = typeof memory.content === "string" ? memory.content.trim().slice(0, 200) : "";
+      const content = typeof memory.content === "string" ? memory.content.trim().slice(0, MEMORY_MAX_LENGTH) : "";
       const createdAt = typeof memory.created_at === "string" ? memory.created_at.trim() : "";
       return { content, created_at: createdAt };
     })
@@ -862,7 +866,7 @@ function renderMemoryList(node, memories, searchTerm, type) {
       const draft = type === "core" ? state.coreMemoryEditDraft : state.normalMemoryEditDraft;
       const editInput = document.createElement("textarea");
       editInput.className = "memory-inline-editor";
-      editInput.maxLength = 200;
+      editInput.maxLength = MEMORY_MAX_LENGTH;
       editInput.rows = 3;
       editInput.value = draft;
       editInput.dataset.memoryType = type;
@@ -933,6 +937,7 @@ function renderMemoryManagement() {
   renderMemoryTokenCounts();
   renderMemoryList(coreMemoryList, state.coreMemories, state.coreMemorySearchTerm, "core");
   renderMemoryList(normalMemoryList, state.normalMemories, state.normalMemorySearchTerm, "normal");
+  updateMemoryCompactionButtons();
 }
 
 function normalizeChatTitle(rawTitle) {
@@ -2131,6 +2136,65 @@ async function persistMemoriesToSettings() {
   state.normalMemories = normalizeIncomingMemories(persisted.normal_memories);
 }
 
+function updateMemoryCompactionButtons() {
+  if (compactCoreMemoryButton instanceof HTMLButtonElement) {
+    const busy = state.memoryCompactionType === "core";
+    compactCoreMemoryButton.disabled = busy;
+    compactCoreMemoryButton.textContent = busy ? "Compacting..." : "Compaction";
+  }
+  if (compactNormalMemoryButton instanceof HTMLButtonElement) {
+    const busy = state.memoryCompactionType === "normal";
+    compactNormalMemoryButton.disabled = busy;
+    compactNormalMemoryButton.textContent = busy ? "Compacting..." : "Compaction";
+  }
+}
+
+async function compactMemoryType(memoryType) {
+  if (!state.settings || state.memoryCompactionType) {
+    return;
+  }
+
+  const targetType = memoryType === "core" ? "core" : "normal";
+  state.memoryCompactionType = targetType;
+  updateMemoryCompactionButtons();
+
+  try {
+    setStatus(`Compacting ${targetType} memories...`);
+    const response = await fetch("/api/memory/compact", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ memory_type: targetType }),
+    });
+
+    if (!response.ok) {
+      const detail = await buildHttpErrorDetail(response, "Memory compaction failed.");
+      throw new Error(detail);
+    }
+
+    const payload = await response.json();
+    state.coreMemories = normalizeIncomingMemories(payload.core_memories);
+    state.normalMemories = normalizeIncomingMemories(payload.normal_memories);
+    if (state.settings) {
+      state.settings.core_memories = state.coreMemories;
+      state.settings.normal_memories = state.normalMemories;
+    }
+    renderMemoryManagement();
+
+    const compactedCount = Number.isFinite(Number(payload.compacted_count)) ? Number(payload.compacted_count) : 0;
+    const typeLabel = targetType === "core" ? "Core" : "Normal";
+    const message = compactedCount > 0
+      ? `${typeLabel} memories compacted (${compactedCount} -> 1).`
+      : `${typeLabel} memories compacted.`;
+    setStatus(message);
+    showToast(message);
+  } catch (error) {
+    setStatus(normalizeErrorMessage(error, "Memory compaction failed."), true);
+  } finally {
+    state.memoryCompactionType = "";
+    updateMemoryCompactionButtons();
+  }
+}
+
 function openMemoryManagementModal() {
   if (!(memoryModal instanceof HTMLElement)) {
     return;
@@ -3022,8 +3086,8 @@ async function addMemory(type) {
     return;
   }
 
-  if (text.length > 200) {
-    setStatus("Memory must be at most 200 characters.", true);
+  if (text.length > MEMORY_MAX_LENGTH) {
+    setStatus(`Memory must be at most ${formatNumber(MEMORY_MAX_LENGTH)} characters.`, true);
     return;
   }
 
@@ -3102,7 +3166,7 @@ function startMemoryInlineEdit(type, indexValue) {
 }
 
 function updateMemoryEditDraft(type, nextValue) {
-  const normalized = String(nextValue || "").slice(0, 200);
+  const normalized = String(nextValue || "").slice(0, MEMORY_MAX_LENGTH);
   if (type === "core") {
     state.coreMemoryEditDraft = normalized;
   } else {
@@ -5288,6 +5352,18 @@ if (addCoreMemoryButton instanceof HTMLButtonElement) {
 if (addNormalMemoryButton instanceof HTMLButtonElement) {
   addNormalMemoryButton.addEventListener("click", async () => {
     await addMemory("normal");
+  });
+}
+
+if (compactCoreMemoryButton instanceof HTMLButtonElement) {
+  compactCoreMemoryButton.addEventListener("click", async () => {
+    await compactMemoryType("core");
+  });
+}
+
+if (compactNormalMemoryButton instanceof HTMLButtonElement) {
+  compactNormalMemoryButton.addEventListener("click", async () => {
+    await compactMemoryType("normal");
   });
 }
 
