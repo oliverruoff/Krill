@@ -3,7 +3,7 @@ braindump.db
 braindump.db.bak
 *ed25519
 *.pub
-workspace/*
+data/workspace/*
 braindump.json
 braindump.json.bak
 .env_test
