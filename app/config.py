@@ -1331,33 +1331,47 @@ def _add_short_term_memories_sync(
             for row in pending_rows
             if _normalize_memory_text(str(row["content"]))
         }
+        normal_existing_rows = conn.execute("SELECT content FROM memories WHERE memory_type = 'normal'").fetchall()
+        existing_normal = {_normalize_memory_text(str(row["content"])) .lower() for row in normal_existing_rows}
 
         added = 0
-        for memory_type, raw_items in (("core", core_memories), ("normal", normal_memories)):
-            for raw in raw_items:
-                normalized = _normalize_memory_text(raw)
-                if not normalized:
-                    continue
-                key = (normalized.lower(), memory_type)
-                if key in pending_keys:
-                    continue
-                conn.execute(
-                    """
-                    INSERT INTO short_term_memories
-                    (content, memory_type, source_channel, source_chat_id, source_request_id, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'pending', ?)
-                    """,
-                    (
-                        normalized,
-                        memory_type,
-                        str(source_channel).strip(),
-                        str(source_chat_id).strip(),
-                        str(source_request_id).strip(),
-                        _utc_now_iso(),
-                    ),
-                )
-                pending_keys.add(key)
-                added += 1
+        for raw in core_memories:
+            normalized = _normalize_memory_text(raw)
+            if not normalized:
+                continue
+            key = (normalized.lower(), "core")
+            if key in pending_keys:
+                continue
+            conn.execute(
+                """
+                INSERT INTO short_term_memories
+                (content, memory_type, source_channel, source_chat_id, source_request_id, status, created_at)
+                VALUES (?, 'core', ?, ?, ?, 'pending', ?)
+                """,
+                (
+                    normalized,
+                    str(source_channel).strip(),
+                    str(source_chat_id).strip(),
+                    str(source_request_id).strip(),
+                    _utc_now_iso(),
+                ),
+            )
+            pending_keys.add(key)
+            added += 1
+
+        for raw in normal_memories:
+            normalized = _normalize_memory_text(raw)
+            if not normalized:
+                continue
+            lowered = normalized.lower()
+            if lowered in existing_normal:
+                continue
+            conn.execute(
+                "INSERT INTO memories (memory_type, content, created_at) VALUES ('normal', ?, ?)",
+                (normalized, _utc_now_iso()),
+            )
+            existing_normal.add(lowered)
+            added += 1
 
         if added > 0:
             conn.commit()
