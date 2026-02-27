@@ -10,7 +10,8 @@ import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+from uuid import uuid4
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File, Query, Request
@@ -36,6 +37,7 @@ from .config import (
     save_settings,
     upsert_timed_job,
     view_braindump,
+    ChatMessage,
 )
 from .integrations import (
     get_integration,
@@ -80,6 +82,7 @@ from .memory_extraction import (
 )
 from .providers import get_provider, get_provider_options, is_supported_provider
 from .providers.resilience import generate_with_retries
+from .usage import add_daily_usage
 from .version import APP_VERSION
 from .timed_jobs import get_timed_job_channel_options, start_timed_jobs_worker, stop_timed_jobs_worker
 from .timed_jobs import trigger_timed_job_now
@@ -176,6 +179,20 @@ class ChatRequest(BaseModel):
     source_chat_id: str = ""
 
 
+class ChatEnqueueRequest(BaseModel):
+    chat_id: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=5000)
+    provider_id: str = ""
+    model: str = ""
+    api_key: str = ""
+    bot_name: str = Field(default="", max_length=30)
+    system_prompt: str = Field(default="", max_length=1000)
+
+
+class ChatStopRequest(BaseModel):
+    chat_id: str = Field(min_length=1)
+
+
 class CompactChatRequest(BaseModel):
     history: list[ChatTurn] = Field(default_factory=list)
     target_token_limit: int = Field(default=0, ge=0)
@@ -250,6 +267,10 @@ _GOOGLE_OAUTH_STATE_TTL_SECONDS = 600
 _google_oauth_states: dict[str, dict[str, object]] = {}
 _google_oauth_lock = asyncio.Lock()
 _PUBLIC_BASE_URL_ENV = "KRILL_PUBLIC_BASE_URL"
+_gateway_chat_lock = asyncio.Lock()
+_gateway_chat_queues: dict[str, list[dict[str, str]]] = {}
+_gateway_chat_tasks: dict[str, asyncio.Task[None]] = {}
+_gateway_chat_active_request_ids: dict[str, str] = {}
 
 
 @app.on_event("startup")
@@ -264,6 +285,18 @@ async def startup_event() -> None:
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
+    async with _gateway_chat_lock:
+        tasks = list(_gateway_chat_tasks.values())
+        _gateway_chat_tasks.clear()
+        _gateway_chat_queues.clear()
+        _gateway_chat_active_request_ids.clear()
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await stop_memory_extraction_worker()
     await stop_timed_jobs_worker()
     for integration in get_runtime_integrations():
@@ -362,6 +395,57 @@ async def get_chat_state() -> ChatStateResponse:
         active_chat_id=settings.active_chat_id,
         daily_token_usage=[entry.model_dump() for entry in settings.daily_token_usage],
     )
+
+
+@app.post("/api/chat/enqueue")
+async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
+    settings = await load_settings()
+    if not _is_setup_complete(settings):
+        raise HTTPException(status_code=422, detail="Setup is not complete.")
+
+    chat_id = payload.chat_id.strip()
+    target_chat = next((chat for chat in settings.chats if chat.id == chat_id), None)
+    if target_chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found.")
+
+    message_text = payload.message.strip()
+    if not message_text:
+        raise HTTPException(status_code=422, detail="Message is required.")
+
+    request_id = str(uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+    target_chat.messages.append(ChatMessage(role="user", content=message_text, timestamp=now_iso))
+    target_chat.messages.append(
+        ChatMessage(role="assistant", content="", timestamp=now_iso, request_id=request_id, status="queued")
+    )
+    settings.active_chat_id = chat_id
+    await save_settings(settings)
+
+    try:
+        await register_user_message_and_maybe_extract(source_channel="gateway", source_chat_id=chat_id)
+    except Exception:
+        pass
+
+    await _enqueue_gateway_chat_job(
+        {
+            "chat_id": chat_id,
+            "request_id": request_id,
+            "message": message_text,
+            "provider_id": payload.provider_id.strip(),
+            "model": payload.model.strip(),
+            "api_key": payload.api_key,
+            "bot_name": payload.bot_name,
+            "system_prompt": payload.system_prompt,
+        }
+    )
+    return {"ok": True, "request_id": request_id}
+
+
+@app.post("/api/chat/stop")
+async def stop_chat(payload: ChatStopRequest) -> dict[str, object]:
+    chat_id = payload.chat_id.strip()
+    cancelled = await _stop_gateway_chat(chat_id)
+    return {"ok": True, "cancelled": cancelled}
 
 
 @app.get("/api/providers", response_model=list[ProviderOption])
@@ -957,6 +1041,240 @@ async def compact_chat(payload: CompactChatRequest) -> CompactChatResponse:
         raise HTTPException(status_code=422, detail="Compaction failed: Provider returned empty compact memory.")
 
     return CompactChatResponse(memory_block=memory_block, history=[], used_tokens=used_tokens)
+
+
+async def _enqueue_gateway_chat_job(job: dict[str, str]) -> None:
+    chat_id = str(job.get("chat_id", "")).strip()
+    if not chat_id:
+        return
+    async with _gateway_chat_lock:
+        queue = _gateway_chat_queues.setdefault(chat_id, [])
+        queue.append(job)
+        task = _gateway_chat_tasks.get(chat_id)
+        if task is None or task.done():
+            _gateway_chat_tasks[chat_id] = asyncio.create_task(_process_gateway_chat_queue(chat_id))
+
+
+async def _process_gateway_chat_queue(chat_id: str) -> None:
+    try:
+        while True:
+            async with _gateway_chat_lock:
+                queue = _gateway_chat_queues.get(chat_id, [])
+                if not queue:
+                    _gateway_chat_queues.pop(chat_id, None)
+                    _gateway_chat_tasks.pop(chat_id, None)
+                    _gateway_chat_active_request_ids.pop(chat_id, None)
+                    return
+                job = queue.pop(0)
+                _gateway_chat_active_request_ids[chat_id] = str(job.get("request_id", "")).strip()
+            await _process_gateway_chat_job(chat_id, job)
+            async with _gateway_chat_lock:
+                _gateway_chat_active_request_ids.pop(chat_id, None)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Gateway chat queue worker failed", extra={"chat_id": chat_id})
+    finally:
+        async with _gateway_chat_lock:
+            if _gateway_chat_tasks.get(chat_id) is asyncio.current_task():
+                _gateway_chat_tasks.pop(chat_id, None)
+            _gateway_chat_active_request_ids.pop(chat_id, None)
+
+
+async def _process_gateway_chat_job(chat_id: str, job: dict[str, str]) -> None:
+    request_id = str(job.get("request_id", "")).strip()
+    message = str(job.get("message", "")).strip()
+    if not request_id or not message:
+        return
+
+    settings = await load_settings()
+    chat = _find_chat_by_id(settings, chat_id)
+    if chat is None:
+        return
+
+    assistant = _find_assistant_message_by_request_id(chat, request_id)
+    if assistant is None:
+        return
+
+    assistant.status = "processing"
+    assistant.timestamp = datetime.now(timezone.utc).isoformat()
+    await save_settings(settings)
+
+    history = _build_gateway_history(chat.messages)
+    try:
+        result, _ = await generate_chat_response(
+            settings=settings,
+            message=message,
+            history=history,
+            memory_block=chat.memory_block,
+            provider_id=str(job.get("provider_id", "")),
+            model=str(job.get("model", "")),
+            api_key=str(job.get("api_key", "")),
+            bot_name=str(job.get("bot_name", "")),
+            system_prompt=str(job.get("system_prompt", "")),
+            source_channel="gateway",
+            source_chat_id=chat_id,
+            source_request_id=request_id,
+        )
+    except asyncio.CancelledError:
+        await _mark_gateway_requests_interrupted(chat_id, request_ids=[request_id], detail="Execution interrupted by user.")
+        raise
+    except Exception as exc:
+        await _mark_gateway_request_error(chat_id, request_id, f"Hard error: {exc}")
+        return
+
+    settings = await load_settings()
+    chat = _find_chat_by_id(settings, chat_id)
+    if chat is None:
+        return
+    assistant = _find_assistant_message_by_request_id(chat, request_id)
+    if assistant is None:
+        return
+
+    final_timestamp = datetime.now(timezone.utc).isoformat()
+    trace_messages = result.get("system_trace_messages", []) if isinstance(result, dict) else []
+    if isinstance(trace_messages, list):
+        for entry in trace_messages:
+            if not isinstance(entry, dict):
+                continue
+            content = str(entry.get("content", "")).strip()
+            if not content:
+                continue
+            system_type = str(entry.get("system_type", "")).strip() or "orchestrator"
+            chat.messages.append(
+                ChatMessage(
+                    role="system",
+                    content=content,
+                    timestamp=final_timestamp,
+                    system_type=system_type,
+                    request_id=request_id,
+                )
+            )
+
+    assistant.content = str(result.get("text", "")).strip() if isinstance(result, dict) else ""
+    assistant.timestamp = final_timestamp
+    assistant.status = "done"
+    raw_tool_usage = result.get("used_mcp_tools", []) if isinstance(result, dict) else []
+    assistant.tool_usage = [
+        {
+            "mcp_id": str(item.get("mcp_id", "")),
+            "mcp_label": str(item.get("mcp_label", "")),
+            "tool_id": str(item.get("tool_id", "")),
+            "tool_label": str(item.get("tool_label", "")),
+        }
+        for item in raw_tool_usage
+        if isinstance(item, dict)
+    ]
+
+    used_tokens = result.get("used_tokens") if isinstance(result, dict) else None
+    if isinstance(used_tokens, int) and used_tokens > 0:
+        chat.total_tokens_used = max(0, chat.total_tokens_used) + used_tokens
+        add_daily_usage(settings, used_tokens)
+
+    await save_settings(settings)
+
+    try:
+        await register_completed_turn(
+            source_channel="gateway",
+            source_chat_id=chat_id,
+            user_message=message,
+            assistant_message=assistant.content,
+        )
+    except Exception:
+        pass
+
+
+async def _stop_gateway_chat(chat_id: str) -> int:
+    queued_request_ids: list[str] = []
+    active_request_id = ""
+
+    async with _gateway_chat_lock:
+        queue = _gateway_chat_queues.get(chat_id, [])
+        for entry in queue:
+            request_id = str(entry.get("request_id", "")).strip()
+            if request_id:
+                queued_request_ids.append(request_id)
+        _gateway_chat_queues[chat_id] = []
+        active_request_id = _gateway_chat_active_request_ids.get(chat_id, "").strip()
+        task = _gateway_chat_tasks.pop(chat_id, None)
+        _gateway_chat_active_request_ids.pop(chat_id, None)
+        if task is not None:
+            task.cancel()
+
+    request_ids = [request_id for request_id in queued_request_ids if request_id]
+    if active_request_id and active_request_id not in request_ids:
+        request_ids.append(active_request_id)
+    return await _mark_gateway_requests_interrupted(chat_id, request_ids=request_ids, detail="Execution interrupted by user.")
+
+
+async def _mark_gateway_request_error(chat_id: str, request_id: str, detail: str) -> None:
+    settings = await load_settings()
+    chat = _find_chat_by_id(settings, chat_id)
+    if chat is None:
+        return
+    message = _find_assistant_message_by_request_id(chat, request_id)
+    if message is None:
+        return
+    message.status = "error"
+    message.timestamp = datetime.now(timezone.utc).isoformat()
+    existing = message.content.strip()
+    message.content = f"{existing}\n\n{detail}".strip() if existing else detail
+    await save_settings(settings)
+
+
+async def _mark_gateway_requests_interrupted(chat_id: str, request_ids: list[str], detail: str) -> int:
+    settings = await load_settings()
+    chat = _find_chat_by_id(settings, chat_id)
+    if chat is None:
+        return 0
+
+    target_ids = {request_id.strip() for request_id in request_ids if request_id.strip()}
+    changed = 0
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for message in chat.messages:
+        if message.role != "assistant":
+            continue
+        if message.status not in {"queued", "processing"}:
+            continue
+        if target_ids and message.request_id not in target_ids:
+            continue
+        existing = message.content.strip()
+        message.content = f"{existing}\n\n{detail}".strip() if existing else detail
+        message.status = "error"
+        message.timestamp = now_iso
+        changed += 1
+
+    if changed > 0:
+        await save_settings(settings)
+    return changed
+
+
+def _find_chat_by_id(settings: Settings, chat_id: str) -> Any:
+    for chat in settings.chats:
+        if chat.id == chat_id:
+            return chat
+    return None
+
+
+def _find_assistant_message_by_request_id(chat: Any, request_id: str) -> Any:
+    for message in chat.messages:
+        if message.role == "assistant" and message.request_id == request_id:
+            return message
+    return None
+
+
+def _build_gateway_history(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    history: list[dict[str, str]] = []
+    for turn in messages:
+        if turn.role not in {"user", "assistant", "system"}:
+            continue
+        content = turn.content.strip()
+        if not content:
+            continue
+        if turn.role == "system" and turn.system_type != "runtime_context_seed":
+            continue
+        history.append({"role": turn.role, "content": content})
+    return history
 
 
 def _validate_provider_configs(settings: Settings) -> None:

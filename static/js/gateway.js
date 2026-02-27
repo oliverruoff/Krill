@@ -416,19 +416,27 @@ function removeChatRuntime(chatId) {
 }
 
 function isChatBusy(chatId) {
-  const runtime = state.chatRuntimes[chatId];
-  if (!runtime) {
+  const chat = state.chats.find((entry) => entry.id === chatId);
+  if (!chat || !Array.isArray(chat.messages)) {
     return false;
   }
-  return Boolean(runtime.processing) || (Array.isArray(runtime.queue) && runtime.queue.length > 0);
+  return chat.messages.some((message) =>
+    message
+    && message.role === "assistant"
+    && (message.status === "queued" || message.status === "processing")
+  );
 }
 
 function isAnyChatBusy() {
-  return Object.values(state.chatRuntimes).some((runtime) => {
-    if (!runtime || typeof runtime !== "object") {
+  return state.chats.some((chat) => {
+    if (!chat || !Array.isArray(chat.messages)) {
       return false;
     }
-    return Boolean(runtime.processing) || (Array.isArray(runtime.queue) && runtime.queue.length > 0);
+    return chat.messages.some((message) =>
+      message
+      && message.role === "assistant"
+      && (message.status === "queued" || message.status === "processing")
+    );
   });
 }
 
@@ -1303,15 +1311,18 @@ function renderChatHistory() {
     const timeNode = document.createElement("p");
     timeNode.className = "chat-history-time";
     const latestTimestamp = getLatestChatTimestamp(chat);
-    const runtime = getChatRuntime(chat.id);
-    const queuedCount = runtime && Array.isArray(runtime.queue) ? runtime.queue.length : 0;
+    const pendingMessages = Array.isArray(chat.messages)
+      ? chat.messages.filter((message) => message && message.role === "assistant" && (message.status === "queued" || message.status === "processing"))
+      : [];
+    const queuedCount = pendingMessages.filter((message) => message.status === "queued").length;
+    const processingCount = pendingMessages.filter((message) => message.status === "processing").length;
     timeNode.textContent = latestTimestamp ? formatMessageTimestamp(latestTimestamp) : "No messages yet";
 
     const queueBadgeNode = document.createElement("p");
     queueBadgeNode.className = "chat-history-queue-badge";
-    if (runtime && runtime.processing && queuedCount > 0) {
+    if (processingCount > 0 && queuedCount > 0) {
       queueBadgeNode.textContent = `${queuedCount} queued`;
-    } else if (runtime && runtime.processing) {
+    } else if (processingCount > 0) {
       queueBadgeNode.textContent = "processing";
     } else if (queuedCount > 0) {
       queueBadgeNode.textContent = `${queuedCount} queued`;
@@ -4346,9 +4357,6 @@ async function syncRemoteChatState() {
       return;
     }
     const payload = await response.json();
-    if (isAnyChatBusy()) {
-      return;
-    }
 
     const signature = buildChatStateSignature(payload);
     if (signature === state.lastChatStateSignature) {
@@ -4395,8 +4403,7 @@ function toggleMenu(forceOpen) {
 
 function updateComposerState() {
   const activeChatId = state.activeChatId;
-  const runtime = activeChatId ? getChatRuntime(activeChatId) : null;
-  const isBusy = Boolean(runtime?.processing);
+  const isBusy = activeChatId ? isChatBusy(activeChatId) : false;
   sendButton.disabled = false;
   chatInput.disabled = false;
   if (stopButton instanceof HTMLButtonElement) {
@@ -4853,52 +4860,33 @@ async function sendMessage(event) {
   }
 
   ensureRuntimeContextSeed(chat);
-  const snapshot = buildQueueSnapshot(chat);
-  const requestId = createChatId();
-  const timestamp = createTimestamp();
-  chat.messages.push({
-    role: "user",
-    content: message,
-    timestamp,
-    system_type: "",
-    tool_usage: [],
-    request_id: "",
-    status: "",
-  });
-  chat.messages.push({
-    role: "assistant",
-    content: "",
-    timestamp,
-    system_type: "",
-    tool_usage: [],
-    request_id: requestId,
-    status: "queued",
-  });
-  chat.updated_at = timestamp;
-
-  const runtime = getChatRuntime(chat.id);
-  runtime.queue.push({
-    requestId,
-    queuedAt: timestamp,
-    message,
-    snapshot,
-  });
-
-  chatInput.value = "";
-  syncChatInputHeight();
-  if (state.activeChatId === chat.id) {
-    renderActiveChat();
-  }
-  renderChatHistory();
-  updateComposerState();
-  setStatus("Queued.");
-
-  processChatQueue(chat.id);
-
   try {
     await persistChatsToSettings();
+    const snapshot = buildQueueSnapshot(chat);
+    const response = await fetch("/api/chat/enqueue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chat.id,
+        message,
+        provider_id: snapshot.providerId,
+        model: snapshot.model,
+        api_key: snapshot.apiKey,
+        bot_name: snapshot.botName,
+        system_prompt: snapshot.systemPrompt,
+      }),
+    });
+    if (!response.ok) {
+      const detail = await buildHttpErrorDetail(response, "Chat request failed.");
+      throw new Error(detail);
+    }
+    chatInput.value = "";
+    syncChatInputHeight();
+    setStatus("Queued.");
+    await syncRemoteChatState();
   } catch (error) {
-    setStatus(`Message queued, but save failed: ${error.message}`, true);
+    setStatus(normalizeErrorMessage(error, "Failed to queue message."), true);
+    return;
   }
 
   chatInput.focus();
@@ -4916,7 +4904,7 @@ async function triggerManualCompaction() {
   }
 
   const runtime = getChatRuntime(activeChat.id);
-  if (runtime?.processing) {
+  if (runtime?.processing || isChatBusy(activeChat.id)) {
     setStatus("Cannot compact while this chat is processing queued messages.", true);
     return;
   }
@@ -4939,56 +4927,20 @@ async function stopActiveChatExecution() {
   if (!activeChat) {
     return;
   }
-
-  const runtime = getChatRuntime(activeChat.id);
-  if (!runtime) {
-    return;
-  }
-
-  runtime.queue.forEach((job) => {
-    if (job && typeof job.requestId === "string") {
-      runtime.cancelledRequestIds.add(job.requestId);
-    }
-  });
-  runtime.queue = [];
-
-  if (runtime.activeRequestId) {
-    runtime.cancelledRequestIds.add(runtime.activeRequestId);
-  }
-
-  if (runtime.abortController instanceof AbortController) {
-    runtime.abortController.abort();
-  }
-
-  const now = createTimestamp();
-  activeChat.messages.forEach((message) => {
-    if (message.role !== "assistant") {
-      return;
-    }
-    if (message.status === "queued" || message.status === "processing") {
-      message.status = "error";
-      message.content = message.content ? `${message.content}\n\nExecution interrupted by user.` : "Execution interrupted by user.";
-      message.timestamp = now;
-    }
-  });
-
-  appendSystemTraceMessages(
-    activeChat,
-    [{ system_type: "tool_interrupt", content: "Execution interrupted by user." }],
-    now,
-    runtime.activeRequestId || "",
-  );
-  activeChat.updated_at = now;
-
-  renderActiveChat();
-  renderChatHistory();
-  updateComposerState();
-  setStatus("Execution stopped. Queued messages were cleared.", true);
-
   try {
-    await persistChatsToSettings();
+    const response = await fetch("/api/chat/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: activeChat.id }),
+    });
+    if (!response.ok) {
+      const detail = await buildHttpErrorDetail(response, "Failed to stop chat execution.");
+      throw new Error(detail);
+    }
+    await syncRemoteChatState();
+    setStatus("Execution stopped. Queued messages were cleared.", true);
   } catch (error) {
-    setStatus(`Execution stopped, but save failed: ${error.message}`, true);
+    setStatus(normalizeErrorMessage(error, "Failed to stop chat execution."), true);
   }
 }
 
