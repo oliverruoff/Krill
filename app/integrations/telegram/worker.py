@@ -11,10 +11,17 @@ from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, lo
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed, is_over_context_threshold
 from app.providers import get_provider, get_provider_model_limit
 from app.providers.resilience import generate_with_retries
+from app.providers.vision import analyze_image
 from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from app.usage import add_daily_usage, get_today_token_usage
 
-from .client import telegram_get_me, telegram_get_updates, telegram_send_message
+from .client import (
+    telegram_download_file_bytes,
+    telegram_get_file_path,
+    telegram_get_me,
+    telegram_get_updates,
+    telegram_send_message,
+)
 
 
 TELEGRAM_POLL_TIMEOUT_SECONDS = 25
@@ -133,8 +140,7 @@ class TelegramBridgeWorker:
     async def _handle_message(self, token: str, message: dict[str, Any], bot_username: str, bot_id: int) -> None:
         chat = message.get("chat")
         sender = message.get("from")
-        text = message.get("text")
-        if not isinstance(chat, dict) or not isinstance(sender, dict) or not isinstance(text, str):
+        if not isinstance(chat, dict) or not isinstance(sender, dict):
             return
 
         sender_id = sender.get("id")
@@ -166,17 +172,74 @@ class TelegramBridgeWorker:
         if is_group and not _is_group_message_addressed_to_bot(message, bot_username, bot_id):
             return
 
-        command, command_arg = _parse_command(text, bot_username)
+        text = message.get("text")
+        caption = message.get("caption")
+        prompt_text = text if isinstance(text, str) else (caption if isinstance(caption, str) else "")
+
+        try:
+            image_payload = await self._extract_message_image(token, message)
+        except Exception as exc:
+            await asyncio.to_thread(telegram_send_message, token, chat_id, f"Image handling failed: {exc}")
+            return
+
+        command, command_arg = _parse_command(prompt_text, bot_username)
         if command:
             response_text = await self._handle_command(command, command_arg, settings)
             if response_text:
                 await asyncio.to_thread(telegram_send_message, token, chat_id, response_text)
             return
 
-        response_text = await self._handle_user_message(settings, text)
+        response_text = await self._handle_user_message(settings, prompt_text, image=image_payload)
         if response_text:
             for chunk in _chunk_telegram_text(response_text):
                 await asyncio.to_thread(telegram_send_message, token, chat_id, chunk)
+
+    async def _extract_message_image(self, token: str, message: dict[str, Any]) -> dict[str, object] | None:
+        photo = message.get("photo")
+        selected_file_id = ""
+        mime_type = "image/jpeg"
+
+        if isinstance(photo, list) and photo:
+            best = None
+            best_size = -1
+            for item in photo:
+                if not isinstance(item, dict):
+                    continue
+                file_id = item.get("file_id")
+                if not isinstance(file_id, str) or not file_id.strip():
+                    continue
+                width = int(item.get("width", 0)) if isinstance(item.get("width"), int) else 0
+                height = int(item.get("height", 0)) if isinstance(item.get("height"), int) else 0
+                score = width * height
+                if score > best_size:
+                    best_size = score
+                    best = file_id.strip()
+            if isinstance(best, str) and best:
+                selected_file_id = best
+
+        if not selected_file_id:
+            document = message.get("document")
+            if isinstance(document, dict):
+                file_id = document.get("file_id")
+                mime = str(document.get("mime_type", "")).strip().lower()
+                if isinstance(file_id, str) and file_id.strip() and mime.startswith("image/"):
+                    selected_file_id = file_id.strip()
+                    mime_type = mime
+
+        if not selected_file_id:
+            return None
+
+        file_path = await asyncio.to_thread(telegram_get_file_path, token, selected_file_id)
+        image_bytes = await asyncio.to_thread(telegram_download_file_bytes, token, file_path)
+        if not image_bytes:
+            return None
+        if len(image_bytes) > 10 * 1024 * 1024:
+            raise RuntimeError("Telegram image exceeds 10MB limit.")
+        return {
+            "mime_type": mime_type,
+            "content_bytes": image_bytes,
+            "telegram_file_id": selected_file_id,
+        }
 
     async def _handle_command(self, command: str, argument: str, settings: Settings) -> str:
         if command == "new":
@@ -282,9 +345,9 @@ class TelegramBridgeWorker:
 
         return "Unknown command. Use /help for available commands."
 
-    async def _handle_user_message(self, settings: Settings, text: str) -> str:
+    async def _handle_user_message(self, settings: Settings, text: str, *, image: dict[str, object] | None = None) -> str:
         prompt = text.strip()
-        if not prompt:
+        if not prompt and image is None:
             return ""
 
         active_chat = _get_active_chat(self._telegram_chats, self._active_chat_id)
@@ -296,19 +359,62 @@ class TelegramBridgeWorker:
             active_chat.title = _derive_chat_title(prompt)
 
         user_timestamp = _timestamp()
-        active_chat.messages.append(ChatMessage(role="user", content=prompt, timestamp=user_timestamp))
+        user_content = prompt
+        if image is not None:
+            user_content = f"{user_content}\n\n[Image attached]".strip() if user_content else "[Image attached]"
+        active_chat.messages.append(ChatMessage(role="user", content=user_content, timestamp=user_timestamp))
         await register_user_message_and_maybe_extract(
             source_channel="telegram",
             source_chat_id=active_chat.id,
         )
 
         ensure_runtime_context_seed(active_chat, settings)
+        image_tokens: int | None = None
+        image_analysis_for_reply = ""
+        if image is not None:
+            provider_id = settings.active_provider_id.strip()
+            provider_config = settings.provider_configs.get(provider_id)
+            model_id = provider_config.model.strip() if provider_config is not None else ""
+            api_key = provider_config.api_key if provider_config is not None else ""
+            image_bytes = image.get("content_bytes") if isinstance(image, dict) else None
+            image_mime = str(image.get("mime_type", "")).strip() if isinstance(image, dict) else ""
+            if not isinstance(image_bytes, (bytes, bytearray)) or not image_mime.startswith("image/"):
+                return "Image analysis failed: Invalid image payload from Telegram."
+            try:
+                analysis_text, image_tokens = await analyze_image(
+                    provider_id=provider_id,
+                    model=model_id,
+                    api_key=api_key,
+                    image_bytes=bytes(image_bytes),
+                    mime_type=image_mime,
+                    prompt=_image_analysis_prompt(prompt),
+                )
+            except Exception as exc:
+                return f"Image analysis failed: {exc}"
+
+            active_chat.messages.append(
+                ChatMessage(
+                    role="assistant",
+                    content=f"Image analysis: {analysis_text.strip()}",
+                    timestamp=_timestamp(),
+                    status="done",
+                )
+            )
+            image_analysis_for_reply = analysis_text.strip()
+
         history = build_model_history(active_chat)
+        final_prompt = prompt
+        if image is not None:
+            analysis_context = str(active_chat.messages[-1].content).replace("Image analysis:", "", 1).strip()
+            if final_prompt:
+                final_prompt = f"{final_prompt}\n\nImage analysis:\n{analysis_context}"
+            else:
+                final_prompt = f"The user sent an image without text. Use this image analysis:\n{analysis_context}"
 
         try:
             engine_result, token_limit = await generate_chat_response(
                 settings=settings,
-                message=prompt,
+                message=final_prompt,
                 history=history,
                 memory_block=active_chat.memory_block,
                 source_channel="telegram",
@@ -363,15 +469,21 @@ class TelegramBridgeWorker:
         await register_completed_turn(
             source_channel="telegram",
             source_chat_id=active_chat.id,
-            user_message=prompt,
+            user_message=prompt or "[Image attached]",
             assistant_message=text_response,
         )
 
         if isinstance(used_tokens, int) and used_tokens > 0:
             active_chat.total_tokens_used = max(0, active_chat.total_tokens_used) + used_tokens
             add_daily_usage(settings, used_tokens)
+        if isinstance(image_tokens, int) and image_tokens > 0:
+            active_chat.total_tokens_used = max(0, active_chat.total_tokens_used) + image_tokens
+            add_daily_usage(settings, image_tokens)
+        if (isinstance(used_tokens, int) and used_tokens > 0) or (isinstance(image_tokens, int) and image_tokens > 0):
             await save_settings(settings)
 
+        if image_analysis_for_reply:
+            return f"Image analysis: {image_analysis_for_reply}\n\n{text_response}".strip()
         return text_response
 
 
@@ -528,6 +640,21 @@ def _chunk_telegram_text(text: str, max_len: int = 3500) -> list[str]:
         chunks.append(remaining[:split_at].strip())
         remaining = remaining[split_at:].lstrip()
     return [chunk for chunk in chunks if chunk]
+
+
+def _image_analysis_prompt(user_message: str) -> str:
+    message = user_message.strip()
+    if message:
+        return (
+            "Analyze this image for the user's request. "
+            "Provide concise factual details, visible text (OCR), and relevant context. "
+            "Do not invent details.\n\n"
+            f"User request: {message}"
+        )
+    return (
+        "Analyze this image and provide concise factual details, visible text (OCR), "
+        "and relevant context. Do not invent details."
+    )
 
 
 def _estimate_chat_context_tokens(chat: ChatSession | None) -> int:

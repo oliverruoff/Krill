@@ -27,6 +27,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Let Krill orchestrate multi-step tool flows automatically (sequential recursive tool calls)
 - See live tool/system trace messages while execution runs
 - Stop running tool chains and clear queued work for the active chat
+- Attach one image in Gateway/Telegram messages for transient vision analysis (no image file persistence)
 - Track token usage per chat and per day
 - Manage core/normal memories with per-type compaction in Memory Management (timestamp-preserving, lossless-oriented summarization)
 
@@ -120,6 +121,7 @@ Telegram integration notes:
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway
 - Telegram replies include a context-window warning when usage reaches 75% of model limit (suggesting `/new`)
 - Telegram supports `/usage` (shows session context fill vs model window) and `/compaction` (manual chat compaction into a fresh chat)
+- Telegram accepts image messages (photo/image document) and emits an "Image analysis" assistant message before the final reply
 
 ### 4) Orchestrator (reason + act loop)
 

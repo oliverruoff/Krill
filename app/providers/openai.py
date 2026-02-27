@@ -12,9 +12,9 @@ class OpenAIProvider(LLMProvider):
     display_name = "OpenAI"
     api_key_url = "https://platform.openai.com/api-keys"
     available_models = [
-        {"id": "gpt-5-nano", "label": "GPT-5 Nano", "token_limit": 400000},
-        {"id": "gpt-5-mini", "label": "GPT-5 Mini", "token_limit": 400000},
-        {"id": "gpt-5.2", "label": "GPT-5.2", "token_limit": 400000},
+        {"id": "gpt-5-nano", "label": "GPT-5 Nano", "token_limit": 400000, "supports_images": True},
+        {"id": "gpt-5-mini", "label": "GPT-5 Mini", "token_limit": 400000, "supports_images": True},
+        {"id": "gpt-5.2", "label": "GPT-5.2", "token_limit": 400000, "supports_images": True},
     ]
 
     async def generate(

@@ -2216,6 +2216,55 @@ button:disabled {
   box-shadow: none;
 }
 
+.chat-composer .actions #image-upload-btn {
+  flex: 0 0 auto;
+  width: 2.2rem;
+  min-width: 2.2rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #f8fbff;
+  color: #5a6f8b;
+  line-height: 1;
+}
+
+.chat-composer .actions #image-upload-btn:hover {
+  background: #edf4fd;
+}
+
+.image-attachment-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #f7fbff;
+  font-size: 0.78rem;
+}
+
+.image-attachment-preview.hidden {
+  display: none;
+}
+
+.image-attachment-preview img {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid #dce5f3;
+}
+
+.image-attachment-remove {
+  margin-left: auto;
+  border: 1px solid #d2dbe9;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #5f7392;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.4rem;
+}
+
 #chat-input {
   resize: none;
   min-height: 2.35rem;
@@ -2500,6 +2549,13 @@ button:disabled {
     z-index: 3;
     padding-top: 0.3rem;
     background: var(--surface);
+  }
+
+  .chat-composer .actions {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 0.35rem;
+    align-items: center;
   }
 
   .chat-meta {

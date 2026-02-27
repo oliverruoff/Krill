@@ -30,3 +30,25 @@ def telegram_send_message(token: str, chat_id: int, text: str) -> dict[str, obje
     )
     with request.urlopen(req, timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def telegram_get_file_path(token: str, file_id: str) -> str:
+    query = parse.urlencode({"file_id": file_id})
+    url = f"https://api.telegram.org/bot{parse.quote(token, safe=':')}/getFile?{query}"
+    req = request.Request(url=url, headers={"Accept": "application/json"}, method="GET")
+    with request.urlopen(req, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(result, dict):
+        raise RuntimeError("Telegram getFile returned no result.")
+    path_value = result.get("file_path")
+    if not isinstance(path_value, str) or not path_value.strip():
+        raise RuntimeError("Telegram getFile returned no file_path.")
+    return path_value.strip()
+
+
+def telegram_download_file_bytes(token: str, file_path: str) -> bytes:
+    url = f"https://api.telegram.org/file/bot{parse.quote(token, safe=':')}/{file_path.lstrip('/')}"
+    req = request.Request(url=url, headers={"Accept": "*/*"}, method="GET")
+    with request.urlopen(req, timeout=30) as response:
+        return response.read()

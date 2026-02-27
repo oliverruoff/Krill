@@ -12,9 +12,9 @@ class GeminiProvider(LLMProvider):
     display_name = "Google Gemini"
     api_key_url = "https://aistudio.google.com/app/apikey"
     available_models = [
-        {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview", "token_limit": 1048576},
-        {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview", "token_limit": 1048576},
-        {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "token_limit": 1048576},
+        {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview", "token_limit": 1048576, "supports_images": True},
+        {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview", "token_limit": 1048576, "supports_images": True},
+        {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "token_limit": 1048576, "supports_images": True},
     ]
 
     async def generate(

@@ -1,6 +1,8 @@
 """FastAPI entrypoint exposing setup, gateway, chat, and integration APIs."""
 
 import asyncio
+import base64
+import binascii
 import ipaddress
 import json
 import logging
@@ -81,6 +83,7 @@ from .memory_extraction import (
     stop_memory_extraction_worker,
 )
 from .providers import get_provider, get_provider_options, is_supported_provider
+from .providers.vision import analyze_image
 from .providers.resilience import generate_with_retries
 from .usage import add_daily_usage
 from .version import APP_VERSION
@@ -181,12 +184,13 @@ class ChatRequest(BaseModel):
 
 class ChatEnqueueRequest(BaseModel):
     chat_id: str = Field(min_length=1)
-    message: str = Field(min_length=1, max_length=5000)
+    message: str = Field(default="", max_length=5000)
     provider_id: str = ""
     model: str = ""
     api_key: str = ""
     bot_name: str = Field(default="", max_length=30)
     system_prompt: str = Field(default="", max_length=1000)
+    image: dict[str, str] | None = None
 
 
 class ChatStopRequest(BaseModel):
@@ -268,7 +272,7 @@ _google_oauth_states: dict[str, dict[str, object]] = {}
 _google_oauth_lock = asyncio.Lock()
 _PUBLIC_BASE_URL_ENV = "KRILL_PUBLIC_BASE_URL"
 _gateway_chat_lock = asyncio.Lock()
-_gateway_chat_queues: dict[str, list[dict[str, str]]] = {}
+_gateway_chat_queues: dict[str, list[dict[str, Any]]] = {}
 _gateway_chat_tasks: dict[str, asyncio.Task[None]] = {}
 _gateway_chat_active_request_ids: dict[str, str] = {}
 
@@ -409,12 +413,20 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="Chat not found.")
 
     message_text = payload.message.strip()
-    if not message_text:
-        raise HTTPException(status_code=422, detail="Message is required.")
+    image_payload = _normalize_enqueued_image(payload.image)
+    if not message_text and image_payload is None:
+        raise HTTPException(status_code=422, detail="Either message text or one image is required.")
+
+    user_content = message_text
+    if image_payload is not None:
+        if user_content:
+            user_content = f"{user_content}\n\n[Image attached]"
+        else:
+            user_content = "[Image attached]"
 
     request_id = str(uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
-    target_chat.messages.append(ChatMessage(role="user", content=message_text, timestamp=now_iso))
+    target_chat.messages.append(ChatMessage(role="user", content=user_content, timestamp=now_iso))
     target_chat.messages.append(
         ChatMessage(role="assistant", content="", timestamp=now_iso, request_id=request_id, status="queued")
     )
@@ -431,6 +443,7 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
             "chat_id": chat_id,
             "request_id": request_id,
             "message": message_text,
+            "image": image_payload,
             "provider_id": payload.provider_id.strip(),
             "model": payload.model.strip(),
             "api_key": payload.api_key,
@@ -439,6 +452,33 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
         }
     )
     return {"ok": True, "request_id": request_id}
+
+
+def _normalize_enqueued_image(raw: dict[str, str] | None) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    mime_type = str(raw.get("mime_type", "")).strip().lower()
+    content_base64 = str(raw.get("content_base64", "")).strip()
+    file_name = str(raw.get("file_name", "")).strip()
+    if not mime_type and not content_base64:
+        return None
+    if not mime_type.startswith("image/"):
+        raise HTTPException(status_code=422, detail="Only image attachments are supported.")
+    if not content_base64:
+        raise HTTPException(status_code=422, detail="Image content is missing.")
+    try:
+        image_bytes = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Image payload is not valid base64.") from exc
+    if not image_bytes:
+        raise HTTPException(status_code=422, detail="Image payload is empty.")
+    if len(image_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="Image exceeds 10MB limit.")
+    return {
+        "mime_type": mime_type,
+        "content_bytes": image_bytes,
+        "file_name": file_name,
+    }
 
 
 @app.post("/api/chat/stop")
@@ -1043,7 +1083,7 @@ async def compact_chat(payload: CompactChatRequest) -> CompactChatResponse:
     return CompactChatResponse(memory_block=memory_block, history=[], used_tokens=used_tokens)
 
 
-async def _enqueue_gateway_chat_job(job: dict[str, str]) -> None:
+async def _enqueue_gateway_chat_job(job: dict[str, Any]) -> None:
     chat_id = str(job.get("chat_id", "")).strip()
     if not chat_id:
         return
@@ -1081,10 +1121,12 @@ async def _process_gateway_chat_queue(chat_id: str) -> None:
             _gateway_chat_active_request_ids.pop(chat_id, None)
 
 
-async def _process_gateway_chat_job(chat_id: str, job: dict[str, str]) -> None:
+async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
     request_id = str(job.get("request_id", "")).strip()
     message = str(job.get("message", "")).strip()
-    if not request_id or not message:
+    image_payload = job.get("image") if isinstance(job.get("image"), dict) else None
+    has_image = image_payload is not None
+    if not request_id or (not message and not has_image):
         return
 
     settings = await load_settings()
@@ -1100,11 +1142,66 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, str]) -> None:
     assistant.timestamp = datetime.now(timezone.utc).isoformat()
     await save_settings(settings)
 
+    resolved_provider_id = str(job.get("provider_id", "")).strip() or settings.active_provider_id
+    resolved_provider_config = settings.provider_configs.get(resolved_provider_id)
+    resolved_model = str(job.get("model", "")).strip() or (resolved_provider_config.model if resolved_provider_config else "")
+    resolved_api_key = str(job.get("api_key", "")).strip() or (resolved_provider_config.api_key if resolved_provider_config else "")
+
     history = _build_gateway_history(chat.messages)
+    image_analysis_text = ""
+    image_analysis_tokens: int | None = None
+    if has_image:
+        image_mime = str(image_payload.get("mime_type", "")).strip()
+        image_bytes = image_payload.get("content_bytes")
+        if not image_mime.startswith("image/") or not isinstance(image_bytes, (bytes, bytearray)):
+            await _mark_gateway_request_error(chat_id, request_id, "Hard error: Invalid image payload.")
+            return
+        try:
+            image_analysis_text, image_analysis_tokens = await analyze_image(
+                provider_id=resolved_provider_id,
+                model=resolved_model,
+                api_key=resolved_api_key,
+                image_bytes=bytes(image_bytes),
+                mime_type=image_mime,
+                prompt=_image_analysis_prompt(message),
+            )
+        except Exception as exc:
+            await _mark_gateway_request_error(chat_id, request_id, f"Image analysis failed: {exc}")
+            return
+
+        settings_with_analysis = await load_settings()
+        chat_with_analysis = _find_chat_by_id(settings_with_analysis, chat_id)
+        if chat_with_analysis is None:
+            return
+        analysis_message = ChatMessage(
+            role="assistant",
+            content=f"Image analysis: {image_analysis_text.strip()}",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            request_id=request_id,
+            status="done",
+        )
+        chat_with_analysis.messages.append(analysis_message)
+        await save_settings(settings_with_analysis)
+
+        settings = settings_with_analysis
+        chat = chat_with_analysis
+        history = _build_gateway_history(chat.messages)
+
+    model_message = message.strip()
+    if has_image:
+        analysis_block = image_analysis_text.strip()
+        if model_message:
+            model_message = f"{model_message}\n\nImage analysis:\n{analysis_block}"
+        else:
+            model_message = (
+                "The user sent an image without text. Use this image analysis to respond helpfully:\n"
+                f"{analysis_block}"
+            )
+
     try:
         result, _ = await generate_chat_response(
             settings=settings,
-            message=message,
+            message=model_message,
             history=history,
             memory_block=chat.memory_block,
             provider_id=str(job.get("provider_id", "")),
@@ -1167,6 +1264,8 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, str]) -> None:
     ]
 
     used_tokens = result.get("used_tokens") if isinstance(result, dict) else None
+    if isinstance(image_analysis_tokens, int) and image_analysis_tokens > 0:
+        used_tokens = (used_tokens if isinstance(used_tokens, int) else 0) + image_analysis_tokens
     if isinstance(used_tokens, int) and used_tokens > 0:
         chat.total_tokens_used = max(0, chat.total_tokens_used) + used_tokens
         add_daily_usage(settings, used_tokens)
@@ -1177,7 +1276,7 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, str]) -> None:
         await register_completed_turn(
             source_channel="gateway",
             source_chat_id=chat_id,
-            user_message=message,
+            user_message=message or "[Image attached]",
             assistant_message=assistant.content,
         )
     except Exception:
@@ -1275,6 +1374,21 @@ def _build_gateway_history(messages: list[ChatMessage]) -> list[dict[str, str]]:
             continue
         history.append({"role": turn.role, "content": content})
     return history
+
+
+def _image_analysis_prompt(user_message: str) -> str:
+    user_text = user_message.strip()
+    if user_text:
+        return (
+            "Analyze this image for the current chat request. "
+            "Provide a concise factual summary, visible text (OCR), and details relevant to the user request. "
+            "Do not invent details.\n\n"
+            f"User request: {user_text}"
+        )
+    return (
+        "Analyze this image for chat context. Provide a concise factual summary, visible text (OCR), "
+        "and relevant notable details. Do not invent details."
+    )
 
 
 def _validate_provider_configs(settings: Settings) -> None:

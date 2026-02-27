@@ -15,6 +15,9 @@ const chatInput = document.getElementById("chat-input");
 const sendButton = document.getElementById("send-btn");
 const stopButton = document.getElementById("stop-btn");
 const micButton = document.getElementById("mic-btn");
+const imageUploadButton = document.getElementById("image-upload-btn");
+const imageUploadInput = document.getElementById("image-upload-input");
+const imageAttachmentPreview = document.getElementById("image-attachment-preview");
 const chatThread = document.getElementById("chat-thread");
 const providerIndicator = document.getElementById("provider-indicator");
 const modelIndicator = document.getElementById("model-indicator");
@@ -190,6 +193,7 @@ const state = {
   speechBaseText: "",
   speechFinalText: "",
   speechInterimText: "",
+  pendingImageAttachment: null,
 };
 
 function isMobileDrawerMode() {
@@ -454,6 +458,91 @@ function syncChatInputHeight() {
   const targetHeight = Math.min(chatInput.scrollHeight, CHAT_INPUT_MAX_HEIGHT_PX);
   chatInput.style.height = `${Math.max(targetHeight, 38)}px`;
   chatInput.style.overflowY = chatInput.scrollHeight > CHAT_INPUT_MAX_HEIGHT_PX ? "auto" : "hidden";
+}
+
+function clearPendingImageAttachment() {
+  state.pendingImageAttachment = null;
+  if (imageUploadInput instanceof HTMLInputElement) {
+    imageUploadInput.value = "";
+  }
+  renderPendingImageAttachment();
+}
+
+function renderPendingImageAttachment() {
+  if (!(imageAttachmentPreview instanceof HTMLElement)) {
+    return;
+  }
+  const pending = state.pendingImageAttachment;
+  if (!pending) {
+    imageAttachmentPreview.classList.add("hidden");
+    imageAttachmentPreview.innerHTML = "";
+    return;
+  }
+
+  const escapedName = String(pending.fileName || "image").replace(/[<>]/g, "");
+  imageAttachmentPreview.classList.remove("hidden");
+  imageAttachmentPreview.innerHTML = `
+    <img src="${pending.previewUrl}" alt="Selected image" />
+    <span>${escapedName}</span>
+    <button type="button" class="image-attachment-remove" id="remove-image-attachment">Remove</button>
+  `;
+  const removeButton = document.getElementById("remove-image-attachment");
+  if (removeButton instanceof HTMLButtonElement) {
+    removeButton.addEventListener("click", () => {
+      clearPendingImageAttachment();
+    });
+  }
+}
+
+function parseDataUrl(dataUrl) {
+  const raw = String(dataUrl || "");
+  const match = raw.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) {
+    return null;
+  }
+  return { mimeType: match[1], contentBase64: match[2] };
+}
+
+async function handleImageUploadInputChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || !target.files || target.files.length === 0) {
+    return;
+  }
+
+  const file = target.files[0];
+  if (!file.type.startsWith("image/")) {
+    setStatus("Only image files are supported.", true);
+    clearPendingImageAttachment();
+    return;
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    setStatus("Image exceeds 10MB limit.", true);
+    clearPendingImageAttachment();
+    return;
+  }
+
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Failed to read image file."));
+    reader.readAsDataURL(file);
+  });
+
+  const parsed = parseDataUrl(dataUrl);
+  if (!parsed) {
+    setStatus("Invalid image data URL.", true);
+    clearPendingImageAttachment();
+    return;
+  }
+
+  state.pendingImageAttachment = {
+    fileName: file.name || "image",
+    mimeType: parsed.mimeType,
+    contentBase64: parsed.contentBase64,
+    previewUrl: dataUrl,
+  };
+  renderPendingImageAttachment();
+  setStatus("Image attached. Send to analyze.");
 }
 
 function getSpeechRecognitionConstructor() {
@@ -1168,11 +1257,14 @@ function addMessage(role, text = "", timestamp = "", status = "") {
   bubble.className = "chat-bubble";
 
   if (role === "assistant" || role === "system") {
+    const normalizedText = role === "assistant" && typeof text === "string" && text.trim().toLowerCase().startsWith("image analysis:")
+      ? `📷 ${text.trim()}`
+      : text;
     if ((status === "queued" || status === "processing") && !text) {
       const label = status === "queued" ? "Queued" : "Processing";
       bubble.innerHTML = `<span class="compaction-loading">${label} <span class="typing-dots" aria-label="${label}"><span></span><span></span><span></span></span></span>`;
     } else {
-      bubble.innerHTML = renderMarkdown(text);
+      bubble.innerHTML = renderMarkdown(normalizedText);
     }
   } else {
     bubble.textContent = text;
@@ -4843,8 +4935,9 @@ async function sendMessage(event) {
   }
 
   const message = chatInput.value.trim();
-  if (!message) {
-    setStatus("Please enter a message.", true);
+  const pendingImage = state.pendingImageAttachment;
+  if (!message && !pendingImage) {
+    setStatus("Please enter a message or attach an image.", true);
     return;
   }
 
@@ -4869,6 +4962,13 @@ async function sendMessage(event) {
       body: JSON.stringify({
         chat_id: chat.id,
         message,
+        image: pendingImage
+          ? {
+            file_name: String(pendingImage.fileName || "image"),
+            mime_type: String(pendingImage.mimeType || "image/jpeg"),
+            content_base64: String(pendingImage.contentBase64 || ""),
+          }
+          : null,
         provider_id: snapshot.providerId,
         model: snapshot.model,
         api_key: snapshot.apiKey,
@@ -4881,6 +4981,7 @@ async function sendMessage(event) {
       throw new Error(detail);
     }
     chatInput.value = "";
+    clearPendingImageAttachment();
     syncChatInputHeight();
     setStatus("Queued.");
     await syncRemoteChatState();
@@ -5637,6 +5738,20 @@ if (micButton instanceof HTMLButtonElement) {
   micButton.addEventListener("click", toggleSpeechRecognition);
 }
 
+if (imageUploadButton instanceof HTMLButtonElement && imageUploadInput instanceof HTMLInputElement) {
+  imageUploadButton.addEventListener("click", () => {
+    imageUploadInput.click();
+  });
+  imageUploadInput.addEventListener("change", async (event) => {
+    try {
+      await handleImageUploadInputChange(event);
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to attach image."), true);
+      clearPendingImageAttachment();
+    }
+  });
+}
+
 if (systemTraceToggleButton instanceof HTMLButtonElement) {
   systemTraceToggleButton.addEventListener("click", toggleSystemTraceVisibility);
 }
@@ -5718,6 +5833,7 @@ window.addEventListener("beforeunload", () => {
 window.addEventListener("load", () => {
   initializeSpeechRecognition();
   syncChatInputHeight();
+  renderPendingImageAttachment();
   syncMobileDrawerUi();
   loadGatewayMeta();
 });

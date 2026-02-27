@@ -65,5 +65,18 @@ def get_provider_model_limit(provider_id: str, model_id: str) -> int | None:
     return None
 
 
+def get_provider_model_supports_images(provider_id: str, model_id: str) -> bool:
+    provider = _PROVIDERS.get(provider_id)
+    if provider is None:
+        return False
+
+    for model in provider.available_models:
+        if model.get("id") != model_id:
+            continue
+        return bool(model.get("supports_images", False))
+
+    return False
+
+
 def get_provider(provider_id: str) -> LLMProvider | None:
     return _PROVIDERS.get(provider_id)
