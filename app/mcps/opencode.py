@@ -9,10 +9,10 @@ import subprocess
 import time
 from pathlib import Path
 
-from app.config import BASE_DIR, IntegrationConfig, Settings, load_settings
+from app.config import BASE_DIR, Settings, load_settings
 from app.tooling.runtime_context import get_runtime_context
 
-from .base import MCPPlugin, McpConfigField, McpConfigFieldOption, McpToolSpec
+from .base import MCPPlugin, McpConfigField, McpToolSpec
 from .git_ops import SSH_PRIVATE_PARAM, ensure_ssh_keypair, get_workspace_path
 
 
@@ -37,17 +37,6 @@ class OpenCodeMCP(MCPPlugin):
             required=False,
             description="Model used by OpenCode. Leave empty to use selected provider default model.",
             options_source="provider_models",
-        ),
-        McpConfigField(
-            id="allowed_channels",
-            label="Answer Channels",
-            type="multiselect",
-            required=False,
-            description="Channels allowed to receive OpenCode responses. Gateway is always enabled.",
-            options=[
-                McpConfigFieldOption(value="gateway", label="Gateway", disabled=True),
-            ],
-            options_source="integration_channels",
         )
     ]
 
@@ -98,10 +87,6 @@ class OpenCodeMCP(MCPPlugin):
         return ""
 
     async def verify(self, params: dict[str, str]) -> tuple[bool, str]:
-        allowed = _parse_allowed_channels(params)
-        if "gateway" not in allowed:
-            return False, "OpenCode MCP requires gateway as an allowed channel."
-
         npx_bin = shutil.which("npx")
         if not npx_bin:
             return False, "npx is not available. Install Node.js/npm in the runtime container first."
@@ -129,19 +114,9 @@ class OpenCodeMCP(MCPPlugin):
         if tool_id not in {"opencode_plan", "opencode_build"}:
             raise RuntimeError(f"Unsupported OpenCode tool: {tool_id}")
 
-        allowed_channels = _parse_allowed_channels(params)
         runtime_context = get_runtime_context()
         source_channel = str(runtime_context.get("source_channel", "gateway") or "gateway")
         source_chat_id = str(runtime_context.get("source_chat_id", "") or "")
-        if source_channel not in allowed_channels:
-            return {
-                "status": "blocked",
-                "reason": (
-                    f"OpenCode is not enabled for channel '{source_channel}'. "
-                    f"Allowed channels: {', '.join(sorted(allowed_channels))}"
-                ),
-                "source_channel": source_channel,
-            }
 
         prompt = _required_str(arguments, "prompt")
         repo_id = _optional_str(arguments, "repo_id")
@@ -190,17 +165,6 @@ class OpenCodeMCP(MCPPlugin):
         stderr_text = str(result.get("stderr", "") or "").strip()
         if stderr_text:
             response["stderr"] = stderr_text
-
-        try:
-            await _dispatch_additional_channels(
-                channels=allowed_channels,
-                source_channel=source_channel,
-                source_chat_id=source_chat_id,
-                response=response,
-                settings=settings,
-            )
-        except Exception as exc:
-            response["channel_dispatch_warning"] = str(exc)
         return response
 
     async def _ensure_opencode_available(self, *, force: bool) -> None:
@@ -219,22 +183,6 @@ class OpenCodeMCP(MCPPlugin):
 
         self._last_health_error = ""
         self._health_ok_until = time.monotonic() + 600.0
-
-
-def _parse_allowed_channels(params: dict[str, str]) -> set[str]:
-    raw = str(params.get("allowed_channels", "") or "").strip()
-    values: list[str] = []
-    if raw:
-        try:
-            payload = json.loads(raw)
-            if isinstance(payload, list):
-                values = [str(item).strip() for item in payload if str(item).strip()]
-        except Exception:
-            values = [chunk.strip() for chunk in raw.split(",") if chunk.strip()]
-
-    normalized = set(values)
-    normalized.add("gateway")
-    return normalized
 
 
 def _required_str(arguments: dict[str, object], key: str) -> str:
@@ -391,78 +339,6 @@ async def _add_git_ssh_env(*, env: dict[str, str], settings: Settings) -> dict[s
             f"ssh -i {key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
         )
     return updated
-
-
-async def _dispatch_additional_channels(
-    *,
-    channels: set[str],
-    source_channel: str,
-    source_chat_id: str,
-    response: dict[str, object],
-    settings: Settings,
-) -> None:
-    if "telegram" in channels and source_channel != "telegram":
-        await _dispatch_telegram(source_channel=source_channel, source_chat_id=source_chat_id, response=response, settings=settings)
-
-
-async def _dispatch_telegram(
-    *,
-    source_channel: str,
-    source_chat_id: str,
-    response: dict[str, object],
-    settings: Settings,
-) -> None:
-    from app.integrations.telegram.client import telegram_send_message
-
-    telegram_config = settings.integration_configs.get("telegram") or IntegrationConfig()
-    if not telegram_config.enabled:
-        return
-
-    token = str(telegram_config.params.get("bot_token", "") or "").strip()
-    if not token:
-        return
-
-    raw_chat_id = settings.telegram_state.owner_chat_id.strip() or settings.telegram_state.owner_user_id.strip()
-    if not raw_chat_id:
-        return
-
-    try:
-        chat_id = int(raw_chat_id)
-    except Exception:
-        return
-
-    status = str(response.get("status", "") or "ok").strip().lower()
-    text = str(response.get("text", "") or "").strip()
-    question = str(response.get("question", "") or "").strip()
-    summary = text or question or "(empty response)"
-    message = (
-        "OpenCode update from Krill\n"
-        f"source: {source_channel}:{source_chat_id or '-'}\n"
-        f"status: {status}\n\n"
-        f"{summary}"
-    )
-
-    for chunk in _chunk_telegram_text(message):
-        await asyncio.to_thread(telegram_send_message, token, chat_id, chunk)
-
-
-def _chunk_telegram_text(text: str, max_len: int = 3500) -> list[str]:
-    if len(text) <= max_len:
-        return [text]
-    chunks: list[str] = []
-    remaining = text
-    while remaining:
-        if len(remaining) <= max_len:
-            chunks.append(remaining)
-            break
-        split_at = remaining.rfind("\n", 0, max_len)
-        if split_at <= 0:
-            split_at = remaining.rfind(" ", 0, max_len)
-        if split_at <= 0:
-            split_at = max_len
-        chunks.append(remaining[:split_at].strip())
-        remaining = remaining[split_at:].lstrip()
-    return [chunk for chunk in chunks if chunk]
 
 
 def _mode_instruction(tool_id: str) -> str:

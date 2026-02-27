@@ -37,9 +37,6 @@ def get_mcp_options() -> list[dict[str, object]]:
         config_fields = [field.model_dump() for field in plugin.config_fields]
         for field_payload in config_fields:
             options_source = str(field_payload.get("options_source", "") or "").strip().lower()
-            if options_source == "integration_channels":
-                field_payload["options"] = _build_integration_channel_options()
-                continue
             if options_source == "providers":
                 field_payload["options"] = _build_provider_options()
                 continue
@@ -77,37 +74,6 @@ def get_mcp_tool_specs(mcp_id: str) -> list[McpToolSpec]:
 
 def get_all_mcps() -> dict[str, MCPPlugin]:
     return dict(_MCPS)
-
-
-def _build_integration_channel_options() -> list[dict[str, object]]:
-    options: list[dict[str, object]] = [
-        {
-            "value": "gateway",
-            "label": "Gateway",
-            "disabled": True,
-        }
-    ]
-
-    try:
-        from app.integrations.registry import get_integration_options
-
-        integrations = get_integration_options()
-        for integration in integrations:
-            integration_id = str(integration.get("id", "") or "").strip()
-            if not integration_id:
-                continue
-            label = str(integration.get("label", "") or integration_id).strip() or integration_id
-            options.append(
-                {
-                    "value": integration_id,
-                    "label": label,
-                    "disabled": False,
-                }
-            )
-    except Exception:
-        pass
-
-    return options
 
 
 def _build_provider_options() -> list[dict[str, object]]:

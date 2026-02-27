@@ -75,8 +75,7 @@ Current tools:
 OpenCode MCP notes:
 
 - select the OpenCode provider and model directly in the tool card
-- configure **Answer Channels** in the tool card with a multi-select control
-- `gateway` is always enabled and cannot be deselected
+- replies are delivered in the same channel where the request was triggered (Gateway stays in Gateway, Telegram stays in Telegram)
 - exposes planning/build tools (`opencode_plan`, `opencode_build`)
 - uses active Krill provider/model automatically (`openai`, `gemini`, `openrouter`)
 - Gemini integration for OpenCode uses API key env vars (`GEMINI_API_KEY` + `GOOGLE_API_KEY`)
