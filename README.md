@@ -118,6 +118,7 @@ Telegram integration notes:
 - Telegram chat history is not written to `braindump.db`
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway
 - Telegram replies include a context-window warning when usage reaches 75% of model limit (suggesting `/new`)
+- Telegram supports `/usage` (shows session context fill vs model window) and `/compaction` (manual chat compaction into a fresh chat)
 
 ### 4) Orchestrator (reason + act loop)
 

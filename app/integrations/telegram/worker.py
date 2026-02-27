@@ -9,7 +9,8 @@ from uuid import uuid4
 from app.chat_engine import generate_chat_response
 from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, load_settings, save_settings
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed, is_over_context_threshold
-from app.providers import get_provider_model_limit
+from app.providers import get_provider, get_provider_model_limit
+from app.providers.resilience import generate_with_retries
 from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from app.usage import add_daily_usage, get_today_token_usage
 
@@ -218,7 +219,44 @@ class TelegramBridgeWorker:
                 "/status - Show Telegram chat status\n"
                 "/where - Alias for /status\n"
                 "/usage - Show chat and daily token usage\n"
+                "/compaction - Compact active chat and start fresh\n"
                 "/help - Show this help"
+            )
+
+        if command == "compaction":
+            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
+            self._active_chat_id = active.id if active is not None else ""
+            if active is None:
+                return "No active chat available to compact."
+
+            try:
+                compacted_memory, used_tokens = await _compact_telegram_chat(settings, active)
+            except Exception as exc:
+                return f"Compaction failed: {exc}"
+
+            compacted_text = compacted_memory.strip()
+            if not compacted_text:
+                return "Compaction failed: Provider returned empty compact memory."
+
+            new_chat = _create_chat_entry(f"{active.title} compacted")
+            new_chat.memory_block = compacted_text
+            ensure_runtime_context_seed(new_chat, settings)
+            new_chat.messages.append(
+                ChatMessage(
+                    role="system",
+                    content=f"Compacted memory\n\n{compacted_text}",
+                    timestamp=_timestamp(),
+                    system_type="memory_compaction",
+                )
+            )
+            self._telegram_chats.append(new_chat)
+            self._active_chat_id = new_chat.id
+
+            used_suffix = f"\nCompaction tokens used: {used_tokens}" if isinstance(used_tokens, int) and used_tokens > 0 else ""
+            return (
+                f"Compaction complete.\n"
+                f"New active chat: {new_chat.title} ({_short_chat_id(new_chat.id)})"
+                f"{used_suffix}"
             )
 
         if command == "chats":
@@ -507,3 +545,86 @@ def _estimate_chat_context_tokens(chat: ChatSession | None) -> int:
         history_tokens += max(0, (len(role) + len(content) + 3) // 4)
 
     return max(0, memory_tokens + history_tokens)
+
+
+def _compaction_system_prompt() -> str:
+    return (
+        "You compress chat history into a durable memory block. "
+        "Keep only facts that matter for future turns: user preferences, goals, constraints, "
+        "decisions, unresolved items, and concrete context. "
+        "Do not invent facts. Keep compact wording and avoid filler."
+    )
+
+
+def _build_compaction_prompt(existing_memory: str, target_token_limit: int) -> str:
+    lines = [
+        "Create an updated compact memory block from the conversation history.",
+        "Return plain text only.",
+        "Use sections exactly in this order:",
+        "1) User profile and preferences",
+        "2) Confirmed facts and decisions",
+        "3) Open tasks and pending questions",
+        "4) Important style constraints",
+        "Keep it concise and dense.",
+    ]
+
+    if target_token_limit > 0:
+        lines.append(
+            f"This memory will support a model with {target_token_limit} token context, so keep memory lean."
+        )
+
+    if existing_memory.strip():
+        lines.append("Merge and refresh this previous memory block, keeping only still-relevant points:")
+        lines.append(existing_memory.strip())
+
+    return "\n".join(lines)
+
+
+def _build_compaction_history(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    history: list[dict[str, str]] = []
+    for message in messages:
+        if message.role not in {"user", "assistant"}:
+            continue
+        content = message.content.strip()
+        if not content:
+            continue
+        history.append({"role": message.role, "content": content})
+    return history
+
+
+async def _compact_telegram_chat(settings: Settings, chat: ChatSession) -> tuple[str, int | None]:
+    if not settings.setup_completed:
+        raise RuntimeError("Setup is not complete.")
+
+    active_provider_id = settings.active_provider_id.strip()
+    provider_config = settings.provider_configs.get(active_provider_id)
+    if provider_config is None:
+        raise RuntimeError("Active provider is not configured.")
+
+    provider = get_provider(active_provider_id)
+    if provider is None:
+        raise RuntimeError("Active provider is unavailable.")
+
+    model_id = provider_config.model.strip()
+    if not model_id:
+        raise RuntimeError("Active model is not configured.")
+
+    api_key = provider_config.api_key.strip()
+    if not api_key:
+        raise RuntimeError("Provider API key is missing.")
+
+    history = _build_compaction_history(chat.messages)
+    previous_memory = chat.memory_block.strip()
+    if not history and not previous_memory:
+        raise RuntimeError("Nothing to compact in the active chat.")
+
+    token_limit = get_provider_model_limit(active_provider_id, model_id) or 0
+    compacted_text, used_tokens = await generate_with_retries(
+        provider=provider,
+        prompt=_build_compaction_prompt(previous_memory, token_limit),
+        system_prompt=_compaction_system_prompt(),
+        model=model_id,
+        api_key=api_key,
+        history=history,
+    )
+    return compacted_text, used_tokens
