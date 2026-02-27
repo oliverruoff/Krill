@@ -233,7 +233,7 @@ Run:
 docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
 
-The container image includes Node.js/npm so OpenCode MCP can execute `npx opencode run`.
+The container image includes Node.js/npm and Git tooling (`git`, `ssh`, `ssh-keygen`, `gh`) so OpenCode/Git MCP workflows run end-to-end.
 
 ### Updating Krill (Docker)
 

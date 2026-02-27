@@ -9,7 +9,13 @@ WORKDIR /app
 RUN useradd --create-home --shell /usr/sbin/nologin krill
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        openssh-client \
+        gh \
+        nodejs \
+        npm \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt

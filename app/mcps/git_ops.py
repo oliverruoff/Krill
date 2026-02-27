@@ -3,6 +3,7 @@
 import asyncio
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -130,12 +131,19 @@ class GitOpsMCP(MCPPlugin):
         await asyncio.to_thread(workspace.mkdir, parents=True, exist_ok=True)
 
         try:
+            missing = [name for name in ("git", "ssh", "ssh-keygen", "gh") if not shutil.which(name)]
+            if missing:
+                return False, f"Git MCP missing required binaries: {', '.join(missing)}"
+
             private_key, public_key = await ensure_ssh_keypair(params, workspace)
             env = _command_env(private_key)
             _, git_stdout, _ = await _run_command(["git", "--version"], workspace, env, 20)
             ok, detail = await verify_github_ssh_access(workspace, private_key)
             if not ok:
-                return False, detail
+                return True, (
+                    f"Git MCP partially verified. Workspace: {workspace}. {git_stdout.splitlines()[0]}. "
+                    f"SSH not authenticated yet: {detail}"
+                )
         except Exception as exc:
             return False, f"Git MCP verification failed: {exc}"
 
@@ -145,7 +153,7 @@ class GitOpsMCP(MCPPlugin):
     async def call_tool(self, tool_id: str, arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
         workspace = _resolve_workspace_path()
         await asyncio.to_thread(workspace.mkdir, parents=True, exist_ok=True)
-        private_key, _ = await ensure_ssh_keypair(params, workspace)
+        private_key = params.get(SSH_PRIVATE_PARAM, "")
         env = _command_env(private_key)
 
         if tool_id == "checkout_repo":
@@ -350,6 +358,9 @@ def _optional_str(arguments: dict[str, object], key: str, default: str) -> str:
 
 def _command_env(private_key_content: str) -> dict[str, str]:
     env = dict(os.environ)
+    if not private_key_content.strip():
+        return env
+
     workspace = _resolve_workspace_path()
     private_key_path = _ssh_private_key_path(workspace)
     materialize_ssh_keypair(workspace, private_key_content, _read_public_key_if_exists(workspace))
