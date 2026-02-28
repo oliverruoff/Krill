@@ -109,6 +109,15 @@ Google Services MCP notes:
 Current integrations:
 
 - `telegram`
+- `whatsapp`
+
+WhatsApp integration notes:
+
+- optional and disabled by default
+- if unused, it can be ignored without affecting Gateway/Telegram/provider behavior
+- WhatsApp API endpoints are present, but runtime polling/auto-reply only runs when the WhatsApp integration and MCP are enabled
+- uses a local sidecar (`whatsapp-web.js`) with QR connect popup and allowlist filtering
+- session auth is persisted in `braindump.db` (`whatsapp_state.session_blob`) for restart recovery
 
 Telegram integration notes:
 
@@ -123,8 +132,6 @@ Telegram integration notes:
 - Telegram replies include a context-window warning when usage reaches 75% of model limit (suggesting `/new`)
 - Telegram supports `/usage` (shows session context fill vs model window) and `/compaction` (manual chat compaction into a fresh chat)
 - Telegram accepts image messages (photo/image document) and emits an "Image analysis" assistant message before the final reply
-- WhatsApp integration uses a local sidecar (`whatsapp-web.js`) with QR connect popup and allowlist filtering
-- WhatsApp session auth is persisted in `braindump.db` (`whatsapp_state.session_blob`) for container restarts
 
 ### 4) Orchestrator (reason + act loop)
 
