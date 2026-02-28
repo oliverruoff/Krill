@@ -61,10 +61,12 @@ const mobileSettingsPopover = document.getElementById("mobile-settings-popover")
 const mobileMemoryManagementButton = document.getElementById("mobile-memory-management-btn");
 const mobileShortTermMemoryButton = document.getElementById("mobile-short-term-memory-btn");
 const mobileTimedJobsButton = document.getElementById("mobile-timed-jobs-btn");
+const mobileTokenUsageButton = document.getElementById("mobile-token-usage-btn");
 const mobileBrainViewButton = document.getElementById("mobile-brain-view-btn");
 const memoryManagementButton = document.getElementById("memory-management-btn");
 const shortTermMemoryButton = document.getElementById("short-term-memory-btn");
 const timedJobsButton = document.getElementById("timed-jobs-btn");
+const tokenUsageButton = document.getElementById("token-usage-btn");
 const brainViewButton = document.getElementById("brain-view-btn");
 const memoryModal = document.getElementById("memory-modal");
 const memoryModalBackdrop = document.getElementById("memory-modal-backdrop");
@@ -100,6 +102,18 @@ const timedJobEnabledInput = document.getElementById("timed-job-enabled");
 const timedJobChannelsNode = document.getElementById("timed-job-channels");
 const timedJobSaveButton = document.getElementById("timed-job-save");
 const timedJobResetButton = document.getElementById("timed-job-reset");
+const tokenUsageModal = document.getElementById("token-usage-modal");
+const tokenUsageBackdrop = document.getElementById("token-usage-backdrop");
+const tokenUsageCloseButton = document.getElementById("token-usage-close");
+const tokenUsageMetaNode = document.getElementById("token-usage-meta");
+const tokenUsageRangeSelect = document.getElementById("token-usage-range");
+const tokenUsageFromInput = document.getElementById("token-usage-from");
+const tokenUsageToInput = document.getElementById("token-usage-to");
+const tokenUsageIncludeZeroInput = document.getElementById("token-usage-include-zero");
+const tokenUsageTotalNode = document.getElementById("token-usage-total");
+const tokenUsageAverageNode = document.getElementById("token-usage-average");
+const tokenUsagePeakNode = document.getElementById("token-usage-peak");
+const tokenUsageChartNode = document.getElementById("token-usage-chart");
 const memoryTokenTotalNode = document.getElementById("memory-token-total");
 const coreMemoryTokenCountNode = document.getElementById("core-memory-token-count");
 const normalMemoryTokenCountNode = document.getElementById("normal-memory-token-count");
@@ -199,6 +213,10 @@ const state = {
   pendingImageAttachment: null,
   chatHistoryVisibleCount: CHAT_HISTORY_PAGE_SIZE,
   chatHistorySignature: "",
+  tokenUsageRangeMode: "7",
+  tokenUsageCustomFrom: "",
+  tokenUsageCustomTo: "",
+  tokenUsageIncludeZeroDays: true,
 };
 
 function isMobileDrawerMode() {
@@ -210,7 +228,8 @@ function isAnyModalOpen() {
   const brainOpen = brainModal instanceof HTMLElement && !brainModal.classList.contains("hidden");
   const shortTermOpen = shortTermMemoryModal instanceof HTMLElement && !shortTermMemoryModal.classList.contains("hidden");
   const timedJobsOpen = timedJobsModal instanceof HTMLElement && !timedJobsModal.classList.contains("hidden");
-  return memoryOpen || brainOpen || shortTermOpen || timedJobsOpen;
+  const tokenUsageOpen = tokenUsageModal instanceof HTMLElement && !tokenUsageModal.classList.contains("hidden");
+  return memoryOpen || brainOpen || shortTermOpen || timedJobsOpen || tokenUsageOpen;
 }
 
 function syncMobileDrawerUi() {
@@ -1857,6 +1876,33 @@ function getTodayDateKey() {
   return `${year}-${month}-${day}`;
 }
 
+function addDaysToDateKey(dateKey, daysDelta) {
+  const parts = String(dateKey || "").split("-");
+  if (parts.length !== 3) {
+    return "";
+  }
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return "";
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + Number(daysDelta || 0));
+  const yyyy = String(date.getUTCFullYear());
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatDateShort(dateKey) {
+  const parts = String(dateKey || "").split("-");
+  if (parts.length !== 3) {
+    return dateKey;
+  }
+  return `${parts[2]}.${parts[1]}`;
+}
+
 function normalizeDailyTokenUsage(rawUsage) {
   if (!Array.isArray(rawUsage)) {
     return [];
@@ -1889,6 +1935,9 @@ function updateDailyTokenUsageLabel() {
   }
   if (hasMobileNode) {
     mobileLeftDailyTokenUsageNode.textContent = label;
+  }
+  if (tokenUsageModal instanceof HTMLElement && !tokenUsageModal.classList.contains("hidden")) {
+    renderTokenUsageModal();
   }
 }
 
@@ -2394,6 +2443,7 @@ function closeMemoryManagementModal() {
   memoryModal.classList.add("hidden");
   if ((!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
     && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
+    && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)) {
     document.body.style.overflow = "";
   }
@@ -2549,7 +2599,8 @@ function closeBrainModal() {
   if ((!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
     && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
-    && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))) {
+    && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))
+    && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))) {
     document.body.style.overflow = "";
   }
 }
@@ -2677,6 +2728,7 @@ function closeShortTermMemoryModal() {
     (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
     && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
     && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
+    && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
   ) {
     document.body.style.overflow = "";
@@ -2732,6 +2784,203 @@ async function loadShortTermMemory(renderModal = false) {
       shortTermMemoryRefreshButton.disabled = false;
     }
   }
+}
+
+function buildTokenUsageSeries() {
+  const usageMap = new Map();
+  state.dailyTokenUsage.forEach((entry) => {
+    const dateKey = typeof entry?.date === "string" ? entry.date.trim() : "";
+    const tokens = Math.max(0, Number(entry?.tokens || 0));
+    if (!dateKey) {
+      return;
+    }
+    usageMap.set(dateKey, Math.floor(tokens));
+  });
+
+  const mode = String(state.tokenUsageRangeMode || "7");
+  const includeZeroDays = Boolean(state.tokenUsageIncludeZeroDays);
+  let points = [];
+  if (mode === "custom") {
+    const from = String(state.tokenUsageCustomFrom || "").trim();
+    const to = String(state.tokenUsageCustomTo || "").trim();
+    if (from && to && from <= to) {
+      let current = from;
+      let guard = 0;
+      while (current && current <= to && guard < 370) {
+        points.push({ date: current, tokens: usageMap.get(current) || 0 });
+        current = addDaysToDateKey(current, 1);
+        guard += 1;
+      }
+    }
+  } else {
+    const days = Math.max(1, Math.min(365, Number.parseInt(mode, 10) || 7));
+    const today = getTodayDateKey();
+    for (let index = days - 1; index >= 0; index -= 1) {
+      const dateKey = addDaysToDateKey(today, -index);
+      points.push({ date: dateKey, tokens: usageMap.get(dateKey) || 0 });
+    }
+  }
+
+  if (!includeZeroDays) {
+    points = points.filter((entry) => Number(entry.tokens) > 0);
+  }
+
+  return points;
+}
+
+function renderTokenUsageModal() {
+  if (!(tokenUsageChartNode instanceof HTMLElement)) {
+    return;
+  }
+  const points = buildTokenUsageSeries();
+  tokenUsageChartNode.innerHTML = "";
+
+  if (tokenUsageRangeSelect instanceof HTMLSelectElement) {
+    tokenUsageRangeSelect.value = state.tokenUsageRangeMode;
+  }
+  const customMode = state.tokenUsageRangeMode === "custom";
+  if (tokenUsageFromInput instanceof HTMLInputElement) {
+    tokenUsageFromInput.value = state.tokenUsageCustomFrom;
+    tokenUsageFromInput.disabled = !customMode;
+  }
+  if (tokenUsageToInput instanceof HTMLInputElement) {
+    tokenUsageToInput.value = state.tokenUsageCustomTo;
+    tokenUsageToInput.disabled = !customMode;
+  }
+  if (tokenUsageIncludeZeroInput instanceof HTMLInputElement) {
+    tokenUsageIncludeZeroInput.checked = state.tokenUsageIncludeZeroDays;
+  }
+
+  if (points.length === 0) {
+    const emptyNode = document.createElement("p");
+    emptyNode.className = "memory-empty";
+    emptyNode.textContent = "No token usage data for the selected filter.";
+    tokenUsageChartNode.appendChild(emptyNode);
+    if (tokenUsageTotalNode instanceof HTMLElement) {
+      tokenUsageTotalNode.textContent = "Total: 0";
+    }
+    if (tokenUsageAverageNode instanceof HTMLElement) {
+      tokenUsageAverageNode.textContent = "Avg/day: 0";
+    }
+    if (tokenUsagePeakNode instanceof HTMLElement) {
+      tokenUsagePeakNode.textContent = "Peak: -";
+    }
+    if (tokenUsageMetaNode instanceof HTMLElement) {
+      tokenUsageMetaNode.textContent = "No points to display.";
+    }
+    return;
+  }
+
+  const totalTokens = points.reduce((sum, entry) => sum + Number(entry.tokens || 0), 0);
+  const averageTokens = totalTokens / Math.max(1, points.length);
+  let peakEntry = points[0];
+  points.forEach((entry) => {
+    if (Number(entry.tokens) > Number(peakEntry.tokens)) {
+      peakEntry = entry;
+    }
+  });
+
+  const maxTokens = Math.max(1, ...points.map((entry) => Number(entry.tokens || 0)));
+  const barsWrap = document.createElement("div");
+  barsWrap.className = "token-usage-bars";
+
+  points.forEach((entry) => {
+    const barItem = document.createElement("div");
+    barItem.className = "token-usage-bar-item";
+    const ratio = Number(entry.tokens || 0) / maxTokens;
+    barItem.title = `${entry.date}: ${formatNumber(entry.tokens)} tokens`;
+
+    const barNode = document.createElement("div");
+    barNode.className = "token-usage-bar";
+    barNode.style.height = `${Math.max(2, Math.round(ratio * 100))}%`;
+
+    const valueNode = document.createElement("span");
+    valueNode.className = "token-usage-bar-value";
+    valueNode.textContent = formatNumber(entry.tokens);
+
+    const labelNode = document.createElement("span");
+    labelNode.className = "token-usage-bar-label";
+    labelNode.textContent = formatDateShort(entry.date);
+
+    barItem.appendChild(barNode);
+    barItem.appendChild(valueNode);
+    barItem.appendChild(labelNode);
+    barsWrap.appendChild(barItem);
+  });
+
+  tokenUsageChartNode.appendChild(barsWrap);
+  if (tokenUsageTotalNode instanceof HTMLElement) {
+    tokenUsageTotalNode.textContent = `Total: ${formatNumber(totalTokens)}`;
+  }
+  if (tokenUsageAverageNode instanceof HTMLElement) {
+    tokenUsageAverageNode.textContent = `Avg/day: ${formatNumber(Math.round(averageTokens))}`;
+  }
+  if (tokenUsagePeakNode instanceof HTMLElement) {
+    tokenUsagePeakNode.textContent = `Peak: ${formatDateShort(peakEntry.date)} (${formatNumber(peakEntry.tokens)})`;
+  }
+  if (tokenUsageMetaNode instanceof HTMLElement) {
+    tokenUsageMetaNode.textContent = `${points.length} day(s) shown.`;
+  }
+}
+
+function openTokenUsageModal() {
+  if (!(tokenUsageModal instanceof HTMLElement)) {
+    return;
+  }
+  if (!state.tokenUsageRangeMode) {
+    state.tokenUsageRangeMode = "7";
+  }
+  state.tokenUsageIncludeZeroDays = true;
+  renderTokenUsageModal();
+  tokenUsageModal.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function closeTokenUsageModal() {
+  if (!(tokenUsageModal instanceof HTMLElement)) {
+    return;
+  }
+  tokenUsageModal.classList.add("hidden");
+  if (
+    (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
+    && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
+    && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
+    && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))
+    && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
+  ) {
+    document.body.style.overflow = "";
+  }
+}
+
+function applyTokenUsageFilters() {
+  if (tokenUsageRangeSelect instanceof HTMLSelectElement) {
+    state.tokenUsageRangeMode = tokenUsageRangeSelect.value || "7";
+  }
+  if (tokenUsageFromInput instanceof HTMLInputElement) {
+    state.tokenUsageCustomFrom = tokenUsageFromInput.value;
+  }
+  if (tokenUsageToInput instanceof HTMLInputElement) {
+    state.tokenUsageCustomTo = tokenUsageToInput.value;
+  }
+  if (tokenUsageIncludeZeroInput instanceof HTMLInputElement) {
+    state.tokenUsageIncludeZeroDays = tokenUsageIncludeZeroInput.checked;
+  }
+  if (state.tokenUsageRangeMode === "custom") {
+    const fallbackTo = getTodayDateKey();
+    const fallbackFrom = addDaysToDateKey(fallbackTo, -6);
+    if (!state.tokenUsageCustomFrom) {
+      state.tokenUsageCustomFrom = fallbackFrom;
+    }
+    if (!state.tokenUsageCustomTo) {
+      state.tokenUsageCustomTo = fallbackTo;
+    }
+    if (state.tokenUsageCustomFrom > state.tokenUsageCustomTo) {
+      const swapFrom = state.tokenUsageCustomTo;
+      state.tokenUsageCustomTo = state.tokenUsageCustomFrom;
+      state.tokenUsageCustomFrom = swapFrom;
+    }
+  }
+  renderTokenUsageModal();
 }
 
 async function handleShortTermAction(action, suggestionId) {
@@ -3178,6 +3427,7 @@ function closeTimedJobsModal() {
     (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
     && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
     && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))
+    && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
   ) {
     document.body.style.overflow = "";
@@ -5595,6 +5845,13 @@ if (timedJobsButton instanceof HTMLButtonElement) {
   });
 }
 
+if (tokenUsageButton instanceof HTMLButtonElement) {
+  tokenUsageButton.addEventListener("click", () => {
+    toggleMenu(false);
+    openTokenUsageModal();
+  });
+}
+
 if (brainViewButton instanceof HTMLButtonElement) {
   brainViewButton.addEventListener("click", () => {
     toggleMenu(false);
@@ -5632,6 +5889,42 @@ if (timedJobsCloseButton instanceof HTMLButtonElement) {
 
 if (timedJobsBackdrop instanceof HTMLElement) {
   timedJobsBackdrop.addEventListener("click", closeTimedJobsModal);
+}
+
+if (tokenUsageCloseButton instanceof HTMLButtonElement) {
+  tokenUsageCloseButton.addEventListener("click", closeTokenUsageModal);
+}
+
+if (tokenUsageBackdrop instanceof HTMLElement) {
+  tokenUsageBackdrop.addEventListener("click", closeTokenUsageModal);
+}
+
+if (tokenUsageRangeSelect instanceof HTMLSelectElement) {
+  tokenUsageRangeSelect.addEventListener("change", () => {
+    applyTokenUsageFilters();
+  });
+}
+
+if (tokenUsageIncludeZeroInput instanceof HTMLInputElement) {
+  tokenUsageIncludeZeroInput.addEventListener("change", () => {
+    applyTokenUsageFilters();
+  });
+}
+
+if (tokenUsageFromInput instanceof HTMLInputElement) {
+  tokenUsageFromInput.addEventListener("change", () => {
+    if (state.tokenUsageRangeMode === "custom") {
+      applyTokenUsageFilters();
+    }
+  });
+}
+
+if (tokenUsageToInput instanceof HTMLInputElement) {
+  tokenUsageToInput.addEventListener("change", () => {
+    if (state.tokenUsageRangeMode === "custom") {
+      applyTokenUsageFilters();
+    }
+  });
 }
 
 if (timedJobSaveButton instanceof HTMLButtonElement) {
@@ -5906,6 +6199,14 @@ if (mobileTimedJobsButton instanceof HTMLButtonElement) {
   });
 }
 
+if (mobileTokenUsageButton instanceof HTMLButtonElement) {
+  mobileTokenUsageButton.addEventListener("click", () => {
+    toggleMobileSettingsMenu(false);
+    closeMobileDrawers();
+    openTokenUsageModal();
+  });
+}
+
 if (mobileBrainViewButton instanceof HTMLButtonElement) {
   mobileBrainViewButton.addEventListener("click", () => {
     toggleMobileSettingsMenu(false);
@@ -5981,6 +6282,11 @@ document.addEventListener("keydown", (event) => {
 
   if (shortTermMemoryModal instanceof HTMLElement && !shortTermMemoryModal.classList.contains("hidden")) {
     closeShortTermMemoryModal();
+    return;
+  }
+
+  if (tokenUsageModal instanceof HTMLElement && !tokenUsageModal.classList.contains("hidden")) {
+    closeTokenUsageModal();
     return;
   }
 

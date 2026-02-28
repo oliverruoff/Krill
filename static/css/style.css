@@ -1132,6 +1132,108 @@ button:disabled {
   margin: 0;
 }
 
+.token-usage-modal-card {
+  width: min(1160px, 96vw);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.token-usage-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.token-usage-field {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: #5e6f86;
+}
+
+.token-usage-field input,
+.token-usage-field select {
+  margin: 0;
+}
+
+.token-usage-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: #45586f;
+  min-height: 2.3rem;
+}
+
+.token-usage-check input {
+  width: auto;
+  margin: 0;
+}
+
+.token-usage-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.token-usage-stat {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #50627a;
+}
+
+.token-usage-chart {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fcfdff;
+  padding: 0.65rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.token-usage-bars {
+  min-height: 260px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(40px, 1fr);
+  align-items: end;
+  gap: 0.45rem;
+}
+
+.token-usage-bar-item {
+  min-width: 40px;
+  display: grid;
+  grid-template-rows: minmax(120px, 1fr) auto auto;
+  gap: 0.2rem;
+  align-items: end;
+}
+
+.token-usage-bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 8px 8px 2px 2px;
+  background: linear-gradient(180deg, #5e8dff 0%, #366ddf 100%);
+}
+
+.token-usage-bar-value,
+.token-usage-bar-label {
+  display: block;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.token-usage-bar-value {
+  font-size: 0.73rem;
+  color: #4f6078;
+}
+
+.token-usage-bar-label {
+  font-size: 0.7rem;
+  color: #72839a;
+}
+
 .timed-job-trigger-link {
   margin: 0;
   padding: 0;
@@ -2696,6 +2798,20 @@ button:disabled {
   .timed-jobs-modal-card {
     overflow-y: auto;
     max-height: 94vh;
+  }
+
+  .token-usage-modal-card {
+    width: 100%;
+    max-height: 94vh;
+    overflow-y: auto;
+  }
+
+  .token-usage-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .token-usage-bars {
+    min-height: 220px;
   }
 
   .timed-jobs-editor,

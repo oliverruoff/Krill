@@ -44,6 +44,7 @@
             <button type="button" id="memory-management-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◌</span>Memory Management</button>
             <button type="button" id="short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
             <button type="button" id="timed-jobs-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◷</span>Timed Jobs</button>
+            <button type="button" id="token-usage-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▇</span>Token Usage</button>
             <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
             <button type="button" id="brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
             <a href="/setup" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>
@@ -123,6 +124,7 @@
               <button type="button" id="mobile-memory-management-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◌</span>Memory Management</button>
               <button type="button" id="mobile-short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
               <button type="button" id="mobile-timed-jobs-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◷</span>Timed Jobs</button>
+              <button type="button" id="mobile-token-usage-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▇</span>Token Usage</button>
               <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
               <button type="button" id="mobile-brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
               <a href="/setup" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>
@@ -302,6 +304,49 @@
             <div id="timed-jobs-list" class="brain-table-view"></div>
           </section>
         </div>
+      </section>
+    </div>
+
+    <div id="token-usage-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="token-usage-title">
+      <div id="token-usage-backdrop" class="brain-modal-backdrop"></div>
+      <section class="brain-modal-card token-usage-modal-card">
+        <header class="brain-modal-header">
+          <div>
+            <h2 id="token-usage-title">Token Usage</h2>
+            <p id="token-usage-meta" class="brain-modal-meta">Daily token usage graph.</p>
+          </div>
+          <button type="button" id="token-usage-close" class="brain-modal-close" aria-label="Close token usage">&times;</button>
+        </header>
+        <div class="token-usage-toolbar">
+          <label class="token-usage-field" for="token-usage-range">
+            <span>Range</span>
+            <select id="token-usage-range">
+              <option value="7">Last 7 days</option>
+              <option value="14">Last 14 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label class="token-usage-field" for="token-usage-from">
+            <span>From</span>
+            <input id="token-usage-from" type="date" />
+          </label>
+          <label class="token-usage-field" for="token-usage-to">
+            <span>To</span>
+            <input id="token-usage-to" type="date" />
+          </label>
+          <label class="token-usage-check" for="token-usage-include-zero">
+            <input id="token-usage-include-zero" type="checkbox" checked />
+            <span>Include zero days</span>
+          </label>
+        </div>
+        <div class="token-usage-summary">
+          <p id="token-usage-total" class="token-usage-stat">Total: 0</p>
+          <p id="token-usage-average" class="token-usage-stat">Avg/day: 0</p>
+          <p id="token-usage-peak" class="token-usage-stat">Peak: -</p>
+        </div>
+        <div id="token-usage-chart" class="token-usage-chart" aria-live="polite"></div>
       </section>
     </div>
 
