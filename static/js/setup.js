@@ -71,6 +71,8 @@ const state = {
   brainLoading: false,
 };
 
+const MEMORY_MAX_LENGTH = 200000;
+
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.className = isError ? "error" : "ok";
@@ -308,7 +310,7 @@ function normalizeMemories(memories) {
   return memories
     .filter((memory) => memory && typeof memory === "object")
     .map((memory) => {
-      const content = typeof memory.content === "string" ? memory.content.trim().slice(0, 200) : "";
+      const content = typeof memory.content === "string" ? memory.content.trim().slice(0, MEMORY_MAX_LENGTH) : "";
       const createdAt = typeof memory.created_at === "string" ? memory.created_at.trim() : "";
       return { content, created_at: createdAt };
     })
@@ -364,8 +366,8 @@ function addCoreMemory() {
     return;
   }
 
-  if (value.length > 200) {
-    setStatus("Core memory must be at most 200 characters.", true);
+  if (value.length > MEMORY_MAX_LENGTH) {
+    setStatus(`Core memory must be at most ${MEMORY_MAX_LENGTH} characters.`, true);
     return;
   }
 
