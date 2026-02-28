@@ -27,6 +27,7 @@ class WhatsAppBridgeWorker:
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._seen_event_ids: set[str] = set()
+        self._last_runtime_error: str = ""
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -47,13 +48,21 @@ class WhatsAppBridgeWorker:
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
+            sleep_seconds = 2.0
             try:
                 await self._poll_once()
+                self._last_runtime_error = ""
             except asyncio.CancelledError:
                 raise
+            except RuntimeError as exc:
+                detail = str(exc).strip() or "WhatsApp runtime unavailable."
+                if detail != self._last_runtime_error:
+                    LOGGER.warning("WhatsApp worker poll skipped: %s", detail)
+                    self._last_runtime_error = detail
+                sleep_seconds = 10.0
             except Exception:
                 LOGGER.exception("WhatsApp worker poll failed")
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(sleep_seconds)
 
     async def _poll_once(self) -> None:
         settings = await load_settings()

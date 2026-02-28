@@ -682,9 +682,49 @@ async function loadAppVersion() {
 }
 
 function openFilePicker() {
-  if (!fields.braindumpFileInput.disabled) {
-    fields.braindumpFileInput.click();
+  openBraindumpPicker(fields.braindumpFileInput);
+}
+
+function openBraindumpPicker(input) {
+  if (!(input instanceof HTMLInputElement) || input.disabled) {
+    return;
   }
+
+  input.value = "";
+
+  if (typeof input.showPicker === "function") {
+    try {
+      input.showPicker();
+      return;
+    } catch {
+      // Fall through to click fallback.
+    }
+  }
+
+  try {
+    input.click();
+    return;
+  } catch {
+    // Fall through to detached-input fallback.
+  }
+
+  const fallbackInput = document.createElement("input");
+  fallbackInput.type = "file";
+  fallbackInput.accept = ".db";
+  fallbackInput.style.position = "fixed";
+  fallbackInput.style.left = "-9999px";
+  fallbackInput.style.top = "0";
+
+  fallbackInput.addEventListener("change", () => {
+    const file = fallbackInput.files?.[0];
+    fallbackInput.remove();
+    if (file) {
+      importBraindumpFile(file);
+    }
+  });
+
+  document.body.appendChild(fallbackInput);
+  fallbackInput.click();
 }
 
 async function importBraindumpFile(file) {
@@ -745,9 +785,7 @@ async function importBraindumpFile(file) {
 }
 
 function openSetupImportPicker() {
-  if (fields.setupBraindumpFileInput instanceof HTMLInputElement && !fields.setupBraindumpFileInput.disabled) {
-    fields.setupBraindumpFileInput.click();
-  }
+  openBraindumpPicker(fields.setupBraindumpFileInput);
 }
 
 function renderBrainTableList() {

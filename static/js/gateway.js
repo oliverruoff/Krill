@@ -11,6 +11,7 @@ const RUNTIME_CONTEXT_SYSTEM_TYPE = "runtime_context_seed";
 const MEMORY_MAX_LENGTH = 1000000;
 const CHAT_HISTORY_PAGE_SIZE = 15;
 const CHAT_HISTORY_SCROLL_LOAD_THRESHOLD_PX = 120;
+const WHATSAPP_CONTACTS_CACHE_PARAM = "contacts_cache_json";
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -183,6 +184,7 @@ const state = {
   telegramOwnerChatId: "",
   googleOauthStatus: null,
   whatsappContacts: [],
+  whatsappAllowlistOnlySelected: false,
   mcpAutosaveTimerId: null,
   mcpAutosavePendingId: "",
   mcpAutosaveQueuedId: "",
@@ -3835,28 +3837,99 @@ async function fetchGoogleOauthStatus() {
   return state.googleOauthStatus;
 }
 
-async function fetchWhatsappContacts() {
+function normalizeWhatsappContacts(rawContacts) {
+  if (!Array.isArray(rawContacts)) {
+    return [];
+  }
+  const normalized = [];
+  const seen = new Set();
+  rawContacts.forEach((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const number = String(entry.number || "").trim();
+    if (!number || seen.has(number)) {
+      return;
+    }
+    seen.add(number);
+    const name = String(entry.name || number).trim() || number;
+    normalized.push({ number, name });
+  });
+  return normalized;
+}
+
+function getWhatsappContactsCacheFromConfig() {
+  const config = state.mcpConfigs?.whatsapp;
+  const params = config && typeof config === "object" && config.params && typeof config.params === "object"
+    ? config.params
+    : null;
+  const raw = params ? String(params[WHATSAPP_CONTACTS_CACHE_PARAM] || "").trim() : "";
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return normalizeWhatsappContacts(parsed);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistWhatsappContactsCacheInConfig(contacts) {
+  const normalized = normalizeWhatsappContacts(contacts);
+  const config = ensureMcpConfig("whatsapp");
+  const previousRaw = typeof config.params?.[WHATSAPP_CONTACTS_CACHE_PARAM] === "string"
+    ? config.params[WHATSAPP_CONTACTS_CACHE_PARAM]
+    : "";
+  const nextRaw = JSON.stringify(normalized);
+  if (previousRaw === nextRaw) {
+    return false;
+  }
+  config.params[WHATSAPP_CONTACTS_CACHE_PARAM] = nextRaw;
+  return true;
+}
+
+function hydrateWhatsappContactsFromCache() {
+  const cached = getWhatsappContactsCacheFromConfig();
+  state.whatsappContacts = cached;
+  return cached;
+}
+
+async function fetchWhatsappContactsLive(options = {}) {
+  const persistEmpty = options && Object.prototype.hasOwnProperty.call(options, "persistEmpty")
+    ? Boolean(options.persistEmpty)
+    : true;
   try {
     const response = await fetch("/api/mcps/whatsapp/contacts", { cache: "no-store" });
     if (!response.ok) {
-      state.whatsappContacts = [];
-      return [];
+      return { ok: false, contacts: [] };
     }
     const payload = await response.json();
-    const contacts = Array.isArray(payload?.contacts) ? payload.contacts : [];
-    state.whatsappContacts = contacts
-      .filter((entry) => entry && typeof entry === "object")
-      .map((entry) => {
-        const number = String(entry.number || "").trim();
-        const name = String(entry.name || number).trim() || number;
-        return { number, name };
-      })
-      .filter((entry) => entry.number);
-    return state.whatsappContacts;
+    const contacts = normalizeWhatsappContacts(payload?.contacts);
+    state.whatsappContacts = contacts;
+    if (contacts.length > 0 || persistEmpty) {
+      const cacheChanged = persistWhatsappContactsCacheInConfig(contacts);
+      if (cacheChanged) {
+        scheduleMcpAutosave("whatsapp");
+      }
+    }
+    return { ok: true, contacts };
   } catch (_error) {
-    state.whatsappContacts = [];
-    return [];
+    return { ok: false, contacts: [] };
   }
+}
+
+async function fetchWhatsappContacts() {
+  const cachedBeforeFetch = Array.isArray(state.whatsappContacts) ? [...state.whatsappContacts] : [];
+  const result = await fetchWhatsappContactsLive({ persistEmpty: false });
+  if (result.ok) {
+    if (result.contacts.length === 0 && cachedBeforeFetch.length > 0) {
+      state.whatsappContacts = cachedBeforeFetch;
+      return cachedBeforeFetch;
+    }
+    return result.contacts;
+  }
+  return state.whatsappContacts;
 }
 
 async function fetchWhatsappRuntimeState() {
@@ -3874,18 +3947,63 @@ async function fetchWhatsappRuntimeState() {
 
 async function syncWhatsappContactsWithRetry(maxAttempts = 8) {
   const attempts = Number.isFinite(maxAttempts) ? Math.max(1, Math.floor(maxAttempts)) : 8;
+  const cachedBeforeSync = Array.isArray(state.whatsappContacts)
+    ? [...state.whatsappContacts]
+    : [];
+
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const contacts = await fetchWhatsappContacts();
-    if (contacts.length > 0) {
-      return contacts;
+    const liveResult = await fetchWhatsappContactsLive({ persistEmpty: false });
+    if (liveResult.ok && liveResult.contacts.length > 0) {
+      return { contacts: liveResult.contacts, cacheRetained: false, warning: "" };
     }
+    if (liveResult.ok && liveResult.contacts.length === 0) {
+      if (cachedBeforeSync.length > 0) {
+        state.whatsappContacts = cachedBeforeSync;
+        return {
+          contacts: state.whatsappContacts,
+          cacheRetained: true,
+          warning: "Resync returned no contacts. Kept previously cached contacts.",
+        };
+      }
+      return {
+        contacts: [],
+        cacheRetained: false,
+        warning: "No WhatsApp contacts synced yet. Verify WhatsApp is ready, then retry.",
+      };
+    }
+
     const runtimeState = await fetchWhatsappRuntimeState();
     if (runtimeState !== "authenticated" && runtimeState !== "initializing") {
-      return contacts;
+      if (cachedBeforeSync.length > 0) {
+        state.whatsappContacts = cachedBeforeSync;
+        return {
+          contacts: state.whatsappContacts,
+          cacheRetained: true,
+          warning: "WhatsApp is not ready. Kept previously cached contacts.",
+        };
+      }
+      return {
+        contacts: state.whatsappContacts,
+        cacheRetained: false,
+        warning: "No WhatsApp contacts synced yet. Verify WhatsApp is ready, then retry.",
+      };
     }
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
   }
-  return state.whatsappContacts;
+
+  if (cachedBeforeSync.length > 0) {
+    state.whatsappContacts = cachedBeforeSync;
+    return {
+      contacts: state.whatsappContacts,
+      cacheRetained: true,
+      warning: "Resync timed out before contacts were returned. Kept previously cached contacts.",
+    };
+  }
+  return {
+    contacts: state.whatsappContacts,
+    cacheRetained: false,
+    warning: "No WhatsApp contacts synced yet. Verify WhatsApp is ready, then retry.",
+  };
 }
 
 async function startGoogleOauthLogin() {
@@ -4225,6 +4343,21 @@ function renderConfigPanel(container, items, getConfig, options) {
         const selectedSet = new Set(storedValues);
         const isWhatsappAllowedNumbers = options.kind === "mcp" && item.id === "whatsapp" && fieldId === "allowed_numbers";
         let contactListNode = fieldsetNode;
+        const existingOptionValues = new Set(
+          optionsList
+            .map((optionItem) => (typeof optionItem?.value === "string" ? optionItem.value : ""))
+            .filter((value) => value),
+        );
+        const renderOptions = [...optionsList];
+        if (isWhatsappAllowedNumbers) {
+          storedValues.forEach((value) => {
+            if (!value || existingOptionValues.has(value)) {
+              return;
+            }
+            existingOptionValues.add(value);
+            renderOptions.push({ value, label: `${value} (saved)` });
+          });
+        }
 
         if (isWhatsappAllowedNumbers) {
           const filterInput = document.createElement("input");
@@ -4234,31 +4367,73 @@ function renderConfigPanel(container, items, getConfig, options) {
           filterInput.autocomplete = "off";
           filterInput.spellcheck = false;
 
+          const selectedOnlyToggleLabel = document.createElement("label");
+          selectedOnlyToggleLabel.className = "mcp-toggle";
+
+          const selectedOnlyToggleInput = document.createElement("input");
+          selectedOnlyToggleInput.type = "checkbox";
+          selectedOnlyToggleInput.checked = Boolean(state.whatsappAllowlistOnlySelected);
+
+          const selectedOnlyToggleText = document.createElement("span");
+          selectedOnlyToggleText.textContent = "Only show allow list contacts";
+
+          const selectedOnlyCount = document.createElement("span");
+          selectedOnlyCount.textContent = "(0)";
+
           contactListNode = document.createElement("div");
           contactListNode.className = "mcp-multiselect-list";
 
+          const updateSelectedOnlyCount = () => {
+            const selectedCount = contactListNode.querySelectorAll("input[type='checkbox'][data-multiselect-value]:checked").length;
+            selectedOnlyCount.textContent = `(${selectedCount})`;
+          };
+
           const applyContactFilter = () => {
             const query = filterInput.value.trim().toLowerCase();
+            const onlySelected = selectedOnlyToggleInput.checked;
             const rows = contactListNode.querySelectorAll(".mcp-multiselect-option");
             rows.forEach((rowNode) => {
               if (!(rowNode instanceof HTMLElement)) {
                 return;
               }
-              if (!query) {
-                rowNode.classList.remove("hidden");
+              const haystack = String(rowNode.dataset.searchText || "").toLowerCase();
+              const matchesQuery = !query || haystack.includes(query);
+              if (!matchesQuery) {
+                rowNode.classList.add("hidden");
                 return;
               }
-              const haystack = String(rowNode.dataset.searchText || "").toLowerCase();
-              rowNode.classList.toggle("hidden", !haystack.includes(query));
+
+              if (onlySelected) {
+                const rowInput = rowNode.querySelector("input[type='checkbox'][data-multiselect-value]");
+                const isSelected = rowInput instanceof HTMLInputElement && rowInput.checked;
+                rowNode.classList.toggle("hidden", !isSelected);
+                return;
+              }
+
+              rowNode.classList.remove("hidden");
             });
+            updateSelectedOnlyCount();
           };
 
           filterInput.addEventListener("input", applyContactFilter);
+          selectedOnlyToggleInput.addEventListener("change", () => {
+            state.whatsappAllowlistOnlySelected = selectedOnlyToggleInput.checked;
+            applyContactFilter();
+          });
+
+          selectedOnlyToggleLabel.appendChild(selectedOnlyToggleInput);
+          selectedOnlyToggleLabel.appendChild(selectedOnlyToggleText);
+          selectedOnlyToggleLabel.appendChild(selectedOnlyCount);
+
           fieldsetNode.appendChild(filterInput);
+          fieldsetNode.appendChild(selectedOnlyToggleLabel);
           fieldsetNode.appendChild(contactListNode);
+
+          fieldsetNode.dataset.whatsappFilterHooked = "true";
+          fieldsetNode._applyContactFilter = applyContactFilter;
         }
 
-        optionsList.forEach((optionItem) => {
+        renderOptions.forEach((optionItem) => {
           const optionValue = typeof optionItem?.value === "string" ? optionItem.value : "";
           if (!optionValue) {
             return;
@@ -4286,6 +4461,12 @@ function renderConfigPanel(container, items, getConfig, options) {
           optionInput.dataset.fieldId = fieldId;
           optionInput.dataset.multiselectValue = optionValue;
 
+          if (isWhatsappAllowedNumbers && typeof fieldsetNode._applyContactFilter === "function") {
+            optionInput.addEventListener("change", () => {
+              fieldsetNode._applyContactFilter();
+            });
+          }
+
           const optionText = document.createElement("span");
           optionText.textContent = optionLabel;
 
@@ -4294,7 +4475,10 @@ function renderConfigPanel(container, items, getConfig, options) {
           contactListNode.appendChild(optionRow);
         });
 
-        config.params[fieldId] = encodeMultiselectParam(readMultiselectSelection(fieldsetNode));
+        if (isWhatsappAllowedNumbers && typeof fieldsetNode._applyContactFilter === "function") {
+          fieldsetNode._applyContactFilter();
+        }
+
         fieldInput = fieldsetNode;
       } else if (activeField.type === "checkbox") {
         const checkboxNode = document.createElement("input");
@@ -4823,6 +5007,7 @@ async function loadGatewayMeta() {
     state.integrations = Array.isArray(integrations) ? integrations : [];
     state.mcpConfigs = normalizeIncomingMcpConfigs(settings.mcp_configs);
     state.integrationConfigs = normalizeIncomingMcpConfigs(settings.integration_configs);
+    hydrateWhatsappContactsFromCache();
     try {
       await fetchGoogleOauthStatus();
     } catch (error) {
@@ -5781,14 +5966,26 @@ async function handleMcpActionClick(event) {
     }
 
     if (action === "whatsapp-resync" && configKind === "mcp" && configId === "whatsapp") {
-      const contacts = await syncWhatsappContactsWithRetry();
+      const syncResult = await syncWhatsappContactsWithRetry();
       renderMcpPanel();
-      const count = Array.isArray(contacts) ? contacts.length : 0;
+      const contacts = Array.isArray(syncResult?.contacts) ? syncResult.contacts : [];
+      const count = contacts.length;
       if (count > 0) {
-        setStatus(`WhatsApp contacts synced (${count}).`);
-        showToast(`WhatsApp contacts synced (${count}).`);
+        if (syncResult?.cacheRetained) {
+          const warning = typeof syncResult.warning === "string" && syncResult.warning.trim()
+            ? syncResult.warning.trim()
+            : "Resync returned no contacts. Kept previously cached contacts.";
+          setStatus(`${warning} Cached contacts: ${count}.`, true);
+          showToast(`Kept cached WhatsApp contacts (${count}).`);
+        } else {
+          setStatus(`WhatsApp contacts synced (${count}).`);
+          showToast(`WhatsApp contacts synced (${count}).`);
+        }
       } else {
-        setStatus("No WhatsApp contacts synced yet. Verify WhatsApp is ready, then retry.", true);
+        const warning = typeof syncResult?.warning === "string" && syncResult.warning.trim()
+          ? syncResult.warning.trim()
+          : "No WhatsApp contacts synced yet. Verify WhatsApp is ready, then retry.";
+        setStatus(warning, true);
       }
       return;
     }
@@ -6477,9 +6674,17 @@ window.addEventListener("message", (event) => {
   }
   const stateLabel = typeof payload.state === "string" ? payload.state : "ready";
   void (async () => {
-    await syncWhatsappContactsWithRetry();
+    const syncResult = await syncWhatsappContactsWithRetry();
     renderMcpPanel();
-    setStatus(`WhatsApp connected (${stateLabel}). Contacts synced.`);
+    const contactCount = Array.isArray(syncResult?.contacts) ? syncResult.contacts.length : 0;
+    if (syncResult?.cacheRetained) {
+      const warning = typeof syncResult.warning === "string" && syncResult.warning.trim()
+        ? syncResult.warning.trim()
+        : "Kept previously cached contacts.";
+      setStatus(`WhatsApp connected (${stateLabel}). ${warning} Cached contacts: ${contactCount}.`, true);
+    } else {
+      setStatus(`WhatsApp connected (${stateLabel}). Contacts synced (${contactCount}).`);
+    }
     showToast("WhatsApp connected.");
   })();
 });

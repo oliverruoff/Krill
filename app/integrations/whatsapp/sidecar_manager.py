@@ -245,15 +245,20 @@ def _ensure_sidecar_dependencies() -> str | None:
     package_json = _SIDECAR_DIR / "package.json"
     if not package_json.exists():
         raise RuntimeError("WhatsApp sidecar package.json is missing.")
+    if shutil.which("node") is None or shutil.which("npm") is None:
+        raise RuntimeError("Node.js and npm are required for WhatsApp sidecar but were not found on PATH.")
     dependency_marker = _SIDECAR_DIR / "node_modules" / "whatsapp-web.js"
     if not dependency_marker.exists():
-        result = subprocess.run(
-            ["npm", "install", "--omit=dev"],
-            cwd=str(_SIDECAR_DIR),
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
+        try:
+            result = subprocess.run(
+                ["npm", "install", "--omit=dev"],
+                cwd=str(_SIDECAR_DIR),
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("npm executable not found. Install Node.js and ensure npm is on PATH.") from exc
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "npm install failed").strip()
             raise RuntimeError(f"WhatsApp sidecar dependency install failed: {detail}")
