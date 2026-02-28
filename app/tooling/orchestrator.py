@@ -101,6 +101,7 @@ async def generate_with_tools(
         }
 
     interaction_log: list[dict[str, object]] = []
+    executed_tool_call_signatures: set[str] = set()
     normalized_recursion = max(1, min(20, int(max_tool_recursion)))
     timeout_seconds = max(5, min(300, int(tool_timeout_seconds)))
     current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
@@ -261,7 +262,6 @@ async def generate_with_tools(
             "tool_id": tool_id,
             "tool_label": str(tool_entry["tool_label"]),
         }
-        used_tools.append(tool_usage)
 
         tool_call_payload = {
             "mcp_id": mcp_id,
@@ -314,6 +314,32 @@ async def generate_with_tools(
                 }
             )
             continue
+
+        tool_call_signature = _build_tool_call_signature(mcp_id, tool_id, tool_arguments)
+        if tool_call_signature in executed_tool_call_signatures:
+            duplicate_payload = {
+                "mcp_id": mcp_id,
+                "tool_id": tool_id,
+                "arguments": tool_arguments,
+                "step": step_index,
+                "error": "duplicate_tool_call_blocked",
+                "detail": "Blocked duplicate MCP tool call with identical arguments in this orchestration run.",
+            }
+            await trace("tool_error", json.dumps(duplicate_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_call": tool_call_payload,
+                    "tool_error": {
+                        "type": "duplicate_tool_call_blocked",
+                        "message": "Duplicate MCP tool call with identical arguments was blocked in this run.",
+                    },
+                }
+            )
+            continue
+
+        executed_tool_call_signatures.add(tool_call_signature)
+        used_tools.append(tool_usage)
 
         await trace("tool_call", json.dumps(tool_call_payload, ensure_ascii=True))
 
@@ -461,6 +487,7 @@ def _build_recursive_planner_prompt(
         "Return JSON only.\n"
         "If you need another tool call, return: "
         '{"action":"call_tool","mcp_id":"...","tool_id":"...","arguments":{...}}\n'
+        "Do not repeat the same mcp_id + tool_id + identical arguments in this request.\n"
         "If you can answer now, return: "
         '{"action":"respond","final_answer":"..."}\n'
         f"Current datetime (server local): {current_local_time}\n"
@@ -596,3 +623,15 @@ def _missing_required_arguments(input_schema: dict[str, object], arguments: dict
             missing.append(item)
 
     return missing
+
+
+def _build_tool_call_signature(mcp_id: str, tool_id: str, arguments: dict[str, object]) -> str:
+    normalized_arguments = _normalize_tool_call_arguments(arguments)
+    return f"{mcp_id}::{tool_id}::{normalized_arguments}"
+
+
+def _normalize_tool_call_arguments(arguments: dict[str, object]) -> str:
+    try:
+        return json.dumps(arguments, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        return json.dumps(str(arguments), ensure_ascii=True)
