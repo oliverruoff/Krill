@@ -3844,7 +3844,7 @@ function renderConfigPanel(container, items, getConfig, options) {
           options: contactOptions,
           description: contactOptions.length > 0
             ? "Select allowlisted WhatsApp contacts."
-            : "No contacts loaded yet. Connect WhatsApp, then click Verify or reopen this card.",
+            : "No contacts loaded yet. Connect WhatsApp, then click Resync or Verify.",
         };
       }
 
@@ -3891,6 +3891,40 @@ function renderConfigPanel(container, items, getConfig, options) {
         const optionsList = Array.isArray(activeField.options) ? activeField.options : [];
         const storedValues = parseMultiselectParam(config.params?.[fieldId]);
         const selectedSet = new Set(storedValues);
+        const isWhatsappAllowedNumbers = options.kind === "mcp" && item.id === "whatsapp" && fieldId === "allowed_numbers";
+        let contactListNode = fieldsetNode;
+
+        if (isWhatsappAllowedNumbers) {
+          const filterInput = document.createElement("input");
+          filterInput.type = "search";
+          filterInput.className = "mcp-contact-filter";
+          filterInput.placeholder = "Filter contacts";
+          filterInput.autocomplete = "off";
+          filterInput.spellcheck = false;
+
+          contactListNode = document.createElement("div");
+          contactListNode.className = "mcp-multiselect-list";
+
+          const applyContactFilter = () => {
+            const query = filterInput.value.trim().toLowerCase();
+            const rows = contactListNode.querySelectorAll(".mcp-multiselect-option");
+            rows.forEach((rowNode) => {
+              if (!(rowNode instanceof HTMLElement)) {
+                return;
+              }
+              if (!query) {
+                rowNode.classList.remove("hidden");
+                return;
+              }
+              const haystack = String(rowNode.dataset.searchText || "").toLowerCase();
+              rowNode.classList.toggle("hidden", !haystack.includes(query));
+            });
+          };
+
+          filterInput.addEventListener("input", applyContactFilter);
+          fieldsetNode.appendChild(filterInput);
+          fieldsetNode.appendChild(contactListNode);
+        }
 
         optionsList.forEach((optionItem) => {
           const optionValue = typeof optionItem?.value === "string" ? optionItem.value : "";
@@ -3905,6 +3939,10 @@ function renderConfigPanel(container, items, getConfig, options) {
 
           const optionRow = document.createElement("label");
           optionRow.className = "mcp-toggle";
+          if (isWhatsappAllowedNumbers) {
+            optionRow.classList.add("mcp-multiselect-option");
+            optionRow.dataset.searchText = `${optionLabel} ${optionValue}`.trim();
+          }
 
           const optionInput = document.createElement("input");
           optionInput.type = "checkbox";
@@ -3921,7 +3959,7 @@ function renderConfigPanel(container, items, getConfig, options) {
 
           optionRow.appendChild(optionInput);
           optionRow.appendChild(optionText);
-          fieldsetNode.appendChild(optionRow);
+          contactListNode.appendChild(optionRow);
         });
 
         config.params[fieldId] = encodeMultiselectParam(readMultiselectSelection(fieldsetNode));
@@ -4117,7 +4155,16 @@ function renderConfigPanel(container, items, getConfig, options) {
         verifyButton.dataset.configKind = options.kind;
         verifyButton.dataset.configId = item.id;
 
+        const resyncButton = document.createElement("button");
+        resyncButton.type = "button";
+        resyncButton.className = "mcp-link-btn";
+        resyncButton.textContent = "Resync";
+        resyncButton.dataset.action = "whatsapp-resync";
+        resyncButton.dataset.configKind = options.kind;
+        resyncButton.dataset.configId = item.id;
+
         actions.appendChild(connectButton);
+        actions.appendChild(resyncButton);
         actions.appendChild(verifyButton);
         cardBody.appendChild(actions);
         card.appendChild(cardBody);
@@ -5332,6 +5379,19 @@ async function handleMcpActionClick(event) {
           renderMcpPanel();
         }
       }, 1200);
+      return;
+    }
+
+    if (action === "whatsapp-resync" && configKind === "mcp" && configId === "whatsapp") {
+      const contacts = await syncWhatsappContactsWithRetry();
+      renderMcpPanel();
+      const count = Array.isArray(contacts) ? contacts.length : 0;
+      if (count > 0) {
+        setStatus(`WhatsApp contacts synced (${count}).`);
+        showToast(`WhatsApp contacts synced (${count}).`);
+      } else {
+        setStatus("No WhatsApp contacts synced yet. Verify WhatsApp is ready, then retry.", true);
+      }
       return;
     }
 

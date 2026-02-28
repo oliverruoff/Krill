@@ -90,7 +90,6 @@ def _sidecar_is_healthy() -> bool:
 async def connect() -> dict[str, object]:
     await ensure_sidecar_running()
     payload = await asyncio.to_thread(_request_json, "POST", f"{_SIDECAR_BASE}/connect", {})
-    await _snapshot_session_to_db()
     return payload
 
 
@@ -356,14 +355,17 @@ async def _snapshot_session_to_db() -> None:
         return
     archive_path = _AUTH_RUNTIME_DIR / "session.zip"
     try:
+        file_candidates = [
+            file_path
+            for file_path in _AUTH_RUNTIME_DIR.rglob("*")
+            if file_path.is_file() and file_path.name != "session.zip"
+        ]
+        if not file_candidates:
+            return
         if archive_path.exists():
             archive_path.unlink(missing_ok=True)
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for file_path in _AUTH_RUNTIME_DIR.rglob("*"):
-                if not file_path.is_file():
-                    continue
-                if file_path.name == "session.zip":
-                    continue
+            for file_path in file_candidates:
                 relative = file_path.relative_to(_AUTH_RUNTIME_DIR)
                 zf.write(file_path, arcname=str(relative))
         encoded = base64.b64encode(archive_path.read_bytes()).decode("ascii")
