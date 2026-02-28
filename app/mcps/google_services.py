@@ -39,6 +39,8 @@ GOOGLE_GMAIL_BASE_URL = "https://gmail.googleapis.com/gmail/v1"
 GOOGLE_CALENDAR_BASE_URL = "https://www.googleapis.com/calendar/v3"
 GOOGLE_DRIVE_BASE_URL = "https://www.googleapis.com/drive/v3"
 GOOGLE_DRIVE_UPLOAD_BASE_URL = "https://www.googleapis.com/upload/drive/v3"
+DRIVE_UPLOAD_MAX_BYTES = 1_000_000_000
+DRIVE_UPLOAD_REQUEST_TIMEOUT_SECONDS = 900
 GMAIL_WRITE_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 CALENDAR_WRITE_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 CALENDAR_FULL_SCOPE = "https://www.googleapis.com/auth/calendar"
@@ -388,7 +390,7 @@ class GoogleServicesMCP(MCPPlugin):
                                 "file_name": {"type": "string"},
                                 "mime_type": {"type": "string"},
                                 "parent_folder_id": {"type": "string"},
-                                "max_bytes": {"type": "integer", "minimum": 1, "maximum": 50000000},
+                                "max_bytes": {"type": "integer", "minimum": 1, "maximum": DRIVE_UPLOAD_MAX_BYTES},
                             },
                             "required": ["path"],
                         },
@@ -1127,6 +1129,11 @@ def _drive_upload_file(arguments: dict[str, object], access_token: str) -> dict[
         file_bytes = base64.b64decode(content_base64, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise RuntimeError("Invalid base64 payload in 'content_base64'.") from exc
+    if len(file_bytes) > DRIVE_UPLOAD_MAX_BYTES:
+        raise RuntimeError(
+            f"File exceeds max upload size ({len(file_bytes)} > {DRIVE_UPLOAD_MAX_BYTES}). "
+            "Use a file up to 1GB."
+        )
 
     return _drive_upload_bytes(
         access_token=access_token,
@@ -1142,7 +1149,7 @@ def _drive_upload_local_file(arguments: dict[str, object], access_token: str) ->
     file_name = _optional_str(arguments, "file_name", "")
     mime_type = _optional_str(arguments, "mime_type", "")
     parent_folder_id = _optional_str(arguments, "parent_folder_id", "")
-    max_bytes = _optional_int(arguments, "max_bytes", 20_000_000, 1, 50_000_000)
+    max_bytes = _optional_int(arguments, "max_bytes", DRIVE_UPLOAD_MAX_BYTES, 1, DRIVE_UPLOAD_MAX_BYTES)
 
     file_path = Path(raw_path).expanduser().resolve()
     if not file_path.exists():
@@ -1215,7 +1222,7 @@ def _drive_upload_bytes(
         "Content-Type": f"multipart/related; boundary={boundary}",
     }
     req = request.Request(url=url, data=body, headers=headers, method="POST")
-    with request.urlopen(req, timeout=60) as response:
+    with request.urlopen(req, timeout=DRIVE_UPLOAD_REQUEST_TIMEOUT_SECONDS) as response:
         raw = response.read().decode("utf-8")
         payload = json.loads(raw) if raw.strip() else {}
     if not isinstance(payload, dict):
