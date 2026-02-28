@@ -9,6 +9,8 @@ const CHAT_SYNC_INTERVAL_MS = 5000;
 const INTEGRATION_STATUS_SYNC_INTERVAL_MS = 8000;
 const RUNTIME_CONTEXT_SYSTEM_TYPE = "runtime_context_seed";
 const MEMORY_MAX_LENGTH = 1000000;
+const CHAT_HISTORY_PAGE_SIZE = 15;
+const CHAT_HISTORY_SCROLL_LOAD_THRESHOLD_PX = 120;
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -195,6 +197,8 @@ const state = {
   speechFinalText: "",
   speechInterimText: "",
   pendingImageAttachment: null,
+  chatHistoryVisibleCount: CHAT_HISTORY_PAGE_SIZE,
+  chatHistorySignature: "",
 };
 
 function isMobileDrawerMode() {
@@ -1370,19 +1374,34 @@ function renderActiveChat() {
 
 }
 
-function renderChatHistory() {
+function renderChatHistory(options = {}) {
+  const preserveScroll = Boolean(options && options.preserveScroll);
+  const previousScrollTop = preserveScroll ? chatHistoryList.scrollTop : 0;
   chatHistoryList.innerHTML = "";
   const sortedChats = sortChatsByLatestMessage(state.chats);
+  const signature = sortedChats.map((chat) => String(chat?.id || "")).join("|");
+  if (!state.chatHistorySignature) {
+    state.chatHistoryVisibleCount = CHAT_HISTORY_PAGE_SIZE;
+  }
+  state.chatHistorySignature = signature;
 
   if (sortedChats.length === 0) {
+    state.chatHistoryVisibleCount = CHAT_HISTORY_PAGE_SIZE;
     const emptyNode = document.createElement("p");
     emptyNode.className = "chat-history-empty";
     emptyNode.textContent = "No chats yet.";
     chatHistoryList.appendChild(emptyNode);
+    if (preserveScroll) {
+      chatHistoryList.scrollTop = previousScrollTop;
+    }
     return;
   }
 
-  sortedChats.forEach((chat) => {
+  let visibleCount = Math.max(CHAT_HISTORY_PAGE_SIZE, Math.floor(Number(state.chatHistoryVisibleCount) || CHAT_HISTORY_PAGE_SIZE));
+  visibleCount = Math.min(visibleCount, sortedChats.length);
+  state.chatHistoryVisibleCount = visibleCount;
+
+  sortedChats.slice(0, visibleCount).forEach((chat) => {
     const item = document.createElement("div");
     item.className = "chat-history-item";
     if (chat.id === state.activeChatId) {
@@ -1457,6 +1476,39 @@ function renderChatHistory() {
     item.appendChild(actionsNode);
     chatHistoryList.appendChild(item);
   });
+
+  if (visibleCount < sortedChats.length) {
+    const moreNode = document.createElement("p");
+    moreNode.className = "chat-history-more";
+    moreNode.textContent = `Showing ${visibleCount} of ${sortedChats.length}. Scroll for more...`;
+    chatHistoryList.appendChild(moreNode);
+  }
+
+  if (preserveScroll) {
+    chatHistoryList.scrollTop = previousScrollTop;
+  }
+}
+
+function maybeLoadMoreChatHistory() {
+  if (!(chatHistoryList instanceof HTMLElement)) {
+    return;
+  }
+  const sortedChats = sortChatsByLatestMessage(state.chats);
+  if (sortedChats.length <= state.chatHistoryVisibleCount) {
+    return;
+  }
+  if (chatHistoryList.scrollHeight <= chatHistoryList.clientHeight) {
+    return;
+  }
+  const distanceFromBottom = chatHistoryList.scrollHeight - chatHistoryList.clientHeight - chatHistoryList.scrollTop;
+  if (distanceFromBottom > CHAT_HISTORY_SCROLL_LOAD_THRESHOLD_PX) {
+    return;
+  }
+  state.chatHistoryVisibleCount = Math.min(
+    sortedChats.length,
+    state.chatHistoryVisibleCount + CHAT_HISTORY_PAGE_SIZE,
+  );
+  renderChatHistory({ preserveScroll: true });
 }
 
 async function deleteChat(chatId) {
@@ -6017,6 +6069,10 @@ chatHistoryList.addEventListener("click", (event) => {
   }
 
   activateChat(chatId);
+});
+
+chatHistoryList.addEventListener("scroll", () => {
+  maybeLoadMoreChatHistory();
 });
 
 chatForm.addEventListener("submit", sendMessage);

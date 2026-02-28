@@ -1561,6 +1561,13 @@ button:disabled {
   gap: 0.45rem;
 }
 
+.chat-history-more {
+  margin: 0;
+  padding: 0.25rem 0.35rem 0.15rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
 .mcp-header h2 {
   margin: 0;
   font-size: 0.95rem;
