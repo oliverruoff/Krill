@@ -1181,13 +1181,25 @@ function createChatEntry(firstMessage) {
 
 function buildRuntimeContextSeed() {
   const botName = typeof state.settings?.bot_name === "string" ? state.settings.bot_name.trim() : "Krill";
+  const userFullName = typeof state.settings?.user_full_name === "string"
+    ? state.settings.user_full_name.trim()
+    : "";
+  const userCallName = typeof state.settings?.user_call_name === "string"
+    ? state.settings.user_call_name.trim()
+    : "";
   const behavior = typeof state.settings?.system_prompt === "string" ? state.settings.system_prompt.trim() : "";
   const coreMemories = Array.isArray(state.coreMemories) ? state.coreMemories : [];
 
-  let seed = (
-    `You are Krill assistant named '${botName}'. `
-    + `This is the system prompt your user provided: ${behavior}`
-  );
+  let seed = `You are Krill assistant named '${botName}'. `;
+  seed += `You are the assistant of '${userFullName || "the user"}'. `;
+  seed += `Call your human user '${userCallName || "the user"}'.`;
+
+  if (behavior) {
+    seed += ` This is the system prompt your user provided: ${behavior}`;
+  }
+
+  seed += "\n\nIdentity reminder:\n";
+  seed += "- When memories mention this person, or mention 'the user', that always refers to your human user.";
 
   const memoryLines = coreMemories
     .map((memory) => (typeof memory?.content === "string" ? memory.content.trim() : ""))
@@ -1213,21 +1225,26 @@ function ensureRuntimeContextSeed(chat) {
     return;
   }
 
-  const hasSeed = chat.messages.some(
+  const seedContent = buildRuntimeContextSeed();
+  const existingSeed = chat.messages.find(
     (message) =>
       message
       && message.role === "system"
       && typeof message.system_type === "string"
       && message.system_type === RUNTIME_CONTEXT_SYSTEM_TYPE,
   );
-  if (hasSeed) {
+  if (existingSeed) {
+    if (existingSeed.content !== seedContent) {
+      existingSeed.content = seedContent;
+      chat.updated_at = createTimestamp();
+    }
     return;
   }
 
   const timestamp = createTimestamp();
   chat.messages.unshift({
     role: "system",
-    content: buildRuntimeContextSeed(),
+    content: seedContent,
     timestamp,
     system_type: RUNTIME_CONTEXT_SYSTEM_TYPE,
     tool_usage: [],

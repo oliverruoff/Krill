@@ -105,6 +105,8 @@ class TimedJob(BaseModel):
 class Settings(BaseModel):
     bot_name: str = Field(default="MyBot", max_length=15)
     system_prompt: str = Field(default="Talk english. Be playful, friendly and use emojis! :).", max_length=400)
+    user_full_name: str = Field(default="", max_length=120)
+    user_call_name: str = Field(default="", max_length=60)
     setup_completed: bool = False
     active_provider_id: str = ""
     active_model_id: str = ""
@@ -148,6 +150,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           id INTEGER PRIMARY KEY CHECK (id = 1),
           bot_name TEXT NOT NULL DEFAULT 'MyBot',
           system_prompt TEXT NOT NULL DEFAULT 'Talk english. Be playful, friendly and use emojis! :).',
+          user_full_name TEXT NOT NULL DEFAULT '',
+          user_call_name TEXT NOT NULL DEFAULT '',
           setup_completed INTEGER NOT NULL DEFAULT 0 CHECK (setup_completed IN (0,1)),
           active_provider_id TEXT NOT NULL DEFAULT '',
           active_model_id TEXT NOT NULL DEFAULT '',
@@ -300,6 +304,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
     _ensure_settings_core_column(conn, "memory_extraction_interval", "INTEGER NOT NULL DEFAULT 10")
     _ensure_settings_core_column(conn, "user_message_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_settings_core_column(conn, "user_full_name", "TEXT NOT NULL DEFAULT ''")
+    _ensure_settings_core_column(conn, "user_call_name", "TEXT NOT NULL DEFAULT ''")
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
     _ensure_timed_jobs_column(conn, "timezone_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
@@ -436,6 +442,8 @@ def _load_settings_sync() -> Settings:
         return Settings(
             bot_name=core["bot_name"],
             system_prompt=core["system_prompt"],
+            user_full_name=core["user_full_name"],
+            user_call_name=core["user_call_name"],
             setup_completed=bool(core["setup_completed"]),
             active_provider_id=core["active_provider_id"],
             active_model_id=core["active_model_id"],
@@ -474,13 +482,13 @@ def _save_settings_sync(settings: Settings) -> None:
         # 1. Core
         conn.execute("""
             UPDATE settings_core SET 
-                bot_name = ?, system_prompt = ?, setup_completed = ?, 
+                bot_name = ?, system_prompt = ?, user_full_name = ?, user_call_name = ?, setup_completed = ?, 
                 active_provider_id = ?, active_model_id = ?, active_chat_id = ?,
                 tool_max_recursion = ?, tool_timeout_seconds = ?,
                 memory_extraction_interval = ?
             WHERE id = 1
         """, (
-            settings.bot_name, settings.system_prompt, int(settings.setup_completed),
+            settings.bot_name, settings.system_prompt, settings.user_full_name, settings.user_call_name, int(settings.setup_completed),
             settings.active_provider_id, settings.active_model_id, settings.active_chat_id,
             settings.tool_max_recursion, settings.tool_timeout_seconds,
             settings.memory_extraction_interval

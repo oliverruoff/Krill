@@ -50,6 +50,7 @@ from .integrations import (
 from .integrations.whatsapp.sidecar_manager import connect as whatsapp_connect
 from .integrations.whatsapp.sidecar_manager import list_contacts as whatsapp_list_contacts
 from .integrations.whatsapp.sidecar_manager import status as whatsapp_status
+from .integrations.chat_runtime import ensure_runtime_context_seed
 from .mcps.git_ops import (
     SSH_PRIVATE_PARAM,
     SSH_PUBLIC_PARAM,
@@ -435,6 +436,7 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
 
     request_id = str(uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
+    ensure_runtime_context_seed(target_chat, settings)
     target_chat.messages.append(ChatMessage(role="user", content=user_content, timestamp=now_iso))
     target_chat.messages.append(
         ChatMessage(role="assistant", content="", timestamp=now_iso, request_id=request_id, status="queued")
@@ -506,6 +508,7 @@ async def get_providers() -> list[dict[str, object]]:
 async def update_settings(settings: Settings) -> Settings:
     existing = await load_settings()
     settings = settings.model_copy(update={"user_message_count": existing.user_message_count})
+    _merge_existing_provider_api_keys(existing, settings)
     _merge_google_managed_oauth_params(existing, settings)
     _merge_git_managed_ssh_params(existing, settings)
     _validate_settings_payload(settings)
@@ -1184,6 +1187,7 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
     chat = _find_chat_by_id(settings, chat_id)
     if chat is None:
         return
+    ensure_runtime_context_seed(chat, settings)
 
     assistant = _find_assistant_message_by_request_id(chat, request_id)
     if assistant is None:
@@ -1462,11 +1466,17 @@ def _validate_settings_payload(settings: Settings) -> None:
     if settings.setup_completed and not _can_complete_setup(settings):
         raise HTTPException(
             status_code=422,
-            detail="Setup cannot be marked complete without active provider, model, and API key.",
+            detail="Setup cannot be marked complete without user name fields, active provider, model, and API key.",
         )
 
 
 def _can_complete_setup(settings: Settings) -> bool:
+    if not settings.user_full_name.strip():
+        return False
+
+    if not settings.user_call_name.strip():
+        return False
+
     if not settings.active_provider_id:
         return False
 
@@ -1534,6 +1544,20 @@ def _merge_google_managed_oauth_params(existing: Settings, incoming: Settings) -
                 merged_params[key] = existing_value
 
     incoming.mcp_configs[GOOGLE_MCP_ID] = McpConfig(enabled=incoming_google.enabled, params=merged_params)
+
+
+def _merge_existing_provider_api_keys(existing: Settings, incoming: Settings) -> None:
+    for provider_id, incoming_config in list(incoming.provider_configs.items()):
+        incoming_key = incoming_config.api_key.strip()
+        if incoming_key:
+            continue
+        existing_config = existing.provider_configs.get(provider_id)
+        if existing_config is None:
+            continue
+        existing_key = existing_config.api_key.strip()
+        if not existing_key:
+            continue
+        incoming.provider_configs[provider_id] = incoming_config.model_copy(update={"api_key": existing_key})
 
 
 def _merge_git_managed_ssh_params(existing: Settings, incoming: Settings) -> None:

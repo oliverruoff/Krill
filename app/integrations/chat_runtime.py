@@ -10,10 +10,25 @@ RUNTIME_CONTEXT_SYSTEM_TYPE = "runtime_context_seed"
 def build_runtime_context_seed(settings: Settings) -> str:
     """Build a stable per-chat runtime seed with identity and core memories."""
     bot_name = settings.bot_name.strip() or "Krill"
+    user_full_name = settings.user_full_name.strip() or "the user"
+    user_call_name = settings.user_call_name.strip() or "the user"
     behavior = settings.system_prompt.strip()
     seed = (
         f"You are Krill assistant named '{bot_name}'. "
-        f"This is the system prompt your user provided: {behavior}"
+        f"You are the assistant of '{user_full_name}'. "
+        f"Call your human user '{user_call_name}'."
+    )
+
+    if behavior:
+        seed = (
+            f"{seed} "
+            f"This is the system prompt your user provided: {behavior}"
+        )
+
+    seed = (
+        f"{seed}\n\n"
+        "Identity reminder:\n"
+        "- When memories mention this person, or mention 'the user', that always refers to your human user."
     )
 
     memory_lines = [
@@ -36,18 +51,18 @@ def build_runtime_context_seed(settings: Settings) -> str:
 
 def ensure_runtime_context_seed(chat: ChatSession, settings: Settings) -> None:
     """Ensure exactly one runtime seed system message exists in a chat."""
-    has_seed = any(
-        message.role == "system" and message.system_type == RUNTIME_CONTEXT_SYSTEM_TYPE
-        for message in chat.messages
-    )
-    if has_seed:
-        return
+    seed_content = build_runtime_context_seed(settings)
+    for message in chat.messages:
+        if message.role == "system" and message.system_type == RUNTIME_CONTEXT_SYSTEM_TYPE:
+            if message.content != seed_content:
+                message.content = seed_content
+            return
 
     chat.messages.insert(
         0,
         ChatMessage(
             role="system",
-            content=build_runtime_context_seed(settings),
+            content=seed_content,
             timestamp=datetime.now(timezone.utc).isoformat(),
             system_type=RUNTIME_CONTEXT_SYSTEM_TYPE,
             tool_usage=[],

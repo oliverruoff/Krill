@@ -16,6 +16,8 @@ const fields = {
   setupBraindumpFileInput: document.getElementById("setup_braindump_file"),
   setupImportBraindumpButton: document.getElementById("setup-import-braindump-btn"),
   botName: document.getElementById("bot_name"),
+  userFullName: document.getElementById("user_full_name"),
+  userCallName: document.getElementById("user_call_name"),
   systemPrompt: document.getElementById("system_prompt"),
   systemPromptCount: document.getElementById("system_prompt_count"),
   providerSelect: document.getElementById("provider_select"),
@@ -394,6 +396,8 @@ function createSetupSnapshot() {
   const extractionInterval = clampInteger(fields.memoryExtractionInterval.value, 1, 500, state.memoryExtractionInterval || 10);
   const snapshot = {
     bot_name: fields.botName.value,
+    user_full_name: fields.userFullName.value,
+    user_call_name: fields.userCallName.value,
     system_prompt: fields.systemPrompt.value,
     active_provider_id: fields.activeProviderSelect.value || "",
     provider_configs: normalizeProviderConfigs(state.providerConfigs),
@@ -435,6 +439,8 @@ function buildPayload() {
 
   return {
     bot_name: fields.botName.value,
+    user_full_name: fields.userFullName.value,
+    user_call_name: fields.userCallName.value,
     system_prompt: fields.systemPrompt.value,
     setup_completed: true,
     active_provider_id: fields.activeProviderSelect.value,
@@ -455,6 +461,22 @@ function buildPayload() {
 
 async function saveSetup(event) {
   event.preventDefault();
+
+  const fullName = String(fields.userFullName.value || "").trim();
+  const callName = String(fields.userCallName.value || "").trim();
+  if (!fullName) {
+    setStatus("Please enter your full name.", true);
+    fields.userFullName.focus();
+    return;
+  }
+  if (!callName) {
+    setStatus("Please enter how Krill should call you.", true);
+    fields.userCallName.focus();
+    return;
+  }
+
+  fields.userFullName.value = fullName;
+  fields.userCallName.value = callName;
   const payload = buildPayload();
 
   try {
@@ -465,7 +487,16 @@ async function saveSetup(event) {
     });
 
     if (!response.ok) {
-      throw new Error("Setup save failed. Check provider, model, and API key.");
+      let detail = "Setup save failed. Check provider, model, API key, and required user fields.";
+      try {
+        const data = await response.json();
+        if (typeof data?.detail === "string" && data.detail.trim()) {
+          detail = data.detail.trim();
+        }
+      } catch (parseError) {
+        // Keep fallback detail.
+      }
+      throw new Error(detail);
     }
 
     state.setupCompleted = true;
@@ -508,7 +539,13 @@ async function verifyProvider(providerId, modelId, apiKey) {
 }
 
 function setModeFromSettings() {
-  if (state.setupCompleted) {
+  if (shouldForceConfigViewFromQuery()) {
+    showConfigView();
+    fields.completeButton.textContent = "Apply and Back to Gateway";
+    return;
+  }
+
+  if (shouldOpenConfigViewFromLoadedState()) {
     showConfigView();
     fields.completeButton.textContent = "Apply and Back to Gateway";
     return;
@@ -516,6 +553,48 @@ function setModeFromSettings() {
 
   showLandingView();
   fields.completeButton.textContent = "Apply and Back to Gateway";
+}
+
+function shouldForceConfigViewFromQuery() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const editValue = String(searchParams.get("edit") || "").trim().toLowerCase();
+  return editValue === "1" || editValue === "true" || editValue === "yes";
+}
+
+function shouldOpenConfigViewFromLoadedState() {
+  if (state.setupCompleted) {
+    return true;
+  }
+
+  if (Object.keys(state.providerConfigs).length > 0) {
+    return true;
+  }
+
+  if (Array.isArray(state.coreMemories) && state.coreMemories.length > 0) {
+    return true;
+  }
+
+  if (Array.isArray(state.normalMemories) && state.normalMemories.length > 0) {
+    return true;
+  }
+
+  if (Array.isArray(state.chats) && state.chats.length > 0) {
+    return true;
+  }
+
+  if (Object.keys(state.mcpConfigs).length > 0) {
+    return true;
+  }
+
+  if (Object.keys(state.integrationConfigs).length > 0) {
+    return true;
+  }
+
+  if (Array.isArray(state.dailyTokenUsage) && state.dailyTokenUsage.length > 0) {
+    return true;
+  }
+
+  return false;
 }
 
 async function loadPage() {
@@ -534,6 +613,8 @@ async function loadPage() {
     const settings = await settingsResponse.json();
 
     fields.botName.value = settings.bot_name ?? "";
+    fields.userFullName.value = settings.user_full_name ?? "";
+    fields.userCallName.value = settings.user_call_name ?? "";
     fields.systemPrompt.value = settings.system_prompt ?? "";
     updateSystemPromptCounter();
 
