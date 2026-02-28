@@ -69,7 +69,7 @@ class HomeAssistantMCP(MCPPlugin):
             McpToolSpec(
                 id="trigger_entity",
                 label="Trigger Entity",
-                description="Triggers an entity action (toggle, turn_on, turn_off, or automation trigger).",
+                description="Triggers an entity action (toggle, turn_on, turn_off, or automation trigger) and verifies resulting state.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -83,7 +83,7 @@ class HomeAssistantMCP(MCPPlugin):
             McpToolSpec(
                 id="call_service",
                 label="Call Service",
-                description="Calls any Home Assistant service with optional service_data and target.",
+                description="Calls any Home Assistant service with optional service_data and target, then verifies target entity state when possible.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -121,7 +121,7 @@ class HomeAssistantMCP(MCPPlugin):
             McpToolSpec(
                 id="add_todo_item",
                 label="Add Todo Item",
-                description="Adds one item to a Home Assistant todo list.",
+                description="Adds one item to a Home Assistant todo list and verifies the list afterward.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -137,7 +137,7 @@ class HomeAssistantMCP(MCPPlugin):
             McpToolSpec(
                 id="update_todo_item",
                 label="Update Todo Item",
-                description="Updates one item in a Home Assistant todo list.",
+                description="Updates one item in a Home Assistant todo list and verifies the list afterward.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -155,7 +155,7 @@ class HomeAssistantMCP(MCPPlugin):
             McpToolSpec(
                 id="remove_todo_item",
                 label="Remove Todo Item",
-                description="Removes one item from a Home Assistant todo list.",
+                description="Removes one item from a Home Assistant todo list and verifies the list afterward.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -168,7 +168,7 @@ class HomeAssistantMCP(MCPPlugin):
             McpToolSpec(
                 id="remove_completed_todo_items",
                 label="Remove Completed Todo Items",
-                description="Removes all completed items from a Home Assistant todo list.",
+                description="Removes all completed items from a Home Assistant todo list and verifies the list afterward.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -205,7 +205,7 @@ class HomeAssistantMCP(MCPPlugin):
             McpToolSpec(
                 id="create_or_update_automation",
                 label="Create/Update Automation",
-                description="Creates or updates automation config by automation_id.",
+                description="Creates or updates automation config by automation_id and verifies resulting automation state.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -412,18 +412,22 @@ def _trigger_entity(base_url: str, token: str, arguments: dict[str, object]) -> 
                 "skip_condition": skip_condition,
             }
             result = _ha_request_json("POST", f"{base_url}/api/services/automation/trigger", token, payload)
+            verification = _verify_entity_states(base_url, token, [entity_id])
             return {
                 "entity_id": entity_id,
                 "action": action,
                 "result": result,
+                "verification": verification,
             }
         if domain == "script":
             payload: dict[str, object] = {"entity_id": entity_id}
             result = _ha_request_json("POST", f"{base_url}/api/services/script/turn_on", token, payload)
+            verification = _verify_entity_states(base_url, token, [entity_id])
             return {
                 "entity_id": entity_id,
                 "action": action,
                 "result": result,
+                "verification": verification,
             }
         raise RuntimeError("Action 'trigger' is supported for automation.* and script.* entities.")
 
@@ -432,10 +436,14 @@ def _trigger_entity(base_url: str, token: str, arguments: dict[str, object]) -> 
 
     payload: dict[str, object] = {"entity_id": entity_id}
     result = _ha_request_json("POST", f"{base_url}/api/services/homeassistant/{action}", token, payload)
+    expected_state = "on" if action == "turn_on" else ("off" if action == "turn_off" else "")
+    expected_by_entity = {entity_id: expected_state} if expected_state else {}
+    verification = _verify_entity_states(base_url, token, [entity_id], expected_states=expected_by_entity)
     return {
         "entity_id": entity_id,
         "action": action,
         "result": result,
+        "verification": verification,
     }
 
 
@@ -458,11 +466,16 @@ def _call_service(base_url: str, token: str, arguments: dict[str, object]) -> di
                 payload[key] = value
 
     result = _ha_service_call(base_url, token, domain, service, payload, return_response=return_response)
+    entity_ids = _extract_entity_ids_from_payload(payload)
+    expected_state = "on" if service == "turn_on" else ("off" if service == "turn_off" else "")
+    expected_by_entity = {entity_id: expected_state for entity_id in entity_ids} if expected_state else {}
+    verification = _verify_entity_states(base_url, token, entity_ids, expected_states=expected_by_entity)
     return {
         "domain": domain,
         "service": service,
         "return_response": return_response,
         "result": result,
+        "verification": verification,
     }
 
 
@@ -494,10 +507,19 @@ def _add_todo_item(base_url: str, token: str, arguments: dict[str, object]) -> d
     _validate_todo_due_fields(payload)
 
     result = _ha_service_call(base_url, token, "todo", "add_item", payload)
+    verification = _verify_todo_entity(
+        base_url,
+        token,
+        entity_id,
+        expected_item=item,
+        should_exist=True,
+        operation_label="add_item",
+    )
     return {
         "entity_id": entity_id,
         "item": item,
         "result": result,
+        "verification": verification,
     }
 
 
@@ -518,10 +540,20 @@ def _update_todo_item(base_url: str, token: str, arguments: dict[str, object]) -
         raise RuntimeError("At least one update field is required: rename, status, due_date, due_datetime, or description.")
 
     result = _ha_service_call(base_url, token, "todo", "update_item", payload)
+    expected_item = str(payload.get("rename", item)).strip() or item
+    verification = _verify_todo_entity(
+        base_url,
+        token,
+        entity_id,
+        expected_item=expected_item,
+        should_exist=True,
+        operation_label="update_item",
+    )
     return {
         "entity_id": entity_id,
         "item": item,
         "result": result,
+        "verification": verification,
     }
 
 
@@ -530,10 +562,19 @@ def _remove_todo_item(base_url: str, token: str, arguments: dict[str, object]) -
     item = _required_str(arguments, "item")
     payload: dict[str, object] = {"entity_id": entity_id, "item": item}
     result = _ha_service_call(base_url, token, "todo", "remove_item", payload)
+    verification = _verify_todo_entity(
+        base_url,
+        token,
+        entity_id,
+        expected_item=item,
+        should_exist=False,
+        operation_label="remove_item",
+    )
     return {
         "entity_id": entity_id,
         "item": item,
         "result": result,
+        "verification": verification,
     }
 
 
@@ -541,9 +582,11 @@ def _remove_completed_todo_items(base_url: str, token: str, arguments: dict[str,
     entity_id = _required_str(arguments, "entity_id")
     payload: dict[str, object] = {"entity_id": entity_id}
     result = _ha_service_call(base_url, token, "todo", "remove_completed_items", payload)
+    verification = _verify_todo_no_completed_items(base_url, token, entity_id)
     return {
         "entity_id": entity_id,
         "result": result,
+        "verification": verification,
     }
 
 
@@ -582,6 +625,201 @@ def _extract_todo_items_from_service_response(result: dict[str, object] | list[o
         if isinstance(raw_item, dict):
             items.append(raw_item)
     return items
+
+
+def _extract_entity_ids_from_payload(payload: Mapping[str, object]) -> list[str]:
+    raw_value = payload.get("entity_id")
+    candidates: list[str] = []
+    if isinstance(raw_value, str):
+        cleaned = raw_value.strip()
+        if cleaned:
+            candidates.append(cleaned)
+    elif isinstance(raw_value, list):
+        for item in raw_value:
+            if isinstance(item, str) and item.strip():
+                candidates.append(item.strip())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for entity_id in candidates:
+        if entity_id in seen:
+            continue
+        seen.add(entity_id)
+        deduped.append(entity_id)
+    return deduped
+
+
+def _verify_entity_states(
+    base_url: str,
+    token: str,
+    entity_ids: list[str],
+    *,
+    expected_states: dict[str, str] | None = None,
+) -> dict[str, object]:
+    if not entity_ids:
+        return {
+            "status": "skipped",
+            "detail": "No explicit entity_id target was provided, so post-action state verification was skipped.",
+            "entities": [],
+        }
+
+    checks: list[dict[str, object]] = []
+    failures: list[dict[str, str]] = []
+    expected_states = expected_states or {}
+
+    for entity_id in entity_ids:
+        encoded_id = parse.quote(entity_id, safe="")
+        try:
+            payload = _ha_request_json("GET", f"{base_url}/api/states/{encoded_id}", token, None)
+            if not isinstance(payload, dict):
+                raise RuntimeError("Invalid state payload.")
+            actual_state = str(payload.get("state", ""))
+            expected_state = str(expected_states.get(entity_id, "")).strip()
+            matches_expected = True
+            if expected_state:
+                matches_expected = actual_state.lower() == expected_state.lower()
+            checks.append(
+                {
+                    "entity_id": entity_id,
+                    "state": actual_state,
+                    "last_changed": str(payload.get("last_changed", "")),
+                    "last_updated": str(payload.get("last_updated", "")),
+                    "friendly_name": _friendly_name(payload),
+                    "expected_state": expected_state,
+                    "matches_expected_state": matches_expected,
+                    "attributes": payload.get("attributes", {}),
+                }
+            )
+        except error.HTTPError as exc:
+            failures.append(
+                {
+                    "entity_id": entity_id,
+                    "detail": f"Home Assistant API request failed ({exc.code}): {_read_http_error(exc)}",
+                }
+            )
+        except error.URLError as exc:
+            failures.append(
+                {
+                    "entity_id": entity_id,
+                    "detail": f"Network error while contacting Home Assistant: {_url_error_reason(exc)}",
+                }
+            )
+        except Exception as exc:
+            failures.append(
+                {
+                    "entity_id": entity_id,
+                    "detail": str(exc),
+                }
+            )
+
+    has_expectation_mismatch = any(
+        check.get("expected_state") and not bool(check.get("matches_expected_state"))
+        for check in checks
+    )
+    if checks and not failures and not has_expectation_mismatch:
+        return {
+            "status": "verified",
+            "detail": "Post-action entity state verification succeeded.",
+            "entities": checks,
+            "failures": failures,
+        }
+    if checks:
+        return {
+            "status": "partial",
+            "detail": "Action executed, but some post-action entity checks were incomplete or mismatched expected states.",
+            "entities": checks,
+            "failures": failures,
+        }
+    return {
+        "status": "failed",
+        "detail": "Action executed, but post-action entity verification could not read target states.",
+        "entities": checks,
+        "failures": failures,
+    }
+
+
+def _fetch_todo_items(base_url: str, token: str, entity_id: str) -> list[dict[str, object]]:
+    payload: dict[str, object] = {"entity_id": entity_id}
+    result = _ha_service_call(base_url, token, "todo", "get_items", payload, return_response=True)
+    return _extract_todo_items_from_service_response(result, entity_id)
+
+
+def _todo_item_text(item: dict[str, object]) -> str:
+    for key in ("summary", "item", "name", "title"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _verify_todo_entity(
+    base_url: str,
+    token: str,
+    entity_id: str,
+    *,
+    expected_item: str,
+    should_exist: bool,
+    operation_label: str,
+) -> dict[str, object]:
+    normalized_expected = expected_item.strip().lower()
+    try:
+        items = _fetch_todo_items(base_url, token, entity_id)
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "detail": f"{operation_label}: action executed, but todo verification failed: {exc}",
+            "entity_id": entity_id,
+            "expected_item": expected_item,
+            "item_present": None,
+            "items": [],
+        }
+
+    present = any(_todo_item_text(item).lower() == normalized_expected for item in items if isinstance(item, dict))
+    verified = present if should_exist else (not present)
+    detail = (
+        f"{operation_label}: verification succeeded."
+        if verified
+        else f"{operation_label}: action executed, but verification did not observe expected todo list outcome."
+    )
+    return {
+        "status": "verified" if verified else "partial",
+        "detail": detail,
+        "entity_id": entity_id,
+        "expected_item": expected_item,
+        "item_present": present,
+        "items": items,
+    }
+
+
+def _verify_todo_no_completed_items(base_url: str, token: str, entity_id: str) -> dict[str, object]:
+    try:
+        items = _fetch_todo_items(base_url, token, entity_id)
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "detail": f"remove_completed_items: action executed, but todo verification failed: {exc}",
+            "entity_id": entity_id,
+            "remaining_completed_count": None,
+            "items": [],
+        }
+
+    remaining_completed = [
+        item
+        for item in items
+        if isinstance(item, dict) and str(item.get("status", "")).strip().lower() == "completed"
+    ]
+    verified = len(remaining_completed) == 0
+    return {
+        "status": "verified" if verified else "partial",
+        "detail": (
+            "remove_completed_items: verification succeeded."
+            if verified
+            else "remove_completed_items: action executed, but completed items still remain."
+        ),
+        "entity_id": entity_id,
+        "remaining_completed_count": len(remaining_completed),
+        "items": items,
+    }
 
 
 def _normalize_todo_status(value: object) -> list[str]:
@@ -746,6 +984,7 @@ def _create_or_update_automation(base_url: str, token: str, arguments: dict[str,
         "reloaded": reloaded,
         "write_result": write_result,
         "reload_result": reload_result if reloaded else {},
+        "verification": _verify_entity_states(base_url, token, [entity_id]),
         "state": {
             "state": str(state_payload.get("state", "")),
             "last_changed": str(state_payload.get("last_changed", "")),
