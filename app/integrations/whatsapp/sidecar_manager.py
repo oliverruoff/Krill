@@ -66,17 +66,23 @@ async def stop_sidecar() -> None:
     async with _LOCK:
         proc = _PROCESS
         _PROCESS = None
-    await _snapshot_session_to_db()
     if proc is None:
         try:
             await asyncio.to_thread(_request_json, "POST", f"{_SIDECAR_BASE}/shutdown", {})
         except Exception:
             pass
+        await asyncio.sleep(0.5)
+        await _snapshot_session_to_db()
         return
     try:
         proc.terminate()
     except Exception:
         pass
+    for _ in range(30):
+        if proc.poll() is not None:
+            break
+        await asyncio.sleep(0.1)
+    await _snapshot_session_to_db()
 
 
 def _sidecar_is_healthy() -> bool:
@@ -364,10 +370,17 @@ async def _snapshot_session_to_db() -> None:
             return
         if archive_path.exists():
             archive_path.unlink(missing_ok=True)
+        archived_count = 0
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for file_path in file_candidates:
                 relative = file_path.relative_to(_AUTH_RUNTIME_DIR)
-                zf.write(file_path, arcname=str(relative))
+                try:
+                    zf.write(file_path, arcname=str(relative))
+                    archived_count += 1
+                except Exception:
+                    continue
+        if archived_count == 0:
+            return
         encoded = base64.b64encode(archive_path.read_bytes()).decode("ascii")
         await save_whatsapp_session_blob(encoded)
     except Exception:

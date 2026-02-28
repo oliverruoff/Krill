@@ -3,6 +3,7 @@
 from app.integrations.base import IntegrationPlugin
 
 from .config import CONFIG_FIELDS, verify_whatsapp_config
+from .sidecar_manager import stop_sidecar
 from .worker import WhatsAppBridgeWorker
 
 
@@ -23,3 +24,4 @@ class WhatsAppIntegration(IntegrationPlugin):
 
     async def stop(self) -> None:
         await self._worker.stop()
+        await stop_sidecar()

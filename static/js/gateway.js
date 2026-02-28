@@ -3705,6 +3705,11 @@ function encodeMultiselectParam(values) {
   return JSON.stringify(normalized);
 }
 
+function parseBooleanConfigParam(rawValue) {
+  const normalized = String(rawValue || "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function readMultiselectSelection(fieldsetNode) {
   if (!(fieldsetNode instanceof HTMLElement)) {
     return [];
@@ -3964,6 +3969,11 @@ function renderConfigPanel(container, items, getConfig, options) {
 
         config.params[fieldId] = encodeMultiselectParam(readMultiselectSelection(fieldsetNode));
         fieldInput = fieldsetNode;
+      } else if (activeField.type === "checkbox") {
+        const checkboxNode = document.createElement("input");
+        checkboxNode.type = "checkbox";
+        checkboxNode.checked = parseBooleanConfigParam(config.params?.[fieldId]);
+        fieldInput = checkboxNode;
       } else if (activeField.type === "textarea") {
         const textNode = document.createElement("textarea");
         textNode.rows = 4;
@@ -5265,7 +5275,11 @@ function handleMcpInputChange(event) {
     if (!fieldId) {
       return;
     }
-    config.params[fieldId] = target.value;
+    if (target instanceof HTMLInputElement && target.type === "checkbox") {
+      config.params[fieldId] = target.checked ? "true" : "false";
+    } else {
+      config.params[fieldId] = target.value;
+    }
     if (configKind === "mcp") {
       scheduleMcpAutosave(configId);
     }

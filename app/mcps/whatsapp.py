@@ -20,11 +20,18 @@ class WhatsAppMCP(MCPPlugin):
     default_enabled = False
     config_fields: list[McpConfigField] = [
         McpConfigField(
+            id="auto_answer",
+            label="Auto answer",
+            type="checkbox",
+            required=False,
+            description="When enabled, allowlisted inbound WhatsApp messages trigger automatic replies using the automation prompt.",
+        ),
+        McpConfigField(
             id="automation_prompt",
             label="Automation prompt",
             type="textarea",
             required=False,
-            placeholder="Instruction used when allowlisted inbound messages are bridged to Gateway.",
+            placeholder="Instruction used when auto answer is enabled and allowlisted inbound messages are bridged to Gateway.",
         ),
         McpConfigField(
             id="allowed_numbers",
@@ -38,6 +45,18 @@ class WhatsAppMCP(MCPPlugin):
 
     def tool_specs(self) -> list[McpToolSpec]:
         return [
+            McpToolSpec(
+                id="whatsapp_find_contact_number",
+                label="WhatsApp Find Contact Number",
+                description="Finds allowlisted WhatsApp contacts by name and returns matching phone numbers.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "name_query": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["name_query"],
+                },
+            ),
             McpToolSpec(
                 id="whatsapp_send_message",
                 label="WhatsApp Send Message",
@@ -72,6 +91,9 @@ class WhatsAppMCP(MCPPlugin):
         return True, f"WhatsApp sidecar reachable. Current state: {state or 'unknown'}"
 
     async def call_tool(self, tool_id: str, arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
+        if tool_id == "whatsapp_find_contact_number":
+            return await _discover_allowlisted_numbers(arguments, params)
+
         if tool_id != "whatsapp_send_message":
             raise RuntimeError(f"Unsupported WhatsApp tool: {tool_id}")
 
@@ -120,26 +142,61 @@ class WhatsAppMCP(MCPPlugin):
 
 
 async def _resolve_allowlisted_contact(target: str, allowlist: set[str]) -> str:
+    matches = await _find_allowlisted_contacts(target, allowlist)
+    if len(matches) == 1:
+        return matches[0]["number"]
+    return ""
+
+
+async def _discover_allowlisted_numbers(arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
+    name_query = str(arguments.get("name_query", "")).strip()
+    if not name_query:
+        raise RuntimeError("name_query is required.")
+
+    allowlist = parse_allowlist(params.get("allowed_numbers", ""))
+    matches = await _find_allowlisted_contacts(name_query, allowlist)
+    return {
+        "status": "ok",
+        "query": name_query,
+        "matches": matches,
+        "count": len(matches),
+    }
+
+
+async def _find_allowlisted_contacts(target: str, allowlist: set[str]) -> list[dict[str, str]]:
     lowered_target = target.strip().lower()
     if not lowered_target or not allowlist:
-        return ""
+        return []
 
     try:
         contacts = await list_contacts()
     except Exception:
-        return ""
+        return []
 
-    candidates: list[str] = []
+    exact_matches: list[dict[str, str]] = []
+    partial_matches: list[dict[str, str]] = []
     for entry in contacts:
         number = normalize_phone_number(str(entry.get("number", "")))
         if not number or number not in allowlist:
             continue
-        name = str(entry.get("name", "")).strip().lower()
-        if not name:
+        name_display = str(entry.get("name", "")).strip() or number
+        name = name_display.lower()
+        if not name_display:
             continue
-        if name == lowered_target or lowered_target in name:
-            candidates.append(number)
+        if name == lowered_target:
+            exact_matches.append({"name": name_display, "number": number})
+        elif lowered_target in name:
+            partial_matches.append({"name": name_display, "number": number})
 
-    if len(candidates) == 1:
-        return candidates[0]
-    return ""
+    ordered = exact_matches if exact_matches else partial_matches
+    ordered.sort(key=lambda item: item["name"].lower())
+
+    deduped: list[dict[str, str]] = []
+    seen_numbers: set[str] = set()
+    for match in ordered:
+        number = match.get("number", "")
+        if not number or number in seen_numbers:
+            continue
+        seen_numbers.add(number)
+        deduped.append(match)
+    return deduped

@@ -18,6 +18,10 @@ from .sidecar_manager import parse_allowlist, poll_events, send_message, set_all
 LOGGER = logging.getLogger(__name__)
 
 
+def _is_truthy_flag(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class WhatsAppBridgeWorker:
     def __init__(self) -> None:
         self._task: asyncio.Task[None] | None = None
@@ -63,7 +67,8 @@ class WhatsAppBridgeWorker:
 
         allowlist = parse_allowlist(mcp_config.params.get("allowed_numbers", ""))
         prompt = str(mcp_config.params.get("automation_prompt", "")).strip()
-        if not allowlist or not prompt:
+        auto_answer_enabled = _is_truthy_flag(mcp_config.params.get("auto_answer", ""))
+        if not auto_answer_enabled or not allowlist or not prompt:
             return
 
         await set_allowlist(allowlist)

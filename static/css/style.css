@@ -1646,6 +1646,11 @@ button:disabled {
   font-size: 0.74rem;
 }
 
+.mcp-field input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+}
+
 .mcp-field select {
   padding: 0.34rem 0.45rem;
   border-radius: 8px;
