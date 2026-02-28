@@ -1085,6 +1085,14 @@ function createChatId() {
   return `chat-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function createLocalRequestId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `local-${crypto.randomUUID()}`;
+  }
+
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
 function getLatestChatMessage(chat) {
   if (!chat || !Array.isArray(chat.messages) || chat.messages.length === 0) {
     return null;
@@ -5171,8 +5179,51 @@ async function sendMessage(event) {
   }
 
   ensureRuntimeContextSeed(chat);
+  const chatExistsInPersistedSettings = Array.isArray(state.settings?.chats)
+    && state.settings.chats.some((entry) => entry && entry.id === chat.id);
+  if (!chatExistsInPersistedSettings) {
+    try {
+      await persistChatsToSettings();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to prepare chat."), true);
+      return;
+    }
+  }
+
+  const userContent = pendingImage
+    ? (message ? `${message}\n\n[Image attached]` : "[Image attached]")
+    : message;
+  const localRequestId = createLocalRequestId();
+  const queuedTimestamp = createTimestamp();
+  const optimisticUserMessage = {
+    role: "user",
+    content: userContent,
+    timestamp: queuedTimestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: localRequestId,
+    status: "",
+  };
+  const optimisticAssistantMessage = {
+    role: "assistant",
+    content: "",
+    timestamp: queuedTimestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: localRequestId,
+    status: "queued",
+  };
+  chat.messages.push(optimisticUserMessage);
+  chat.messages.push(optimisticAssistantMessage);
+  chat.updated_at = queuedTimestamp;
+
+  if (state.activeChatId === chat.id) {
+    renderActiveChat();
+  }
+  renderChatHistory();
+  updateComposerState();
+
   try {
-    await persistChatsToSettings();
     const snapshot = buildQueueSnapshot(chat);
     const response = await fetch("/api/chat/enqueue", {
       method: "POST",
@@ -5198,12 +5249,26 @@ async function sendMessage(event) {
       const detail = await buildHttpErrorDetail(response, "Chat request failed.");
       throw new Error(detail);
     }
+    const payload = await response.json();
+    const serverRequestId = typeof payload?.request_id === "string" ? payload.request_id.trim() : "";
+    if (serverRequestId) {
+      optimisticAssistantMessage.request_id = serverRequestId;
+      optimisticUserMessage.request_id = "";
+    }
     chatInput.value = "";
     clearPendingImageAttachment();
     syncChatInputHeight();
     setStatus("Queued.");
-    await syncRemoteChatState();
+    void syncRemoteChatState();
   } catch (error) {
+    const filteredMessages = chat.messages.filter((entry) => entry?.request_id !== localRequestId);
+    chat.messages = filteredMessages;
+    chat.updated_at = createTimestamp();
+    if (state.activeChatId === chat.id) {
+      renderActiveChat();
+    }
+    renderChatHistory();
+    updateComposerState();
     setStatus(normalizeErrorMessage(error, "Failed to queue message."), true);
     return;
   }
