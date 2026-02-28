@@ -2,10 +2,12 @@
 
 from .base import IntegrationPlugin
 from .telegram import TelegramIntegration
+from .whatsapp.plugin import WhatsAppIntegration
 
 
 _INTEGRATIONS: dict[str, IntegrationPlugin] = {
     "telegram": TelegramIntegration(),
+    "whatsapp": WhatsAppIntegration(),
 }
 
 

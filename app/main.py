@@ -47,6 +47,9 @@ from .integrations import (
     get_runtime_integrations,
     is_supported_integration,
 )
+from .integrations.whatsapp.sidecar_manager import connect as whatsapp_connect
+from .integrations.whatsapp.sidecar_manager import list_contacts as whatsapp_list_contacts
+from .integrations.whatsapp.sidecar_manager import status as whatsapp_status
 from .mcps.git_ops import (
     SSH_PRIVATE_PARAM,
     SSH_PUBLIC_PARAM,
@@ -162,6 +165,12 @@ class GoogleOAuthStatusResponse(BaseModel):
     email: str
     has_refresh_token: bool
     scopes: list[str] = Field(default_factory=list)
+
+
+class WhatsAppStatusResponse(BaseModel):
+    connected: bool
+    state: str
+    qr_data_url: str = ""
 
 
 class ChatTurn(BaseModel):
@@ -814,6 +823,32 @@ async def disconnect_google_oauth() -> GoogleOAuthStatusResponse:
     )
 
 
+@app.get("/api/mcps/whatsapp/status", response_model=WhatsAppStatusResponse)
+async def get_whatsapp_runtime_status() -> WhatsAppStatusResponse:
+    payload = await whatsapp_status()
+    state = str(payload.get("status", "")).strip().lower()
+    return WhatsAppStatusResponse(
+        connected=state == "ready",
+        state=state or "unknown",
+        qr_data_url=str(payload.get("qr_data_url", "")),
+    )
+
+
+@app.get("/api/mcps/whatsapp/contacts")
+async def get_whatsapp_contacts() -> dict[str, object]:
+    contacts = await whatsapp_list_contacts()
+    return {"ok": True, "contacts": contacts}
+
+
+@app.get("/api/mcps/whatsapp/connect")
+async def whatsapp_connect_popup() -> HTMLResponse:
+    try:
+        await whatsapp_connect()
+    except Exception as exc:
+        return HTMLResponse(content=_whatsapp_popup_html(error=str(exc)))
+    return HTMLResponse(content=_whatsapp_popup_html())
+
+
 @app.get("/api/integrations")
 async def get_integrations() -> list[dict[str, object]]:
     return get_integration_options()
@@ -839,10 +874,21 @@ async def verify_integration(payload: VerifyIntegrationRequest) -> VerifyIntegra
 async def get_integration_status() -> IntegrationStatusResponse:
     settings = await load_settings()
     telegram_config = settings.integration_configs.get("telegram") or IntegrationConfig()
+    whatsapp_config = settings.integration_configs.get("whatsapp") or IntegrationConfig()
     token_value = telegram_config.params.get("bot_token", "")
     token_configured = isinstance(token_value, str) and bool(token_value.strip())
     owner_user_id = settings.telegram_state.owner_user_id.strip()
     owner_chat_id = settings.telegram_state.owner_chat_id.strip()
+
+    whatsapp_state = "disabled"
+    whatsapp_connected = False
+    if bool(whatsapp_config.enabled):
+        try:
+            runtime = await whatsapp_status()
+            whatsapp_state = str(runtime.get("status", "")).strip().lower() or "unknown"
+            whatsapp_connected = whatsapp_state == "ready"
+        except Exception:
+            whatsapp_state = "unavailable"
 
     return IntegrationStatusResponse(
         statuses={
@@ -852,7 +898,12 @@ async def get_integration_status() -> IntegrationStatusResponse:
                 "owner_user_id": owner_user_id,
                 "owner_chat_id": owner_chat_id,
                 "owner_bound": bool(owner_user_id),
-            }
+            },
+            "whatsapp": {
+                "enabled": bool(whatsapp_config.enabled),
+                "connected": whatsapp_connected,
+                "state": whatsapp_state,
+            },
         }
     )
 
@@ -1728,6 +1779,39 @@ def _google_popup_html(ok: bool, message: str) -> str:
         + "</p><p><a href='/gateway'>Return to Gateway</a></p></div>"
         "<script>window.setTimeout(function(){window.close();},1200);</script>"
         "</body></html>"
+    )
+
+
+def _whatsapp_popup_html(error: str = "") -> str:
+    safe_error = str(error).replace("<", "&lt;").replace(">", "&gt;").strip()
+    return (
+        "<!doctype html>"
+        "<html><head><meta charset='utf-8'><title>WhatsApp Connect</title><style>"
+        "body{font-family:ui-sans-serif,Segoe UI,Arial,sans-serif;margin:0;padding:24px;background:#f7f8fa;color:#1d2330;}"
+        ".card{max-width:640px;margin:0 auto;padding:20px;border:1px solid #d7dbe3;border-radius:12px;background:#ffffff;}"
+        "h1{margin:0 0 10px;font-size:20px;color:#1f6f43;}"
+        "p{margin:0 0 10px;line-height:1.5;}"
+        ".qr{display:flex;justify-content:center;align-items:center;min-height:320px;border:1px dashed #cfd8e3;border-radius:10px;background:#fbfcff;}"
+        ".hint{color:#5f6f86;font-size:13px;}"
+        "</style></head><body><div class='card'>"
+        "<h1>WhatsApp Connect</h1>"
+        + (f"<p style='color:#a1302d'>{safe_error}</p>" if safe_error else "<p>Scan the QR with WhatsApp Web to connect.</p>")
+        + "<div id='status' class='hint'>Loading status...</div>"
+        "<div id='qr' class='qr'>Waiting for QR...</div>"
+        "</div><script>"
+        "async function tick(){"
+        "try{const r=await fetch('/api/mcps/whatsapp/status',{cache:'no-store'});"
+        "const p=await r.json();"
+        "document.getElementById('status').textContent='State: '+(p.state||'unknown');"
+        "if(p.connected){"
+        "try{const cr=await fetch('/api/mcps/whatsapp/contacts',{cache:'no-store'});"
+        "if(cr.ok){document.getElementById('qr').innerHTML='<p>Connected and contacts loaded. Closing...</p>';window.setTimeout(function(){window.close();},900);return;}}catch(_e){}"
+        "document.getElementById('qr').innerHTML='<p>Connected. You can close this window.</p>';window.setTimeout(function(){window.close();},1200);return;}"
+        "if(p.qr_data_url){document.getElementById('qr').innerHTML='<img alt=\"WhatsApp QR\" style=\"max-width:280px\" src=\"'+p.qr_data_url+'\" />';}"
+        "}catch(_e){document.getElementById('status').textContent='Failed to load status';}"
+        "window.setTimeout(tick,1500);}"
+        "tick();"
+        "</script></body></html>"
     )
 
 

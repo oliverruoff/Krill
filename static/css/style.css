@@ -1652,6 +1652,14 @@ button:disabled {
   font-size: 0.74rem;
 }
 
+.mcp-field textarea {
+  padding: 0.34rem 0.45rem;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  min-height: 4.4rem;
+  resize: vertical;
+}
+
 .mcp-card-body.hidden {
   display: none;
 }

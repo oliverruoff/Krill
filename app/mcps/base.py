@@ -14,7 +14,7 @@ class McpConfigFieldOption(BaseModel):
 class McpConfigField(BaseModel):
     id: str
     label: str
-    type: Literal["text", "password", "select", "multiselect"] = "text"
+    type: Literal["text", "password", "select", "multiselect", "textarea"] = "text"
     required: bool = False
     placeholder: str = ""
     description: str = ""

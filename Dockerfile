@@ -3,6 +3,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV KRILL_BRAINDUMP_PATH=/app/data/braindump.db
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
@@ -11,6 +12,7 @@ RUN useradd --create-home --shell /usr/sbin/nologin krill
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        chromium \
         git \
         openssh-client \
         gh \
@@ -24,6 +26,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY app /app/app
 COPY static /app/static
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+
+RUN npm --prefix /app/app/integrations/whatsapp/sidecar install --omit=dev
 
 RUN mkdir -p /app/data
 

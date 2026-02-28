@@ -270,7 +270,14 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
         if mark_as_executed:
             await mark_timed_job_executed(job.id, executed_at_utc=executed_at)
     except Exception as exc:
-        LOGGER.exception("Timed job execution failed", extra={"timed_job_id": job.id})
+        if _is_transient_provider_error(exc):
+            LOGGER.warning(
+                "Timed job transient failure: %s",
+                str(exc),
+                extra={"timed_job_id": job.id},
+            )
+        else:
+            LOGGER.exception("Timed job execution failed", extra={"timed_job_id": job.id})
         error_text = f"Timed job error: {exc}"
         channels = [channel for channel in job.channels if channel in {"gateway", "telegram"}]
         if "gateway" in channels:
@@ -369,3 +376,23 @@ async def _dispatch_telegram(*, job: TimedJob, assistant_text: str) -> None:
     decorated = f"{title}\n\n{assistant_text}" if title else assistant_text
     for chunk in _chunk_telegram_text(decorated):
         await asyncio.to_thread(telegram_send_message, token, chat_id, chunk)
+
+
+def _is_transient_provider_error(exc: Exception) -> bool:
+    message = str(exc).strip().lower()
+    if not message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "network timeout",
+            "timed out",
+            "timeout",
+            "network error",
+            "temporarily unavailable",
+            "service unavailable",
+            "too many requests",
+            "rate limit",
+            "unexpected error while contacting",
+        )
+    )
