@@ -64,7 +64,10 @@ def build_model_history(chat: ChatSession) -> list[dict[str, str]]:
         for message in chat.messages
         if message.role in {"user", "assistant", "system"}
         and message.content.strip()
-        and (message.role != "system" or message.system_type == RUNTIME_CONTEXT_SYSTEM_TYPE)
+        and (
+            message.role != "system"
+            or message.system_type in {RUNTIME_CONTEXT_SYSTEM_TYPE, "integration_context"}
+        )
     ]
 
 
