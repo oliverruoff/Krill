@@ -10,8 +10,9 @@ import subprocess
 import time
 import shutil
 import base64
+import io
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib import error, request
 
 from app.config import BASE_DIR
@@ -23,6 +24,27 @@ _SIDECAR_DIR = BASE_DIR / "app" / "integrations" / "whatsapp" / "sidecar"
 _RUNTIME_BASE_DIR = Path(tempfile.gettempdir()) / "krill_whatsapp_runtime"
 _AUTH_RUNTIME_DIR = _RUNTIME_BASE_DIR / "auth"
 _SIDECAR_LOG_PATH = _RUNTIME_BASE_DIR / "sidecar.log"
+
+_AUTH_EXCLUDED_DIR_NAMES = {
+    "cache",
+    "code cache",
+    "gpucache",
+    "grshadercache",
+    "dawncache",
+    "component_crx_cache",
+    "wasmttsengine",
+    "widevinecdm",
+    "ondeviceheadsuggestmodel",
+    "zxcvbndata",
+    "certificaterevocation",
+    "safe browsing",
+    "safebrowsing",
+    "shadercache",
+    "crashpad",
+}
+_AUTH_EXCLUDED_FILE_NAMES = {
+    "browsermetrics-spare.pma",
+}
 
 _LOCK = asyncio.Lock()
 _PROCESS: subprocess.Popen[str] | None = None
@@ -102,9 +124,6 @@ async def connect() -> dict[str, object]:
 async def status() -> dict[str, object]:
     await ensure_sidecar_running()
     payload = await asyncio.to_thread(_request_json, "GET", f"{_SIDECAR_BASE}/status", None)
-    state = str(payload.get("status", "")).strip().lower()
-    if state in {"ready", "authenticated"}:
-        await _snapshot_session_to_db()
     return payload
 
 
@@ -341,6 +360,16 @@ async def _restore_session_from_db() -> None:
         archive_bytes = base64.b64decode(blob, validate=True)
     except Exception:
         return
+
+    compacted_archive_bytes = _filter_session_archive_bytes(archive_bytes)
+    if 0 < len(compacted_archive_bytes) < len(archive_bytes):
+        try:
+            compacted_blob = base64.b64encode(compacted_archive_bytes).decode("ascii")
+            await save_whatsapp_session_blob(compacted_blob)
+            archive_bytes = compacted_archive_bytes
+        except Exception:
+            pass
+
     shutil.rmtree(_AUTH_RUNTIME_DIR, ignore_errors=True)
     _AUTH_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     archive_path = _AUTH_RUNTIME_DIR / "session.zip"
@@ -364,7 +393,9 @@ async def _snapshot_session_to_db() -> None:
         file_candidates = [
             file_path
             for file_path in _AUTH_RUNTIME_DIR.rglob("*")
-            if file_path.is_file() and file_path.name != "session.zip"
+            if file_path.is_file()
+            and file_path.name != "session.zip"
+            and _should_include_auth_path(file_path)
         ]
         if not file_candidates:
             return
@@ -388,3 +419,60 @@ async def _snapshot_session_to_db() -> None:
     finally:
         if archive_path.exists():
             archive_path.unlink(missing_ok=True)
+
+
+def _should_include_auth_path(file_path: Path) -> bool:
+    try:
+        relative = file_path.relative_to(_AUTH_RUNTIME_DIR)
+    except ValueError:
+        return False
+    lowered_parts = [part.strip().lower() for part in relative.parts if part]
+    if not lowered_parts:
+        return False
+    if any(part in _AUTH_EXCLUDED_DIR_NAMES for part in lowered_parts[:-1]):
+        return False
+    file_name = lowered_parts[-1]
+    if file_name in _AUTH_EXCLUDED_FILE_NAMES:
+        return False
+    return True
+
+
+def _should_include_archive_member(member_name: str) -> bool:
+    lowered_parts = [part.strip().lower() for part in PurePosixPath(member_name).parts if part]
+    if not lowered_parts:
+        return False
+    if any(part in _AUTH_EXCLUDED_DIR_NAMES for part in lowered_parts[:-1]):
+        return False
+    if lowered_parts[-1] in _AUTH_EXCLUDED_FILE_NAMES:
+        return False
+    return True
+
+
+def _filter_session_archive_bytes(archive_bytes: bytes) -> bytes:
+    if not archive_bytes:
+        return archive_bytes
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes), "r") as source_zip:
+            members = [
+                info
+                for info in source_zip.infolist()
+                if not info.is_dir() and _should_include_archive_member(info.filename)
+            ]
+            if not members:
+                return archive_bytes
+
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                for info in members:
+                    try:
+                        data = source_zip.read(info.filename)
+                    except Exception:
+                        continue
+                    target_zip.writestr(info.filename, data)
+
+            filtered = output.getvalue()
+            if not filtered:
+                return archive_bytes
+            return filtered
+    except Exception:
+        return archive_bytes

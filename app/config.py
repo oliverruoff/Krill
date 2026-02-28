@@ -1125,6 +1125,8 @@ async def create_braindump_snapshot(target_path: Path) -> None:
         dst = await asyncio.to_thread(_get_conn, target_path)
         try:
             await asyncio.to_thread(src.backup, dst)
+            await asyncio.to_thread(dst.execute, "PRAGMA journal_mode = DELETE")
+            await asyncio.to_thread(dst.execute, "VACUUM")
         finally:
             await asyncio.to_thread(dst.close)
             await asyncio.to_thread(src.close)
