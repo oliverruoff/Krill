@@ -3532,6 +3532,35 @@ async function fetchWhatsappContacts() {
   }
 }
 
+async function fetchWhatsappRuntimeState() {
+  try {
+    const response = await fetch("/api/mcps/whatsapp/status", { cache: "no-store" });
+    if (!response.ok) {
+      return "unknown";
+    }
+    const payload = await response.json();
+    return String(payload?.state || "unknown").toLowerCase();
+  } catch (_error) {
+    return "unknown";
+  }
+}
+
+async function syncWhatsappContactsWithRetry(maxAttempts = 8) {
+  const attempts = Number.isFinite(maxAttempts) ? Math.max(1, Math.floor(maxAttempts)) : 8;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const contacts = await fetchWhatsappContacts();
+    if (contacts.length > 0) {
+      return contacts;
+    }
+    const runtimeState = await fetchWhatsappRuntimeState();
+    if (runtimeState !== "authenticated" && runtimeState !== "initializing") {
+      return contacts;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+  }
+  return state.whatsappContacts;
+}
+
 async function startGoogleOauthLogin() {
   await persistMcpConfigsToSettings();
   const popup = window.open("/api/mcps/google/oauth/start", "krill-google-oauth", "width=640,height=760");
@@ -5299,7 +5328,7 @@ async function handleMcpActionClick(event) {
       const checkTimer = window.setInterval(async () => {
         if (!popup || popup.closed) {
           window.clearInterval(checkTimer);
-          await fetchWhatsappContacts();
+          await syncWhatsappContactsWithRetry();
           renderMcpPanel();
         }
       }, 1200);
@@ -5321,7 +5350,7 @@ async function handleMcpActionClick(event) {
         const detail = typeof result?.detail === "string" ? result.detail.trim() : "";
         const message = detail ? `Tool verified: ${detail}` : "Tool verified.";
         if (configId === "whatsapp") {
-          await fetchWhatsappContacts();
+          await syncWhatsappContactsWithRetry();
           renderMcpPanel();
         }
         setStatus(message);
@@ -5917,6 +5946,25 @@ chatHistoryList.addEventListener("click", (event) => {
 });
 
 chatForm.addEventListener("submit", sendMessage);
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) {
+    return;
+  }
+  const payload = event.data;
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  if (payload.type !== "krill-whatsapp-connected") {
+    return;
+  }
+  const stateLabel = typeof payload.state === "string" ? payload.state : "ready";
+  void (async () => {
+    await syncWhatsappContactsWithRetry();
+    renderMcpPanel();
+    setStatus(`WhatsApp connected (${stateLabel}). Contacts synced.`);
+    showToast("WhatsApp connected.");
+  })();
+});
 window.addEventListener("beforeunload", () => {
   stopSpeechRecognition(true);
   if (state.chatSyncTimerId) {

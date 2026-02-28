@@ -58,10 +58,15 @@ function toChatId(number) {
 
 async function listContacts() {
   await ensureClient();
-  if (!client || status !== "ready") {
+  if (!client || (status !== "ready" && status !== "authenticated")) {
     return [];
   }
-  const contacts = await client.getContacts();
+  let contacts = [];
+  try {
+    contacts = await client.getContacts();
+  } catch {
+    return [];
+  }
   const result = [];
   for (const contact of contacts) {
     const serialized = String(contact?.id?._serialized || "").trim();
@@ -210,6 +215,22 @@ const server = http.createServer(async (req, res) => {
       const take = events;
       events = [];
       json(res, 200, { ok: true, events: take });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/shutdown") {
+      try {
+        if (client) {
+          await client.destroy();
+        }
+      } catch {
+        // Best-effort cleanup before shutdown.
+      }
+      client = null;
+      status = "disconnected";
+      qrDataUrl = "";
+      json(res, 200, { ok: true });
+      server.close(() => process.exit(0));
       return;
     }
 

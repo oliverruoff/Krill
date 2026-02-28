@@ -13,7 +13,7 @@ from app.integrations.chat_runtime import build_model_history, ensure_runtime_co
 from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from app.usage import add_daily_usage
 
-from .sidecar_manager import parse_allowlist, poll_events, set_allowlist
+from .sidecar_manager import parse_allowlist, poll_events, send_message, set_allowlist
 
 LOGGER = logging.getLogger(__name__)
 
@@ -136,6 +136,12 @@ class WhatsAppBridgeWorker:
             chat.total_tokens_used += used_tokens
             add_daily_usage(settings, used_tokens)
         await save_settings(settings)
+
+        if final_text:
+            try:
+                await send_message(number, final_text)
+            except Exception:
+                LOGGER.exception("WhatsApp auto-reply send failed for %s", number)
 
         await register_completed_turn(
             source_channel="whatsapp",

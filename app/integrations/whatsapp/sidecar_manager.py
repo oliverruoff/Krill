@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 import subprocess
 import time
 import shutil
@@ -19,8 +20,9 @@ from app.config import load_whatsapp_session_blob, save_whatsapp_session_blob
 _SIDECAR_PORT = 18777
 _SIDECAR_BASE = f"http://127.0.0.1:{_SIDECAR_PORT}"
 _SIDECAR_DIR = BASE_DIR / "app" / "integrations" / "whatsapp" / "sidecar"
-_AUTH_RUNTIME_DIR = BASE_DIR / "data" / "whatsapp_auth_runtime"
-_SIDECAR_LOG_PATH = BASE_DIR / "data" / "whatsapp_sidecar.log"
+_RUNTIME_BASE_DIR = Path(tempfile.gettempdir()) / "krill_whatsapp_runtime"
+_AUTH_RUNTIME_DIR = _RUNTIME_BASE_DIR / "auth"
+_SIDECAR_LOG_PATH = _RUNTIME_BASE_DIR / "sidecar.log"
 
 _LOCK = asyncio.Lock()
 _PROCESS: subprocess.Popen[str] | None = None
@@ -32,11 +34,15 @@ async def ensure_sidecar_running() -> None:
     async with _LOCK:
         if _PROCESS is not None and _PROCESS.poll() is None:
             return
+        if await asyncio.to_thread(_sidecar_is_healthy):
+            return
 
         node_bin = "node"
-        await asyncio.to_thread(_ensure_sidecar_dependencies)
+        puppeteer_executable = await asyncio.to_thread(_ensure_sidecar_dependencies)
         env = dict(os.environ)
         env["WA_SIDECAR_PORT"] = str(_SIDECAR_PORT)
+        if puppeteer_executable:
+            env["PUPPETEER_EXECUTABLE_PATH"] = puppeteer_executable
         await _restore_session_from_db()
         _AUTH_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         env["WA_AUTH_DIR"] = str(_AUTH_RUNTIME_DIR)
@@ -60,13 +66,25 @@ async def stop_sidecar() -> None:
     async with _LOCK:
         proc = _PROCESS
         _PROCESS = None
-    if proc is None:
-        return
     await _snapshot_session_to_db()
+    if proc is None:
+        try:
+            await asyncio.to_thread(_request_json, "POST", f"{_SIDECAR_BASE}/shutdown", {})
+        except Exception:
+            pass
+        return
     try:
         proc.terminate()
     except Exception:
         pass
+
+
+def _sidecar_is_healthy() -> bool:
+    try:
+        _request_json("GET", f"{_SIDECAR_BASE}/health", None)
+        return True
+    except Exception:
+        return False
 
 
 async def connect() -> dict[str, object]:
@@ -199,23 +217,115 @@ def _request_json(method: str, url: str, payload: object | None) -> dict[str, ob
         raise RuntimeError(f"WhatsApp sidecar request failed ({exc.code}): {detail}") from exc
 
 
-def _ensure_sidecar_dependencies() -> None:
+def _ensure_sidecar_dependencies() -> str | None:
     package_json = _SIDECAR_DIR / "package.json"
     if not package_json.exists():
         raise RuntimeError("WhatsApp sidecar package.json is missing.")
     dependency_marker = _SIDECAR_DIR / "node_modules" / "whatsapp-web.js"
-    if dependency_marker.exists():
-        return
-    result = subprocess.run(
-        ["npm", "install", "--omit=dev"],
+    if not dependency_marker.exists():
+        result = subprocess.run(
+            ["npm", "install", "--omit=dev"],
+            cwd=str(_SIDECAR_DIR),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "npm install failed").strip()
+            raise RuntimeError(f"WhatsApp sidecar dependency install failed: {detail}")
+    return _ensure_puppeteer_browser()
+
+
+def _ensure_puppeteer_browser() -> str | None:
+    check_script = (
+        "const fs=require('node:fs');"
+        "const puppeteer=require('puppeteer');"
+        "const path=puppeteer.executablePath();"
+        "if(path && fs.existsSync(path)){process.exit(0);}"
+        "process.stderr.write(path || '');"
+        "process.exit(1);"
+    )
+    check = subprocess.run(
+        ["node", "-e", check_script],
         cwd=str(_SIDECAR_DIR),
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=30,
     )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "npm install failed").strip()
-        raise RuntimeError(f"WhatsApp sidecar dependency install failed: {detail}")
+    if check.returncode == 0:
+        return None
+
+    local_executable = _detect_local_chromium_executable()
+    if local_executable:
+        return local_executable
+
+    install_cmd = [
+        "node",
+        str(_SIDECAR_DIR / "node_modules" / "puppeteer" / "lib" / "cjs" / "puppeteer" / "node" / "cli.js"),
+        "install",
+        "chrome@stable",
+    ]
+    install = subprocess.run(
+        install_cmd,
+        cwd=str(_SIDECAR_DIR),
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if install.returncode != 0:
+        expected_path = (check.stderr or check.stdout or "").strip()
+        _purge_puppeteer_cache(expected_path)
+        install = subprocess.run(
+            install_cmd,
+            cwd=str(_SIDECAR_DIR),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    if install.returncode != 0:
+        detail = (install.stderr or install.stdout or "puppeteer browser install failed").strip()
+        raise RuntimeError(f"WhatsApp sidecar browser install failed: {detail}")
+
+    recheck = subprocess.run(
+        ["node", "-e", check_script],
+        cwd=str(_SIDECAR_DIR),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if recheck.returncode != 0:
+        expected = (check.stderr or check.stdout or "unknown executable path").strip()
+        raise RuntimeError(
+            "WhatsApp sidecar browser install completed but Chrome binary is still missing"
+            + (f": {expected}" if expected else ".")
+        )
+    return None
+
+
+def _purge_puppeteer_cache(expected_path: str) -> None:
+    candidate = Path(expected_path)
+    if expected_path and candidate.suffix.lower() == ".exe":
+        cache_root = candidate.parent.parent.parent
+        if cache_root.name == "chrome":
+            shutil.rmtree(cache_root, ignore_errors=True)
+
+
+def _detect_local_chromium_executable() -> str | None:
+    candidates = [
+        Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+        Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+        Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+        Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+        Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        Path("/usr/bin/google-chrome"),
+        Path("/usr/bin/chromium-browser"),
+        Path("/usr/bin/chromium"),
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+    return None
 
 
 async def _restore_session_from_db() -> None:
