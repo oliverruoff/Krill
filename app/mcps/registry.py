@@ -9,6 +9,7 @@ from .memory_access import MemoryAccessMCP
 from .google_services import GoogleServicesMCP
 from .opencode import OpenCodeMCP
 from .timed_jobs import TimedJobsMCP
+from .whatsapp import WhatsAppMCP
 
 
 _MCPS: dict[str, MCPPlugin] = {
@@ -20,6 +21,7 @@ _MCPS: dict[str, MCPPlugin] = {
     "google_services": GoogleServicesMCP(),
     "opencode": OpenCodeMCP(),
     "timed_jobs": TimedJobsMCP(),
+    "whatsapp": WhatsAppMCP(),
 }
 
 

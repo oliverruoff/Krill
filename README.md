@@ -23,6 +23,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
   - Local Files (directory listing, glob/grep/search, file reads/writes/edits, copy/move/delete, command execution)
 - Use integrations for chat ingress channels:
   - Telegram (bot token based Telegram chat ingress)
+  - WhatsApp Web (allowlisted inbound messages bridged into Gateway automation chats)
 - Schedule timed jobs (daily/weekly/monthly/one-time) with hidden prompts and channel fan-out (Gateway, Telegram)
 - Let Krill orchestrate multi-step tool flows automatically (sequential recursive tool calls)
 - See live tool/system trace messages while execution runs
@@ -108,6 +109,15 @@ Google Services MCP notes:
 Current integrations:
 
 - `telegram`
+- `whatsapp`
+
+WhatsApp integration notes:
+
+- optional and disabled by default
+- if unused, it can be ignored without affecting Gateway/Telegram/provider behavior
+- WhatsApp API endpoints are present, but runtime polling/auto-reply only runs when the WhatsApp integration and MCP are enabled
+- uses a local sidecar (`whatsapp-web.js`) with QR connect popup and allowlist filtering
+- session auth is persisted in `braindump.db` (`whatsapp_state.session_blob`) for restart recovery
 
 Telegram integration notes:
 

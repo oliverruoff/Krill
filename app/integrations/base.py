@@ -1,6 +1,6 @@
 """Base integration protocol and config field model for optional connectors."""
 
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -8,7 +8,7 @@ from pydantic import BaseModel
 class IntegrationConfigField(BaseModel):
     id: str
     label: str
-    type: str = "text"
+    type: Literal["text", "password", "select", "textarea"] = "text"
     required: bool = False
     placeholder: str = ""
     description: str = ""

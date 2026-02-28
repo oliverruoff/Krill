@@ -247,8 +247,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           last_update_id INTEGER NOT NULL DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS whatsapp_state (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          session_blob TEXT NOT NULL DEFAULT ''
+        );
+        
         INSERT OR IGNORE INTO settings_core (id) VALUES (1);
         INSERT OR IGNORE INTO telegram_state (id) VALUES (1);
+        INSERT OR IGNORE INTO whatsapp_state (id) VALUES (1);
 
         CREATE TABLE IF NOT EXISTS short_term_memories (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -295,6 +301,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_settings_core_column(conn, "memory_extraction_interval", "INTEGER NOT NULL DEFAULT 10")
     _ensure_settings_core_column(conn, "user_message_count", "INTEGER NOT NULL DEFAULT 0")
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
     _ensure_timed_jobs_column(conn, "timezone_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
@@ -321,6 +328,14 @@ def _ensure_timed_jobs_column(conn: sqlite3.Connection, column_name: str, defini
     if column_name in existing:
         return
     conn.execute(f"ALTER TABLE timed_jobs ADD COLUMN {column_name} {definition}")
+
+
+def _ensure_whatsapp_state_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
+    rows = conn.execute("PRAGMA table_info(whatsapp_state)").fetchall()
+    existing = {str(row["name"]) for row in rows}
+    if column_name in existing:
+        return
+    conn.execute(f"ALTER TABLE whatsapp_state ADD COLUMN {column_name} {definition}")
 
 
 async def ensure_settings_file() -> None:
@@ -1528,3 +1543,41 @@ async def view_braindump(*, show_secrets: bool = False) -> dict[str, object]:
     await ensure_settings_file()
     async with _DB_LOCK:
         return await asyncio.to_thread(_view_braindump_sync, show_secrets)
+
+
+def _load_whatsapp_session_blob_sync() -> str:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute("SELECT session_blob FROM whatsapp_state WHERE id = 1").fetchone()
+        if row is None:
+            return ""
+        value = row["session_blob"]
+        return str(value) if isinstance(value, str) else ""
+    finally:
+        conn.close()
+
+
+async def load_whatsapp_session_blob() -> str:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_load_whatsapp_session_blob_sync)
+
+
+def _save_whatsapp_session_blob_sync(blob: str) -> None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute("INSERT OR IGNORE INTO whatsapp_state (id) VALUES (1)")
+        conn.execute("UPDATE whatsapp_state SET session_blob = ? WHERE id = 1", (blob,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def save_whatsapp_session_blob(blob: str) -> None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        await asyncio.to_thread(_save_whatsapp_session_blob_sync, blob)

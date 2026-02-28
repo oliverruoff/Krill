@@ -166,6 +166,7 @@ const state = {
   telegramOwnerUserId: "",
   telegramOwnerChatId: "",
   googleOauthStatus: null,
+  whatsappContacts: [],
   mcpAutosaveTimerId: null,
   mcpAutosavePendingId: "",
   mcpAutosaveQueuedId: "",
@@ -3507,6 +3508,59 @@ async function fetchGoogleOauthStatus() {
   return state.googleOauthStatus;
 }
 
+async function fetchWhatsappContacts() {
+  try {
+    const response = await fetch("/api/mcps/whatsapp/contacts", { cache: "no-store" });
+    if (!response.ok) {
+      state.whatsappContacts = [];
+      return [];
+    }
+    const payload = await response.json();
+    const contacts = Array.isArray(payload?.contacts) ? payload.contacts : [];
+    state.whatsappContacts = contacts
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => {
+        const number = String(entry.number || "").trim();
+        const name = String(entry.name || number).trim() || number;
+        return { number, name };
+      })
+      .filter((entry) => entry.number);
+    return state.whatsappContacts;
+  } catch (_error) {
+    state.whatsappContacts = [];
+    return [];
+  }
+}
+
+async function fetchWhatsappRuntimeState() {
+  try {
+    const response = await fetch("/api/mcps/whatsapp/status", { cache: "no-store" });
+    if (!response.ok) {
+      return "unknown";
+    }
+    const payload = await response.json();
+    return String(payload?.state || "unknown").toLowerCase();
+  } catch (_error) {
+    return "unknown";
+  }
+}
+
+async function syncWhatsappContactsWithRetry(maxAttempts = 8) {
+  const attempts = Number.isFinite(maxAttempts) ? Math.max(1, Math.floor(maxAttempts)) : 8;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const contacts = await fetchWhatsappContacts();
+    if (contacts.length > 0) {
+      return contacts;
+    }
+    const runtimeState = await fetchWhatsappRuntimeState();
+    if (runtimeState !== "authenticated" && runtimeState !== "initializing") {
+      return contacts;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+  }
+  return state.whatsappContacts;
+}
+
 async function startGoogleOauthLogin() {
   await persistMcpConfigsToSettings();
   const popup = window.open("/api/mcps/google/oauth/start", "krill-google-oauth", "width=640,height=760");
@@ -3651,6 +3705,11 @@ function encodeMultiselectParam(values) {
   return JSON.stringify(normalized);
 }
 
+function parseBooleanConfigParam(rawValue) {
+  const normalized = String(rawValue || "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function readMultiselectSelection(fieldsetNode) {
   if (!(fieldsetNode instanceof HTMLElement)) {
     return [];
@@ -3776,17 +3835,35 @@ function renderConfigPanel(container, items, getConfig, options) {
         return;
       }
 
+      let activeField = field;
+      if (options.kind === "mcp" && item.id === "whatsapp" && fieldId === "allowed_numbers") {
+        const contactOptions = Array.isArray(state.whatsappContacts)
+          ? state.whatsappContacts.map((entry) => ({
+            value: String(entry.number || ""),
+            label: `${String(entry.name || "").trim() || String(entry.number || "")} (${String(entry.number || "")})`,
+          })).filter((entry) => entry.value)
+          : [];
+        activeField = {
+          ...field,
+          type: "multiselect",
+          options: contactOptions,
+          description: contactOptions.length > 0
+            ? "Select allowlisted WhatsApp contacts."
+            : "No contacts loaded yet. Connect WhatsApp, then click Resync or Verify.",
+        };
+      }
+
       const fieldWrapper = document.createElement("div");
       fieldWrapper.className = "mcp-field";
 
       const fieldLabel = document.createElement("label");
-      fieldLabel.textContent = field.label || fieldId;
+      fieldLabel.textContent = activeField.label || fieldId;
       fieldLabel.setAttribute("for", `${options.kind}-${item.id}-${fieldId}`);
 
       let fieldInput;
-      if (field.type === "select") {
+      if (activeField.type === "select") {
         const selectNode = document.createElement("select");
-        const optionsList = Array.isArray(field.options) ? field.options : [];
+        const optionsList = Array.isArray(activeField.options) ? activeField.options : [];
         optionsList.forEach((optionItem) => {
           const optionValue = typeof optionItem?.value === "string" ? optionItem.value : "";
           if (!optionValue) {
@@ -3808,7 +3885,7 @@ function renderConfigPanel(container, items, getConfig, options) {
           config.params[fieldId] = selectNode.value;
         }
         fieldInput = selectNode;
-      } else if (field.type === "multiselect") {
+      } else if (activeField.type === "multiselect") {
         const fieldsetNode = document.createElement("div");
         fieldsetNode.className = "mcp-multiselect";
         fieldsetNode.dataset.action = "param-multiselect";
@@ -3816,9 +3893,43 @@ function renderConfigPanel(container, items, getConfig, options) {
         fieldsetNode.dataset.configId = item.id;
         fieldsetNode.dataset.fieldId = fieldId;
 
-        const optionsList = Array.isArray(field.options) ? field.options : [];
+        const optionsList = Array.isArray(activeField.options) ? activeField.options : [];
         const storedValues = parseMultiselectParam(config.params?.[fieldId]);
         const selectedSet = new Set(storedValues);
+        const isWhatsappAllowedNumbers = options.kind === "mcp" && item.id === "whatsapp" && fieldId === "allowed_numbers";
+        let contactListNode = fieldsetNode;
+
+        if (isWhatsappAllowedNumbers) {
+          const filterInput = document.createElement("input");
+          filterInput.type = "search";
+          filterInput.className = "mcp-contact-filter";
+          filterInput.placeholder = "Filter contacts";
+          filterInput.autocomplete = "off";
+          filterInput.spellcheck = false;
+
+          contactListNode = document.createElement("div");
+          contactListNode.className = "mcp-multiselect-list";
+
+          const applyContactFilter = () => {
+            const query = filterInput.value.trim().toLowerCase();
+            const rows = contactListNode.querySelectorAll(".mcp-multiselect-option");
+            rows.forEach((rowNode) => {
+              if (!(rowNode instanceof HTMLElement)) {
+                return;
+              }
+              if (!query) {
+                rowNode.classList.remove("hidden");
+                return;
+              }
+              const haystack = String(rowNode.dataset.searchText || "").toLowerCase();
+              rowNode.classList.toggle("hidden", !haystack.includes(query));
+            });
+          };
+
+          filterInput.addEventListener("input", applyContactFilter);
+          fieldsetNode.appendChild(filterInput);
+          fieldsetNode.appendChild(contactListNode);
+        }
 
         optionsList.forEach((optionItem) => {
           const optionValue = typeof optionItem?.value === "string" ? optionItem.value : "";
@@ -3833,6 +3944,10 @@ function renderConfigPanel(container, items, getConfig, options) {
 
           const optionRow = document.createElement("label");
           optionRow.className = "mcp-toggle";
+          if (isWhatsappAllowedNumbers) {
+            optionRow.classList.add("mcp-multiselect-option");
+            optionRow.dataset.searchText = `${optionLabel} ${optionValue}`.trim();
+          }
 
           const optionInput = document.createElement("input");
           optionInput.type = "checkbox";
@@ -3849,15 +3964,26 @@ function renderConfigPanel(container, items, getConfig, options) {
 
           optionRow.appendChild(optionInput);
           optionRow.appendChild(optionText);
-          fieldsetNode.appendChild(optionRow);
+          contactListNode.appendChild(optionRow);
         });
 
         config.params[fieldId] = encodeMultiselectParam(readMultiselectSelection(fieldsetNode));
         fieldInput = fieldsetNode;
+      } else if (activeField.type === "checkbox") {
+        const checkboxNode = document.createElement("input");
+        checkboxNode.type = "checkbox";
+        checkboxNode.checked = parseBooleanConfigParam(config.params?.[fieldId]);
+        fieldInput = checkboxNode;
+      } else if (activeField.type === "textarea") {
+        const textNode = document.createElement("textarea");
+        textNode.rows = 4;
+        textNode.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
+        textNode.placeholder = typeof activeField.placeholder === "string" ? activeField.placeholder : "";
+        fieldInput = textNode;
       } else {
         const inputNode = document.createElement("input");
-        inputNode.type = field.type === "password" ? "password" : "text";
-        if (field.type === "password") {
+        inputNode.type = activeField.type === "password" ? "password" : "text";
+        if (activeField.type === "password") {
           inputNode.autocomplete = "new-password";
           inputNode.name = `krill-ignore-${options.kind}-${item.id}-${fieldId}`;
           inputNode.setAttribute("autocapitalize", "off");
@@ -3867,7 +3993,7 @@ function renderConfigPanel(container, items, getConfig, options) {
           inputNode.setAttribute("data-1p-ignore", "true");
         }
         inputNode.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
-        inputNode.placeholder = typeof field.placeholder === "string" ? field.placeholder : "";
+        inputNode.placeholder = typeof activeField.placeholder === "string" ? activeField.placeholder : "";
         fieldInput = inputNode;
       }
 
@@ -3879,6 +4005,12 @@ function renderConfigPanel(container, items, getConfig, options) {
 
       fieldWrapper.appendChild(fieldLabel);
       fieldWrapper.appendChild(fieldInput);
+      if (typeof activeField.description === "string" && activeField.description.trim()) {
+        const helpText = document.createElement("small");
+        helpText.className = "mcp-description";
+        helpText.textContent = activeField.description.trim();
+        fieldWrapper.appendChild(helpText);
+      }
       cardBody.appendChild(fieldWrapper);
     });
 
@@ -4012,6 +4144,39 @@ function renderConfigPanel(container, items, getConfig, options) {
       cardBody.appendChild(actions);
     } else if (options.kind === "mcp") {
       if (item.id === "local_files") {
+        card.appendChild(cardBody);
+        container.appendChild(card);
+        return;
+      }
+      if (item.id === "whatsapp") {
+        const connectButton = document.createElement("button");
+        connectButton.type = "button";
+        connectButton.className = "mcp-link-btn";
+        connectButton.textContent = "Connect";
+        connectButton.dataset.action = "whatsapp-connect";
+        connectButton.dataset.configKind = options.kind;
+        connectButton.dataset.configId = item.id;
+
+        const verifyButton = document.createElement("button");
+        verifyButton.type = "button";
+        verifyButton.className = "mcp-link-btn";
+        verifyButton.textContent = "Verify";
+        verifyButton.dataset.action = "verify";
+        verifyButton.dataset.configKind = options.kind;
+        verifyButton.dataset.configId = item.id;
+
+        const resyncButton = document.createElement("button");
+        resyncButton.type = "button";
+        resyncButton.className = "mcp-link-btn";
+        resyncButton.textContent = "Resync";
+        resyncButton.dataset.action = "whatsapp-resync";
+        resyncButton.dataset.configKind = options.kind;
+        resyncButton.dataset.configId = item.id;
+
+        actions.appendChild(connectButton);
+        actions.appendChild(resyncButton);
+        actions.appendChild(verifyButton);
+        cardBody.appendChild(actions);
         card.appendChild(cardBody);
         container.appendChild(card);
         return;
@@ -4336,6 +4501,7 @@ async function loadGatewayMeta() {
     } catch (error) {
       state.googleOauthStatus = null;
     }
+    await fetchWhatsappContacts();
     syncTelegramFlagsFromIntegrationConfig();
     state.telegramOwnerUserId = typeof settings?.telegram_state?.owner_user_id === "string"
       ? settings.telegram_state.owner_user_id
@@ -5080,7 +5246,7 @@ function getIntegrationConfig(integrationId) {
 
 function handleMcpInputChange(event) {
   const target = event.target;
-  if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) {
+  if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement) && !(target instanceof HTMLTextAreaElement)) {
     return;
   }
 
@@ -5109,7 +5275,11 @@ function handleMcpInputChange(event) {
     if (!fieldId) {
       return;
     }
-    config.params[fieldId] = target.value;
+    if (target instanceof HTMLInputElement && target.type === "checkbox") {
+      config.params[fieldId] = target.checked ? "true" : "false";
+    } else {
+      config.params[fieldId] = target.value;
+    }
     if (configKind === "mcp") {
       scheduleMcpAutosave(configId);
     }
@@ -5208,6 +5378,37 @@ async function handleMcpActionClick(event) {
       return;
     }
 
+    if (action === "whatsapp-connect" && configKind === "mcp" && configId === "whatsapp") {
+      const popup = window.open("/api/mcps/whatsapp/connect", "krill-whatsapp-connect", "width=560,height=760");
+      if (!popup) {
+        setStatus("Popup blocked. Allow popups for this site to connect WhatsApp.", true);
+        return;
+      }
+      popup.focus();
+      setStatus("WhatsApp connect window opened.");
+      const checkTimer = window.setInterval(async () => {
+        if (!popup || popup.closed) {
+          window.clearInterval(checkTimer);
+          await syncWhatsappContactsWithRetry();
+          renderMcpPanel();
+        }
+      }, 1200);
+      return;
+    }
+
+    if (action === "whatsapp-resync" && configKind === "mcp" && configId === "whatsapp") {
+      const contacts = await syncWhatsappContactsWithRetry();
+      renderMcpPanel();
+      const count = Array.isArray(contacts) ? contacts.length : 0;
+      if (count > 0) {
+        setStatus(`WhatsApp contacts synced (${count}).`);
+        showToast(`WhatsApp contacts synced (${count}).`);
+      } else {
+        setStatus("No WhatsApp contacts synced yet. Verify WhatsApp is ready, then retry.", true);
+      }
+      return;
+    }
+
     if (action === "verify") {
       if (configKind === "integration") {
         const result = await verifyIntegrationConfig(configId);
@@ -5222,6 +5423,10 @@ async function handleMcpActionClick(event) {
         const result = await verifyMcpConfig(configId);
         const detail = typeof result?.detail === "string" ? result.detail.trim() : "";
         const message = detail ? `Tool verified: ${detail}` : "Tool verified.";
+        if (configId === "whatsapp") {
+          await syncWhatsappContactsWithRetry();
+          renderMcpPanel();
+        }
         setStatus(message);
         showToast(message);
       }
@@ -5815,6 +6020,25 @@ chatHistoryList.addEventListener("click", (event) => {
 });
 
 chatForm.addEventListener("submit", sendMessage);
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) {
+    return;
+  }
+  const payload = event.data;
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  if (payload.type !== "krill-whatsapp-connected") {
+    return;
+  }
+  const stateLabel = typeof payload.state === "string" ? payload.state : "ready";
+  void (async () => {
+    await syncWhatsappContactsWithRetry();
+    renderMcpPanel();
+    setStatus(`WhatsApp connected (${stateLabel}). Contacts synced.`);
+    showToast("WhatsApp connected.");
+  })();
+});
 window.addEventListener("beforeunload", () => {
   stopSpeechRecognition(true);
   if (state.chatSyncTimerId) {

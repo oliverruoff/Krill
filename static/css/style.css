@@ -1646,10 +1646,53 @@ button:disabled {
   font-size: 0.74rem;
 }
 
+.mcp-field input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+}
+
 .mcp-field select {
   padding: 0.34rem 0.45rem;
   border-radius: 8px;
   font-size: 0.74rem;
+}
+
+.mcp-field textarea {
+  padding: 0.34rem 0.45rem;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  min-height: 4.4rem;
+  resize: vertical;
+}
+
+.mcp-multiselect {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.mcp-multiselect-list {
+  border: 1px solid #d8e1ef;
+  border-radius: 8px;
+  padding: 0.28rem 0.38rem;
+  max-height: 11.5rem;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.mcp-contact-filter {
+  padding: 0.3rem 0.42rem;
+  border-radius: 8px;
+  font-size: 0.72rem;
+}
+
+.mcp-multiselect-option {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.mcp-multiselect-option.hidden {
+  display: none;
 }
 
 .mcp-card-body.hidden {

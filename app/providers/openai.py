@@ -44,6 +44,8 @@ class OpenAIProvider(LLMProvider):
             raise RuntimeError(f"OpenAI request failed ({exc.code}): {response_text}") from exc
         except error.URLError as exc:
             raise RuntimeError("Network error while contacting OpenAI.") from exc
+        except TimeoutError as exc:
+            raise RuntimeError("Network timeout while contacting OpenAI.") from exc
         except Exception as exc:
             raise RuntimeError("Unexpected error while contacting OpenAI.") from exc
 
