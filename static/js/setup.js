@@ -69,9 +69,25 @@ const state = {
   brainTables: [],
   selectedBrainTable: "",
   brainLoading: false,
+  theme: normalizeThemeMode(document.documentElement.getAttribute("data-theme")),
 };
 
 const MEMORY_MAX_LENGTH = 200000;
+
+function normalizeThemeMode(value) {
+  return String(value || "").trim().toLowerCase() === "dark" ? "dark" : "light";
+}
+
+function applyThemeMode(theme) {
+  const normalized = normalizeThemeMode(theme);
+  state.theme = normalized;
+  document.documentElement.setAttribute("data-theme", normalized);
+  try {
+    window.localStorage.setItem("krill-theme", normalized);
+  } catch (_error) {
+    // Ignore localStorage failures (private mode, blocked storage).
+  }
+}
 
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
@@ -414,6 +430,7 @@ function createSetupSnapshot() {
     tool_max_recursion: maxRecursion,
     tool_timeout_seconds: timeoutSeconds,
     memory_extraction_interval: extractionInterval,
+    theme: normalizeThemeMode(state.theme),
   };
 
   return JSON.stringify(snapshot);
@@ -458,6 +475,7 @@ function buildPayload() {
     tool_max_recursion: maxRecursion,
     tool_timeout_seconds: timeoutSeconds,
     memory_extraction_interval: extractionInterval,
+    theme: normalizeThemeMode(state.theme),
   };
 }
 
@@ -643,6 +661,7 @@ async function loadPage() {
     fields.toolTimeoutSeconds.value = String(Math.max(5, Math.min(300, state.toolTimeoutSeconds)));
     fields.memoryExtractionInterval.value = String(Math.max(1, Math.min(500, state.memoryExtractionInterval)));
     state.setupCompleted = settings.setup_completed ?? false;
+    applyThemeMode(settings.theme);
 
     renderProviderOptions();
     renderConfiguredProviders();

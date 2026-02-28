@@ -4,6 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Krill Gateway</title>
+    <script>
+      (function () {
+        let storedTheme = "";
+        try {
+          storedTheme = String(window.localStorage.getItem("krill-theme") || "").trim().toLowerCase();
+        } catch (_error) {
+          storedTheme = "";
+        }
+        const theme = storedTheme === "dark" ? "dark" : "light";
+        document.documentElement.setAttribute("data-theme", theme);
+      })();
+    </script>
     <link rel="icon" type="image/png" href="/static/img/krill_icon.png" />
     <link rel="stylesheet" href="/static/css/style.css" />
   </head>
@@ -45,6 +57,7 @@
             <button type="button" id="short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
             <button type="button" id="timed-jobs-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◷</span>Timed Jobs</button>
             <button type="button" id="token-usage-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▇</span>Token Usage</button>
+            <button type="button" id="theme-toggle-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◐</span>Theme: Light</button>
             <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
             <button type="button" id="brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
             <a href="/setup?edit=1" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>
@@ -125,6 +138,7 @@
               <button type="button" id="mobile-short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
               <button type="button" id="mobile-timed-jobs-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◷</span>Timed Jobs</button>
               <button type="button" id="mobile-token-usage-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▇</span>Token Usage</button>
+              <button type="button" id="mobile-theme-toggle-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◐</span>Theme: Light</button>
               <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
               <button type="button" id="mobile-brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
               <a href="/setup?edit=1" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>

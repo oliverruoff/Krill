@@ -31,6 +31,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Attach one image in Gateway/Telegram messages for transient vision analysis (no image file persistence)
 - Track token usage per chat and per day
 - Manage core/normal memories with per-type compaction in Memory Management (timestamp-preserving, lossless-oriented summarization)
+- Switch between professional light/dark themes from Gateway settings popovers (desktop + mobile); selection is persisted in `braindump.db`
 
 ## How Krill Works (Technical)
 
@@ -44,6 +45,7 @@ Krill persists runtime state in a normalized SQLite database at `data/braindump.
 - tool configs
 - daily token usage
 - advanced tool execution settings
+- UI theme preference (`light`/`dark`)
 
 Because all important runtime state is in one file, backup/restore is simple:
 

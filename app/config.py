@@ -123,6 +123,7 @@ class Settings(BaseModel):
     daily_token_usage: list[DailyTokenUsage] = Field(default_factory=list)
     active_chat_id: str = ""
     telegram_state: TelegramState = Field(default_factory=TelegramState)
+    theme: Literal["light", "dark"] = "light"
 
 
 class ShortTermMemoryItem(BaseModel):
@@ -159,7 +160,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           tool_max_recursion INTEGER NOT NULL DEFAULT 6,
           tool_timeout_seconds INTEGER NOT NULL DEFAULT 45,
           memory_extraction_interval INTEGER NOT NULL DEFAULT 10,
-          user_message_count INTEGER NOT NULL DEFAULT 0
+          user_message_count INTEGER NOT NULL DEFAULT 0,
+          theme TEXT NOT NULL DEFAULT 'light'
         );
 
         CREATE TABLE IF NOT EXISTS provider_configs (
@@ -306,6 +308,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_settings_core_column(conn, "user_message_count", "INTEGER NOT NULL DEFAULT 0")
     _ensure_settings_core_column(conn, "user_full_name", "TEXT NOT NULL DEFAULT ''")
     _ensure_settings_core_column(conn, "user_call_name", "TEXT NOT NULL DEFAULT ''")
+    _ensure_settings_core_column(conn, "theme", "TEXT NOT NULL DEFAULT 'light'")
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
     _ensure_timed_jobs_column(conn, "timezone_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
@@ -459,7 +462,8 @@ def _load_settings_sync() -> Settings:
             mcp_configs=mcp_configs,
             integration_configs=integration_configs,
             daily_token_usage=usage,
-            telegram_state=telegram_state
+            telegram_state=telegram_state,
+            theme=_normalize_theme_mode(core["theme"]),
         )
     finally:
         conn.close()
@@ -485,13 +489,13 @@ def _save_settings_sync(settings: Settings) -> None:
                 bot_name = ?, system_prompt = ?, user_full_name = ?, user_call_name = ?, setup_completed = ?, 
                 active_provider_id = ?, active_model_id = ?, active_chat_id = ?,
                 tool_max_recursion = ?, tool_timeout_seconds = ?,
-                memory_extraction_interval = ?
+                memory_extraction_interval = ?, theme = ?
             WHERE id = 1
         """, (
             settings.bot_name, settings.system_prompt, settings.user_full_name, settings.user_call_name, int(settings.setup_completed),
             settings.active_provider_id, settings.active_model_id, settings.active_chat_id,
             settings.tool_max_recursion, settings.tool_timeout_seconds,
-            settings.memory_extraction_interval
+            settings.memory_extraction_interval, _normalize_theme_mode(settings.theme)
         ))
         
         # 2. Providers
@@ -612,8 +616,16 @@ def _sync_active_selection(settings: Settings) -> Settings:
             "active_provider_id": active_provider_id,
             "active_model_id": active_model_id,
             "active_chat_id": active_chat_id,
+            "theme": _normalize_theme_mode(settings.theme),
         }
     )
+
+
+def _normalize_theme_mode(raw_theme: object) -> Literal["light", "dark"]:
+    value = str(raw_theme).strip().lower()
+    if value == "dark":
+        return "dark"
+    return "light"
 
 
 def _normalize_timezone_name(raw_timezone: object) -> str:

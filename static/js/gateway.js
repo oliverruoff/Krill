@@ -63,11 +63,13 @@ const mobileMemoryManagementButton = document.getElementById("mobile-memory-mana
 const mobileShortTermMemoryButton = document.getElementById("mobile-short-term-memory-btn");
 const mobileTimedJobsButton = document.getElementById("mobile-timed-jobs-btn");
 const mobileTokenUsageButton = document.getElementById("mobile-token-usage-btn");
+const mobileThemeToggleButton = document.getElementById("mobile-theme-toggle-btn");
 const mobileBrainViewButton = document.getElementById("mobile-brain-view-btn");
 const memoryManagementButton = document.getElementById("memory-management-btn");
 const shortTermMemoryButton = document.getElementById("short-term-memory-btn");
 const timedJobsButton = document.getElementById("timed-jobs-btn");
 const tokenUsageButton = document.getElementById("token-usage-btn");
+const themeToggleButton = document.getElementById("theme-toggle-btn");
 const brainViewButton = document.getElementById("brain-view-btn");
 const memoryModal = document.getElementById("memory-modal");
 const memoryModalBackdrop = document.getElementById("memory-modal-backdrop");
@@ -219,7 +221,34 @@ const state = {
   tokenUsageCustomFrom: "",
   tokenUsageCustomTo: "",
   tokenUsageIncludeZeroDays: true,
+  theme: normalizeThemeMode(document.documentElement.getAttribute("data-theme")),
 };
+
+function normalizeThemeMode(value) {
+  return String(value || "").trim().toLowerCase() === "dark" ? "dark" : "light";
+}
+
+function renderThemeToggleLabels() {
+  const modeLabel = state.theme === "dark" ? "Dark" : "Light";
+  if (themeToggleButton instanceof HTMLButtonElement) {
+    themeToggleButton.innerHTML = `<span class="menu-item-icon" aria-hidden="true">◐</span>Theme: ${modeLabel}`;
+  }
+  if (mobileThemeToggleButton instanceof HTMLButtonElement) {
+    mobileThemeToggleButton.innerHTML = `<span class="menu-item-icon" aria-hidden="true">◐</span>Theme: ${modeLabel}`;
+  }
+}
+
+function applyThemeMode(theme) {
+  const normalized = normalizeThemeMode(theme);
+  state.theme = normalized;
+  document.documentElement.setAttribute("data-theme", normalized);
+  try {
+    window.localStorage.setItem("krill-theme", normalized);
+  } catch (_error) {
+    // Ignore localStorage failures (private mode, blocked storage).
+  }
+  renderThemeToggleLabels();
+}
 
 function isMobileDrawerMode() {
   return window.matchMedia(`(max-width: ${MOBILE_DRAWER_BREAKPOINT}px)`).matches;
@@ -473,6 +502,20 @@ function isAnyChatBusy() {
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.className = isError ? "error" : "ok";
+}
+
+async function toggleThemePreference() {
+  if (!state.settings) {
+    return;
+  }
+
+  const nextTheme = state.theme === "dark" ? "light" : "dark";
+  const nextSettings = JSON.parse(JSON.stringify(state.settings));
+  nextSettings.theme = nextTheme;
+  const persisted = await persistSettings(nextSettings);
+  state.settings = persisted;
+  applyThemeMode(persisted.theme);
+  showToast(`Theme: ${state.theme}`);
 }
 
 function syncChatInputHeight() {
@@ -4996,6 +5039,7 @@ async function loadGatewayMeta() {
 
     state.providers = providers;
     state.settings = settings;
+    applyThemeMode(settings.theme);
     state.activeProviderId = settings.active_provider_id ?? "";
     state.activeModelId = activeConfig?.model ?? "";
     state.botName = typeof settings?.bot_name === "string" ? settings.bot_name.trim() : "";
@@ -6066,6 +6110,17 @@ if (tokenUsageButton instanceof HTMLButtonElement) {
   });
 }
 
+if (themeToggleButton instanceof HTMLButtonElement) {
+  themeToggleButton.addEventListener("click", async () => {
+    toggleMenu(false);
+    try {
+      await toggleThemePreference();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to switch theme."), true);
+    }
+  });
+}
+
 if (brainViewButton instanceof HTMLButtonElement) {
   brainViewButton.addEventListener("click", () => {
     toggleMenu(false);
@@ -6421,6 +6476,18 @@ if (mobileTokenUsageButton instanceof HTMLButtonElement) {
   });
 }
 
+if (mobileThemeToggleButton instanceof HTMLButtonElement) {
+  mobileThemeToggleButton.addEventListener("click", async () => {
+    toggleMobileSettingsMenu(false);
+    closeMobileDrawers();
+    try {
+      await toggleThemePreference();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to switch theme."), true);
+    }
+  });
+}
+
 if (mobileBrainViewButton instanceof HTMLButtonElement) {
   mobileBrainViewButton.addEventListener("click", () => {
     toggleMobileSettingsMenu(false);
@@ -6704,6 +6771,7 @@ window.addEventListener("beforeunload", () => {
   }
 });
 window.addEventListener("load", () => {
+  applyThemeMode(state.theme);
   initializeSpeechRecognition();
   syncChatInputHeight();
   renderPendingImageAttachment();

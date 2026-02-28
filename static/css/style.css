@@ -1,15 +1,45 @@
 :root {
   --bg: #f6f8fb;
   --surface: #ffffff;
+  --surface-soft: #fcfdff;
   --text: #122033;
   --muted: #4d5b6f;
+  --muted-strong: #6c7b91;
   --border: #d8e0ea;
   --accent: #FB9682;
   --accent-strong: #68D7FC;
   --accent-gradient: linear-gradient(120deg, #FB9682 0%, #68D7FC 100%);
+  --bg-gradient: linear-gradient(150deg, #edf3fb 0%, #f8fafd 100%);
+  --input-bg: #ffffff;
+  --secondary-bg: #e7edf5;
+  --secondary-hover: #dce5f0;
+  --text-inverse: #ffffff;
+  --menu-surface: #ffffff;
   --error: #b42318;
   --ok: #027a48;
   --shadow: 0 12px 28px rgba(18, 32, 51, 0.08);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0e131b;
+  --surface: #161d29;
+  --surface-soft: #1b2432;
+  --text: #ebf2ff;
+  --muted: #9eacc2;
+  --muted-strong: #aab8cd;
+  --border: #2b3649;
+  --accent: #ba6a5a;
+  --accent-strong: #3e9dc0;
+  --accent-gradient: linear-gradient(120deg, #a85a4d 0%, #377f9f 100%);
+  --bg-gradient: radial-gradient(circle at top, #1a2538 0%, #0e131b 55%, #0b1018 100%);
+  --input-bg: #141c28;
+  --secondary-bg: #253247;
+  --secondary-hover: #2d3c54;
+  --text-inverse: #f4f8ff;
+  --menu-surface: #141c28;
+  --shadow: 0 14px 32px rgba(0, 0, 0, 0.44);
+  color-scheme: dark;
 }
 
 * {
@@ -21,7 +51,7 @@ body {
   min-height: 100vh;
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   color: var(--text);
-  background: linear-gradient(150deg, #edf3fb 0%, #f8fafd 100%);
+  background: var(--bg-gradient);
 }
 
 .app-shell {
@@ -153,7 +183,7 @@ label {
 .count-hint {
   margin-left: 0.35rem;
   font-weight: 500;
-  color: #6c7b91;
+  color: var(--muted-strong);
   font-size: 0.82rem;
 }
 
@@ -166,7 +196,7 @@ textarea {
   padding: 0.62rem 0.7rem;
   font: inherit;
   color: inherit;
-  background-color: #fff;
+  background-color: var(--input-bg);
   transition: border-color 0.24s ease, outline-color 0.24s ease, box-shadow 0.24s ease;
 }
 
@@ -193,11 +223,11 @@ textarea:focus {
 
 .secondary {
   color: var(--text);
-  background: #e7edf5;
+  background: var(--secondary-bg);
 }
 
 .secondary:hover {
-  background: #dce5f0;
+  background: var(--secondary-hover);
 }
 
 button {
@@ -207,7 +237,7 @@ button {
   padding: 0.72rem 0.95rem;
   font: inherit;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-inverse);
   background: var(--accent-gradient);
   background-size: 180% 180%;
   background-position: 0% 50%;
@@ -845,21 +875,16 @@ button:disabled {
 .brain-modal-close {
   margin: 0;
   border: 0;
-  border-radius: 8px;
-  width: 2rem;
-  height: 2rem;
   padding: 0;
-  background: #eef3fa;
-  color: #425570;
-  font-size: 1.2rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.4rem;
   line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .brain-modal-close:hover {
-  background: #e0e8f3;
+  background: transparent;
+  color: var(--text);
 }
 
 .brain-modal-toolbar {
@@ -1187,7 +1212,7 @@ button:disabled {
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: #fcfdff;
+  background: var(--surface-soft);
   padding: 0.65rem;
   overflow-x: auto;
   overflow-y: hidden;
@@ -1327,21 +1352,16 @@ button:disabled {
 .memory-modal-close {
   margin: 0;
   border: 0;
-  border-radius: 8px;
-  width: 2rem;
-  height: 2rem;
   padding: 0;
-  background: #eef3fa;
-  color: #425570;
-  font-size: 1.2rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.4rem;
   line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .memory-modal-close:hover {
-  background: #e0e8f3;
+  background: transparent;
+  color: var(--text);
 }
 
 .memory-columns {
@@ -2042,6 +2062,10 @@ button:disabled {
 .trace-toggle-btn {
   margin: 0.1rem 0 0;
   padding: 0;
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-self: flex-start;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2827,6 +2851,193 @@ button:disabled {
     max-height: 40vh;
     overflow-y: auto;
   }
+}
+
+:root[data-theme="dark"] body {
+  background: var(--bg-gradient);
+}
+
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .gateway-topbar,
+:root[data-theme="dark"] .chat-history-panel,
+:root[data-theme="dark"] .chat-panel,
+:root[data-theme="dark"] .mcp-side-panel,
+:root[data-theme="dark"] .memory-modal-card,
+:root[data-theme="dark"] .brain-modal-card,
+:root[data-theme="dark"] .menu-popover,
+:root[data-theme="dark"] .mcp-card,
+:root[data-theme="dark"] .timed-job-item,
+:root[data-theme="dark"] .token-usage-chart,
+:root[data-theme="dark"] .chat-bubble {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow);
+}
+
+:root[data-theme="dark"] .setup-choice-card,
+:root[data-theme="dark"] .memory-section,
+:root[data-theme="dark"] .advanced-settings,
+:root[data-theme="dark"] .memory-card,
+:root[data-theme="dark"] .chat-history-item,
+:root[data-theme="dark"] .memory-column,
+:root[data-theme="dark"] .memory-modal-card-item,
+:root[data-theme="dark"] .brain-table-view,
+:root[data-theme="dark"] .brain-table-list,
+:root[data-theme="dark"] .brain-table-list-wrap,
+:root[data-theme="dark"] .brain-table-view-wrap,
+:root[data-theme="dark"] .mcp-guide,
+:root[data-theme="dark"] .timed-jobs-editor,
+:root[data-theme="dark"] .timed-jobs-list-wrap,
+:root[data-theme="dark"] .token-usage-bars {
+  background: var(--surface-soft);
+  border-color: var(--border);
+}
+
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] .mcp-contact-filter,
+:root[data-theme="dark"] .timed-job-check,
+:root[data-theme="dark"] .token-usage-check,
+:root[data-theme="dark"] .short-term-item {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .menu-item,
+:root[data-theme="dark"] .menu-item-button,
+:root[data-theme="dark"] .secondary,
+:root[data-theme="dark"] .mobile-settings-btn,
+:root[data-theme="dark"] .mobile-drawer-handle,
+:root[data-theme="dark"] .new-chat-btn,
+:root[data-theme="dark"] .trace-toggle-btn,
+:root[data-theme="dark"] .compact-btn,
+:root[data-theme="dark"] .mcp-link-btn,
+:root[data-theme="dark"] .outline-btn,
+:root[data-theme="dark"] .memory-compact-btn,
+:root[data-theme="dark"] .memory-add-btn {
+  background: var(--secondary-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .menu-item:hover,
+:root[data-theme="dark"] .menu-item-button:hover,
+:root[data-theme="dark"] .secondary:hover,
+:root[data-theme="dark"] .mobile-settings-btn:hover,
+:root[data-theme="dark"] .mobile-drawer-handle:hover,
+:root[data-theme="dark"] .new-chat-btn:hover,
+:root[data-theme="dark"] .trace-toggle-btn:hover,
+:root[data-theme="dark"] .compact-btn:hover,
+:root[data-theme="dark"] .mcp-link-btn:hover,
+:root[data-theme="dark"] .outline-btn:hover,
+:root[data-theme="dark"] .memory-compact-btn:hover,
+:root[data-theme="dark"] .memory-add-btn:hover {
+  background: var(--secondary-hover);
+}
+
+:root[data-theme="dark"] .menu-popover,
+:root[data-theme="dark"] .mobile-settings-popover {
+  background: var(--menu-surface);
+}
+
+:root[data-theme="dark"] .assistant-meta,
+:root[data-theme="dark"] .assistant-meta-subtle,
+:root[data-theme="dark"] .current-chat-title,
+:root[data-theme="dark"] .mcp-description,
+:root[data-theme="dark"] .memory-token-subtle,
+:root[data-theme="dark"] .memory-modal-card-time,
+:root[data-theme="dark"] .memory-edit-hint,
+:root[data-theme="dark"] .brain-modal-meta,
+:root[data-theme="dark"] .token-usage-stat,
+:root[data-theme="dark"] .timed-job-field label,
+:root[data-theme="dark"] .menu-item-icon,
+:root[data-theme="dark"] .count-hint {
+  color: var(--muted);
+}
+
+:root[data-theme="dark"] .current-chat-title {
+  color: #f2f7ff;
+}
+
+:root[data-theme="dark"] .chat-thread {
+  background: #111a26;
+  border-color: var(--border);
+}
+
+:root[data-theme="dark"] .chat-message.system .chat-bubble {
+  border-color: #3a475d;
+  background: #182334;
+  color: #b7c5da;
+}
+
+:root[data-theme="dark"] .chat-message.assistant.status-queued .chat-bubble,
+:root[data-theme="dark"] .chat-message.assistant.status-processing .chat-bubble {
+  background: #172131;
+  border-color: #324156;
+}
+
+:root[data-theme="dark"] .chat-composer .actions #mic-btn,
+:root[data-theme="dark"] .chat-composer .actions #image-upload-btn {
+  background: #1c2737;
+  border-color: var(--border);
+  color: #b7c7df;
+}
+
+:root[data-theme="dark"] .chat-composer .actions #mic-btn:hover,
+:root[data-theme="dark"] .chat-composer .actions #image-upload-btn:hover {
+  background: #253247;
+  color: #d6e4f8;
+}
+
+:root[data-theme="dark"] .inline-help {
+  border-color: var(--border);
+  background: #1c2737;
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .inline-help::after {
+  background: #101925;
+  border-color: var(--border);
+  color: #d8e5f7;
+}
+
+:root[data-theme="dark"] .brain-table-item {
+  background: #162132;
+  border-color: var(--border);
+  color: #d8e5f7;
+}
+
+:root[data-theme="dark"] .brain-table-item:hover {
+  background: #243247;
+}
+
+:root[data-theme="dark"] .brain-table-item.active {
+  background: #2b3f58;
+  border-color: #506a8a;
+}
+
+:root[data-theme="dark"] .brain-grid th {
+  background: #202d42;
+}
+
+:root[data-theme="dark"] a {
+  color: #9fd5ff;
+}
+
+:root[data-theme="dark"] .chat-thread pre,
+:root[data-theme="dark"] .chat-thread code,
+:root[data-theme="dark"] .tool-step {
+  background: #101722;
+  border-color: #243246;
+  color: #e8effc;
+}
+
+:root[data-theme="dark"] .mobile-drawer-backdrop,
+:root[data-theme="dark"] .memory-modal-backdrop,
+:root[data-theme="dark"] .brain-modal-backdrop {
+  background: rgba(3, 7, 13, 0.72);
 }
 
 @media (max-width: 520px) {
