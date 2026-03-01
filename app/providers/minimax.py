@@ -1,4 +1,4 @@
-"""OpenRouter provider implementation with model resolution and API helpers."""
+"""MiniMax provider implementation."""
 
 import asyncio
 import json
@@ -7,16 +7,12 @@ from urllib import error, request
 from .base import LLMProvider
 
 
-class OpenRouterProvider(LLMProvider):
-    provider_id = "openrouter"
-    display_name = "OpenRouter"
-    api_key_url = "https://openrouter.ai/keys"
+class MiniMaxProvider(LLMProvider):
+    provider_id = "minimax"
+    display_name = "MiniMax"
+    api_key_url = "https://platform.minimax.io/user-center/basic-information/interface-key"
     available_models = [
-        {"id": "free", "label": "Free", "token_limit": 200000, "supports_images": False},
-        {"id": "minimax/minimax-m2.5", "label": "MiniMax M2.5", "token_limit": 197000, "supports_images": False},
-        {"id": "qwen/qwen3.5-flash-02-23", "label": "Qwen 3.5 Flash", "token_limit": 1000000, "supports_images": False},
-        {"id": "moonshotai/kimi-k2.5", "label": "Kimi K2.5", "token_limit": 262144, "supports_images": False},
-        {"id": "z-ai/glm-5", "label": "GLM 5", "token_limit": 204800, "supports_images": False},
+        {"id": "MiniMax-M2.5", "label": "MiniMax-M2.5", "token_limit": 197000, "supports_images": False},
     ]
 
     async def generate(
@@ -40,15 +36,15 @@ class OpenRouterProvider(LLMProvider):
             response_body = await asyncio.to_thread(_post_json_return_body, payload, cleaned_api_key)
         except error.HTTPError as exc:
             response_text = _safe_read_error(exc)
-            raise RuntimeError(f"OpenRouter request failed ({exc.code}): {response_text}") from exc
+            raise RuntimeError(f"MiniMax request failed ({exc.code}): {response_text}") from exc
         except error.URLError as exc:
-            raise RuntimeError("Network error while contacting OpenRouter.") from exc
+            raise RuntimeError("Network error while contacting MiniMax.") from exc
         except Exception as exc:
-            raise RuntimeError("Unexpected error while contacting OpenRouter.") from exc
+            raise RuntimeError("Unexpected error while contacting MiniMax.") from exc
 
         text = _extract_text(response_body)
         if not text:
-            raise RuntimeError("OpenRouter returned an empty response.")
+            raise RuntimeError("MiniMax returned an empty response.")
 
         used_tokens = _extract_total_tokens(response_body)
         return text, used_tokens
@@ -69,34 +65,27 @@ class OpenRouterProvider(LLMProvider):
         except error.HTTPError as exc:
             response_text = _safe_read_error(exc)
             if exc.code == 401:
-                return False, "OpenRouter rejected the API key."
+                return False, "MiniMax rejected the API key."
             if exc.code == 403:
                 detail = _extract_error_detail(response_text)
-                return False, f"OpenRouter request was forbidden: {detail}"
+                return False, f"MiniMax request was forbidden: {detail}"
 
-            return False, f"OpenRouter verification failed ({exc.code}): {response_text}"
+            return False, f"MiniMax verification failed ({exc.code}): {response_text}"
         except error.URLError:
-            return False, "Network error while contacting OpenRouter."
+            return False, "Network error while contacting MiniMax."
         except Exception:
-            return False, "Unexpected error while verifying OpenRouter credentials."
+            return False, "Unexpected error while verifying MiniMax credentials."
 
         if status_code == 200:
-            return True, "OpenRouter credentials verified."
+            return True, "MiniMax credentials verified."
 
-        return False, f"OpenRouter returned unexpected status code {status_code}."
+        return False, f"MiniMax returned unexpected status code {status_code}."
 
 
 def _resolve_model(model: str) -> str:
     resolved = model.strip()
     if not resolved:
-        return "openrouter/free"
-
-    lowered = resolved.lower()
-    if lowered == "free":
-        return "openrouter/free"
-
-    if lowered in {"openrouter/free", "openrouter/auto"}:
-        return lowered
+        return "MiniMax-M2.5"
 
     return resolved
 
@@ -121,7 +110,7 @@ def _build_messages(history: list[dict[str, str]], prompt: str, system_prompt: s
 def _post_json_status(payload: dict[str, object], api_key: str) -> int:
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(
-        url="https://openrouter.ai/api/v1/chat/completions",
+        url="https://api.minimax.io/v1/chat/completions",
         data=body,
         headers={
             "Content-Type": "application/json",
@@ -138,7 +127,7 @@ def _post_json_status(payload: dict[str, object], api_key: str) -> int:
 def _post_json_return_body(payload: dict[str, object], api_key: str) -> dict[str, object]:
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(
-        url="https://openrouter.ai/api/v1/chat/completions",
+        url="https://api.minimax.io/v1/chat/completions",
         data=body,
         headers={
             "Content-Type": "application/json",

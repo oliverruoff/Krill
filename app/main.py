@@ -1324,13 +1324,18 @@ def _can_complete_setup(settings: Settings) -> bool:
 
 
 def _validate_mcp_configs(settings: Settings) -> None:
+    valid_configs = {}
     for mcp_id, mcp_config in settings.mcp_configs.items():
         if not is_supported_mcp(mcp_id):
-            raise HTTPException(status_code=422, detail=f"Unsupported MCP: {mcp_id}")
+            continue
 
         mcp = get_mcp(mcp_id)
         if mcp is None:
-            raise HTTPException(status_code=422, detail=f"MCP unavailable: {mcp_id}")
+            continue
+            
+        valid_configs[mcp_id] = mcp_config
+        
+    settings.mcp_configs = valid_configs
 
 
 def _merge_google_managed_oauth_params(existing: Settings, incoming: Settings) -> None:
