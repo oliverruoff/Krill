@@ -229,12 +229,17 @@ function normalizeThemeMode(value) {
 }
 
 function renderThemeToggleLabels() {
-  const modeLabel = state.theme === "dark" ? "Dark" : "Light";
+  const nextModeLabel = state.theme === "dark" ? "Light" : "Dark";
+  const buttonLabel = `Switch to ${nextModeLabel} Mode`;
   if (themeToggleButton instanceof HTMLButtonElement) {
-    themeToggleButton.innerHTML = `<span class="menu-item-icon" aria-hidden="true">◐</span>Theme: ${modeLabel}`;
+    themeToggleButton.innerHTML = `<span class="menu-item-icon" aria-hidden="true">◐</span>${buttonLabel}`;
+    themeToggleButton.setAttribute("aria-label", buttonLabel);
+    themeToggleButton.title = buttonLabel;
   }
   if (mobileThemeToggleButton instanceof HTMLButtonElement) {
-    mobileThemeToggleButton.innerHTML = `<span class="menu-item-icon" aria-hidden="true">◐</span>Theme: ${modeLabel}`;
+    mobileThemeToggleButton.innerHTML = `<span class="menu-item-icon" aria-hidden="true">◐</span>${buttonLabel}`;
+    mobileThemeToggleButton.setAttribute("aria-label", buttonLabel);
+    mobileThemeToggleButton.title = buttonLabel;
   }
 }
 
