@@ -2,6 +2,7 @@
 
 from .base import LLMProvider
 from .gemini import GeminiProvider
+from .openai_codex_oauth import OpenAICodexOAuthProvider
 from .openai import OpenAIProvider
 from .openrouter import OpenRouterProvider
 
@@ -9,6 +10,7 @@ from .openrouter import OpenRouterProvider
 _PROVIDERS: dict[str, LLMProvider] = {
     "gemini": GeminiProvider(),
     "openai": OpenAIProvider(),
+    "openai_codex_oauth": OpenAICodexOAuthProvider(),
     "openrouter": OpenRouterProvider(),
 }
 
@@ -26,6 +28,7 @@ def get_provider_options() -> list[dict[str, object]]:
                 "id": provider.provider_id,
                 "label": provider.display_name,
                 "api_key_url": provider.api_key_url,
+                "auth_mode": str(getattr(provider, "auth_mode", "api_key") or "api_key"),
                 "models": provider.available_models,
             }
         )

@@ -57,10 +57,19 @@ Because all important runtime state is in one file, backup/restore is simple:
 Krill is provider-agnostic through a registry pattern:
 
 - `openai`
+- `openai_codex_oauth` (ChatGPT/Codex OAuth)
 - `gemini`
 - `openrouter`
 
 Provider modules live in `app/providers/`, with shared interface in `app/providers/base.py` and registration in `app/providers/registry.py`.
+
+OpenAI OAuth provider notes:
+
+- choose `openai_codex_oauth` in Setup and click **Connect OpenAI**
+- Krill opens an OAuth popup and stores subscription credentials in `provider_configs`
+- no owner-managed OAuth client id/secret required for this provider flow
+- automatic callback mode uses `KRILL_PUBLIC_BASE_URL` if set; manual mode is also supported by pasting the final redirect URL/code
+- this uses ChatGPT/Codex OAuth tokens (subscription auth), not OpenAI Platform API keys
 
 ### 3) Tools (MCP layer)
 

@@ -25,6 +25,12 @@ const fields = {
   providerApiHelp: document.getElementById("provider-api-help"),
   providerApiLink: document.getElementById("provider-api-link"),
   providerApiKey: document.getElementById("provider_api_key"),
+  providerOauthPanel: document.getElementById("provider-oauth-panel"),
+  providerOauthStatus: document.getElementById("provider-oauth-status"),
+  providerOauthConnectButton: document.getElementById("provider-oauth-connect-btn"),
+  providerOauthDisconnectButton: document.getElementById("provider-oauth-disconnect-btn"),
+  providerOauthManualInput: document.getElementById("provider_oauth_manual_input"),
+  providerOauthCompleteButton: document.getElementById("provider-oauth-complete-btn"),
   coreMemoryInput: document.getElementById("core_memory_input"),
   addCoreMemoryButton: document.getElementById("add-core-memory-btn"),
   coreMemoryList: document.getElementById("core-memory-list"),
@@ -70,6 +76,9 @@ const state = {
   selectedBrainTable: "",
   brainLoading: false,
   theme: normalizeThemeMode(document.documentElement.getAttribute("data-theme")),
+  openaiOauthStatus: null,
+  openaiOauthBundle: "",
+  openaiOauthUnsupportedModels: [],
 };
 
 const MEMORY_MAX_LENGTH = 200000;
@@ -153,11 +162,15 @@ function renderProviderOptions() {
   if (state.providers.length > 0) {
     renderModelOptions(fields.providerSelect.value);
     renderProviderApiHelp(fields.providerSelect.value);
+    void refreshOpenAIOAuthStatus()
+      .then(() => refreshOpenAIOAuthSupportedModels())
+      .then(() => renderProviderAuthInputs(fields.providerSelect.value));
     return;
   }
 
   fields.modelSelect.value = "";
   renderProviderApiHelp("");
+  renderProviderAuthInputs("");
 }
 
 function renderModelOptions(providerId) {
@@ -200,6 +213,181 @@ function renderProviderApiHelp(providerId) {
 
   fields.providerApiLink.href = apiKeyUrl;
   fields.providerApiHelp.classList.remove("hidden");
+}
+
+function isOpenAIOAuthProvider(providerId) {
+  const provider = getProviderById(providerId);
+  return provider?.id === "openai_codex_oauth" || provider?.auth_mode === "oauth";
+}
+
+async function refreshOpenAIOAuthStatus() {
+  try {
+    const response = await fetch("/api/providers/openai-codex/oauth/status", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("OAuth status unavailable.");
+    }
+    const payload = await response.json();
+    state.openaiOauthStatus = payload && typeof payload === "object" ? payload : null;
+    state.openaiOauthBundle = typeof payload?.credential_bundle === "string" ? payload.credential_bundle : "";
+    if (state.providerConfigs.openai_codex_oauth) {
+      state.providerConfigs.openai_codex_oauth.api_key = state.openaiOauthBundle;
+    }
+    return state.openaiOauthStatus;
+  } catch (_error) {
+    state.openaiOauthStatus = null;
+    return null;
+  }
+}
+
+async function refreshOpenAIOAuthSupportedModels() {
+  const provider = getProviderById("openai_codex_oauth");
+  if (!provider) {
+    return;
+  }
+
+  const connected = Boolean(state.openaiOauthStatus?.connected);
+  if (!connected) {
+    state.openaiOauthUnsupportedModels = [];
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/providers/openai-codex/oauth/models", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("Failed to load supported models.");
+    }
+    const payload = await response.json();
+    const models = Array.isArray(payload?.models) ? payload.models : [];
+    const unsupported = Array.isArray(payload?.unsupported_models) ? payload.unsupported_models : [];
+    if (models.length > 0) {
+      provider.models = models;
+    }
+    state.openaiOauthUnsupportedModels = unsupported;
+
+    const currentModel = fields.modelSelect.value;
+    if (isOpenAIOAuthProvider(fields.providerSelect.value)) {
+      renderModelOptions(fields.providerSelect.value);
+      if (currentModel && provider.models.some((entry) => entry.id === currentModel)) {
+        fields.modelSelect.value = currentModel;
+      }
+    }
+  } catch (_error) {
+    // Keep current model list on failure.
+  }
+}
+
+function renderProviderAuthInputs(providerId) {
+  const isOauth = isOpenAIOAuthProvider(providerId);
+  const apiKeyLabel = document.querySelector("label[for='provider_api_key']");
+
+  if (apiKeyLabel instanceof HTMLElement) {
+    apiKeyLabel.classList.toggle("hidden", isOauth);
+  }
+  fields.providerApiKey.classList.toggle("hidden", isOauth);
+  if (isOauth) {
+    fields.providerApiHelp.classList.add("hidden");
+  } else {
+    renderProviderApiHelp(providerId);
+  }
+  fields.providerOauthPanel.classList.toggle("hidden", !isOauth);
+
+  if (!isOauth) {
+    return;
+  }
+
+  const status = state.openaiOauthStatus;
+  const connected = Boolean(status?.connected);
+  const accountId = typeof status?.account_id === "string" ? status.account_id : "";
+  const expiresIn = Number.isFinite(Number(status?.expires_in_seconds)) ? Number(status.expires_in_seconds) : 0;
+  const expiryLabel = expiresIn > 0 ? `token expires in ${Math.ceil(expiresIn / 60)}m` : "token needs refresh";
+  fields.providerOauthStatus.textContent = connected
+    ? `Connected to OpenAI OAuth (${accountId || "account unknown"}; ${expiryLabel}).`
+    : "Not connected yet. Click Connect OpenAI.";
+
+  if (connected && state.openaiOauthUnsupportedModels.length > 0) {
+    const unsupportedIds = state.openaiOauthUnsupportedModels
+      .map((entry) => (entry && typeof entry.id === "string" ? entry.id : ""))
+      .filter(Boolean)
+      .join(", ");
+    if (unsupportedIds) {
+      fields.providerOauthStatus.textContent += ` Unsupported on your account: ${unsupportedIds}.`;
+    }
+  }
+}
+
+async function startOpenAIOAuth() {
+  const popup = window.open("/api/providers/openai-codex/oauth/start?mode=manual", "krill-openai-oauth", "width=680,height=820");
+  if (!popup) {
+    throw new Error("Popup blocked. Please allow popups and try again.");
+  }
+  const startedAt = Date.now();
+  const maxWaitMs = 120000;
+  while (Date.now() - startedAt < maxWaitMs) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1200));
+    if (popup.closed) {
+      break;
+    }
+  }
+  const status = await refreshOpenAIOAuthStatus();
+  await refreshOpenAIOAuthSupportedModels();
+  renderProviderAuthInputs(fields.providerSelect.value);
+  if (!status?.connected) {
+    throw new Error(
+      "After approving OpenAI login, copy the final redirect URL from your browser and paste it into Manual OAuth completion below."
+    );
+  }
+
+  const connectedConfig = state.providerConfigs.openai_codex_oauth ?? { model: fields.modelSelect.value, api_key: "" };
+  if (!connectedConfig.model) {
+    connectedConfig.model = fields.modelSelect.value;
+  }
+  connectedConfig.api_key = connectedConfig.api_key || state.openaiOauthBundle;
+  state.providerConfigs.openai_codex_oauth = connectedConfig;
+}
+
+async function completeOpenAIOAuthManually() {
+  const raw = String(fields.providerOauthManualInput.value || "").trim();
+  if (!raw) {
+    throw new Error("Paste the full redirect URL (or code/state payload) first.");
+  }
+
+  const response = await fetch("/api/providers/openai-codex/oauth/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ redirect_url_or_code: raw }),
+  });
+
+  if (!response.ok) {
+    let detail = "Manual OAuth completion failed.";
+    try {
+      const payload = await response.json();
+      if (typeof payload?.detail === "string" && payload.detail.trim()) {
+        detail = payload.detail.trim();
+      }
+    } catch (_error) {
+      // Keep fallback detail.
+    }
+    throw new Error(detail);
+  }
+
+  fields.providerOauthManualInput.value = "";
+  await refreshOpenAIOAuthStatus();
+  await refreshOpenAIOAuthSupportedModels();
+  renderProviderAuthInputs(fields.providerSelect.value);
+}
+
+async function disconnectOpenAIOAuth() {
+  const response = await fetch("/api/providers/openai-codex/oauth/disconnect", { method: "POST" });
+  if (!response.ok) {
+    throw new Error("Failed to disconnect OpenAI OAuth.");
+  }
+  if (state.providerConfigs.openai_codex_oauth) {
+    state.providerConfigs.openai_codex_oauth.api_key = "";
+  }
+  state.openaiOauthBundle = "";
+  await refreshOpenAIOAuthStatus();
+  await refreshOpenAIOAuthSupportedModels();
+  renderProviderAuthInputs(fields.providerSelect.value);
 }
 
 function renderConfiguredProviders() {
@@ -261,7 +449,9 @@ function renderActiveProviderOptions() {
 async function addOrUpdateProvider() {
   const providerId = fields.providerSelect.value;
   const modelId = fields.modelSelect.value;
-  const apiKey = fields.providerApiKey.value;
+  const apiKey = isOpenAIOAuthProvider(providerId)
+    ? String(state.openaiOauthBundle || "")
+    : fields.providerApiKey.value;
 
   if (!providerId || !modelId) {
     setStatus("Please choose a provider and model.", true);
@@ -269,9 +459,12 @@ async function addOrUpdateProvider() {
   }
 
   fields.addProviderButton.disabled = true;
-  setStatus("Checking API key...");
+  setStatus(isOpenAIOAuthProvider(providerId) ? "Checking OAuth connection..." : "Checking API key...");
 
   try {
+    if (isOpenAIOAuthProvider(providerId) && !apiKey.trim()) {
+      throw new Error("OpenAI OAuth is not connected yet. Click Connect OpenAI first.");
+    }
     await verifyProvider(providerId, modelId, apiKey);
 
     state.providerConfigs[providerId] = {
@@ -294,6 +487,9 @@ async function addOrUpdateProvider() {
 
 function removeProvider(providerId) {
   delete state.providerConfigs[providerId];
+  if (providerId === "openai_codex_oauth") {
+    state.openaiOauthBundle = "";
+  }
 
   if (state.activeProviderId === providerId) {
     state.activeProviderId = "";
@@ -664,6 +860,9 @@ async function loadPage() {
     applyThemeMode(settings.theme);
 
     renderProviderOptions();
+    await refreshOpenAIOAuthStatus();
+    await refreshOpenAIOAuthSupportedModels();
+    renderProviderAuthInputs(fields.providerSelect.value);
     renderConfiguredProviders();
     renderCoreMemories();
     setModeFromSettings();
@@ -975,9 +1174,12 @@ function handleEscapeToGateway(event) {
   cancelSetupChanges();
 }
 
-fields.providerSelect.addEventListener("change", () => {
+fields.providerSelect.addEventListener("change", async () => {
   renderModelOptions(fields.providerSelect.value);
   renderProviderApiHelp(fields.providerSelect.value);
+  await refreshOpenAIOAuthStatus();
+  await refreshOpenAIOAuthSupportedModels();
+  renderProviderAuthInputs(fields.providerSelect.value);
 });
 
 fields.systemPrompt.addEventListener("input", updateSystemPromptCounter);
@@ -1054,6 +1256,62 @@ fields.brainTableList.addEventListener("click", (event) => {
 });
 
 fields.addProviderButton.addEventListener("click", addOrUpdateProvider);
+
+if (fields.providerOauthConnectButton instanceof HTMLButtonElement) {
+  fields.providerOauthConnectButton.addEventListener("click", async () => {
+    fields.providerOauthConnectButton.disabled = true;
+    setStatus("Opening OpenAI OAuth...");
+    try {
+      await startOpenAIOAuth();
+      setStatus("OpenAI OAuth connected. Add provider to save.");
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally {
+      fields.providerOauthConnectButton.disabled = false;
+    }
+  });
+}
+
+if (fields.providerOauthCompleteButton instanceof HTMLButtonElement) {
+  fields.providerOauthCompleteButton.addEventListener("click", async () => {
+    fields.providerOauthCompleteButton.disabled = true;
+    setStatus("Completing manual OpenAI OAuth...");
+    try {
+      await completeOpenAIOAuthManually();
+      setStatus("OpenAI OAuth connected. Add provider to save.");
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally {
+      fields.providerOauthCompleteButton.disabled = false;
+    }
+  });
+}
+
+if (fields.providerOauthDisconnectButton instanceof HTMLButtonElement) {
+  fields.providerOauthDisconnectButton.addEventListener("click", async () => {
+    fields.providerOauthDisconnectButton.disabled = true;
+    try {
+      await disconnectOpenAIOAuth();
+      setStatus("OpenAI OAuth disconnected.");
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally {
+      fields.providerOauthDisconnectButton.disabled = false;
+    }
+  });
+}
+
+window.addEventListener("message", async (event) => {
+  if (event.origin !== window.location.origin) {
+    return;
+  }
+  if (event.data?.type !== "krill-openai-oauth-finished") {
+    return;
+  }
+  await refreshOpenAIOAuthStatus();
+  await refreshOpenAIOAuthSupportedModels();
+  renderProviderAuthInputs(fields.providerSelect.value);
+});
 
 fields.coreMemoryList.addEventListener("click", (event) => {
   const target = event.target;
