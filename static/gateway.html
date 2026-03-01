@@ -282,6 +282,11 @@
                   <option value="daily">Daily</option>
                   <option value="weekly">Weekly</option>
                   <option value="monthly">Monthly</option>
+                  <option value="hourly">Hourly</option>
+                  <option value="every_30_min">Every 30 min</option>
+                  <option value="every_15_min">Every 15 min</option>
+                  <option value="every_10_min">Every 10 min</option>
+                  <option value="every_5_min">Every 5 min</option>
                   <option value="once">One-time</option>
                 </select>
               </div>
@@ -292,10 +297,6 @@
               <div class="timed-job-field">
                 <label for="timed-job-time">Time</label>
                 <input id="timed-job-time" type="time" step="60" />
-              </div>
-              <div class="timed-job-field">
-                <label for="timed-job-timezone">Timezone</label>
-                <input id="timed-job-timezone" type="text" maxlength="80" placeholder="Europe/Berlin" />
               </div>
             </div>
             <div class="timed-job-toggle-row">

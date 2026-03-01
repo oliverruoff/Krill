@@ -12,15 +12,23 @@ from .base import MCPPlugin, McpConfigField, McpToolSpec
 
 
 TIMED_JOBS_MCP_ID = "timed_jobs"
-_INTERVAL_VALUES = {"daily", "weekly", "monthly", "once"}
+_INTERVAL_VALUES = {
+    "daily",
+    "weekly",
+    "monthly",
+    "once",
+    "hourly",
+    "every_30_min",
+    "every_15_min",
+    "every_10_min",
+    "every_5_min",
+}
 _UPDATABLE_FIELDS = {
     "title",
     "prompt",
     "interval",
     "start_date",
     "time_of_day",
-    "timezone",
-    "timezone_offset_minutes",
     "enabled",
     "channels",
 }
@@ -40,11 +48,22 @@ class TimedJobsMCP(MCPPlugin):
         write_properties = {
             "title": {"type": "string"},
             "prompt": {"type": "string"},
-            "interval": {"type": "string", "enum": ["daily", "weekly", "monthly", "once"]},
+            "interval": {
+                "type": "string",
+                "enum": [
+                    "daily",
+                    "weekly",
+                    "monthly",
+                    "once",
+                    "hourly",
+                    "every_30_min",
+                    "every_15_min",
+                    "every_10_min",
+                    "every_5_min",
+                ],
+            },
             "start_date": {"type": "string", "description": "YYYY-MM-DD"},
             "time_of_day": {"type": "string", "description": "HH:MM"},
-            "timezone": {"type": "string"},
-            "timezone_offset_minutes": {"type": "integer", "minimum": -840, "maximum": 840},
             "enabled": {"type": "boolean"},
             "channels": {
                 "type": "array",
@@ -63,7 +82,7 @@ class TimedJobsMCP(MCPPlugin):
             McpToolSpec(
                 id="timed_jobs_list",
                 label="Timed Jobs List",
-                description="Lists timed jobs with next execution details in each job timezone.",
+                description="Lists timed jobs with next execution details in server timezone.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -130,7 +149,7 @@ class TimedJobsMCP(MCPPlugin):
             "Timed Jobs safety reminder:\n"
             "- Only create, update, delete, or trigger jobs explicitly requested by the user in this chat.\n"
             "- If required schedule fields are missing or ambiguous, do not guess; return structured validation details.\n"
-            "- For create/update, always include next execution in the job timezone in your result.\n"
+            "- For create/update, always include next execution in the server timezone in your result.\n"
             "- Return JSON only with this shape: {\"arguments\":{...}}"
         )
 
@@ -163,7 +182,17 @@ async def _tool_list_options() -> dict[str, object]:
     timezone_name, timezone_offset_minutes = _server_timezone_defaults()
     return {
         "ok": True,
-        "intervals": ["daily", "weekly", "monthly", "once"],
+        "intervals": [
+            "daily",
+            "weekly",
+            "monthly",
+            "once",
+            "hourly",
+            "every_30_min",
+            "every_15_min",
+            "every_10_min",
+            "every_5_min",
+        ],
         "channel_options": channels,
         "defaults": {
             "timezone": timezone_name,
@@ -231,7 +260,7 @@ async def _tool_create(arguments: dict[str, object]) -> dict[str, object]:
         invalid_fields.append(
             {
                 "field": "interval",
-                "reason": "Must be one of: daily, weekly, monthly, once.",
+                "reason": "Must be one of: daily, weekly, monthly, once, hourly, every_30_min, every_15_min, every_10_min, every_5_min.",
             }
         )
 
@@ -269,7 +298,7 @@ async def _tool_create(arguments: dict[str, object]) -> dict[str, object]:
             unavailable_channels=unavailable_channels,
         )
 
-    timezone_name, timezone_offset_minutes = _timezone_inputs(arguments)
+    timezone_name, timezone_offset_minutes = _server_timezone_defaults()
 
     payload["title"] = title
     payload["prompt"] = prompt
@@ -313,8 +342,6 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
         "interval": selected.interval,
         "start_date": selected.start_date,
         "time_of_day": selected.time_of_day,
-        "timezone": selected.timezone,
-        "timezone_offset_minutes": selected.timezone_offset_minutes,
         "enabled": selected.enabled,
         "channels": list(selected.channels),
         "created_at": selected.created_at,
@@ -330,7 +357,7 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
             invalid_fields=[
                 {
                     "field": "payload",
-                    "reason": "Provide one or more of title, prompt, interval, start_date, time_of_day, timezone, timezone_offset_minutes, enabled, channels.",
+                    "reason": "Provide one or more of title, prompt, interval, start_date, time_of_day, enabled, channels.",
                 }
             ],
         )
@@ -348,7 +375,12 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
     if "interval" in arguments:
         next_interval = _optional_str(arguments, "interval", "")
         if next_interval not in _INTERVAL_VALUES:
-            invalid_fields.append({"field": "interval", "reason": "Must be one of: daily, weekly, monthly, once."})
+            invalid_fields.append(
+                {
+                    "field": "interval",
+                    "reason": "Must be one of: daily, weekly, monthly, once, hourly, every_30_min, every_15_min, every_10_min, every_5_min.",
+                }
+            )
         else:
             update_payload["interval"] = next_interval
     if "start_date" in arguments:
@@ -366,10 +398,9 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
     if "enabled" in arguments:
         update_payload["enabled"] = bool(arguments.get("enabled", False))
 
-    if "timezone" in arguments or "timezone_offset_minutes" in arguments:
-        timezone_name, timezone_offset_minutes = _timezone_inputs(arguments, fallback=(selected.timezone, selected.timezone_offset_minutes))
-        update_payload["timezone"] = timezone_name
-        update_payload["timezone_offset_minutes"] = timezone_offset_minutes
+    timezone_name, timezone_offset_minutes = _server_timezone_defaults()
+    update_payload["timezone"] = timezone_name
+    update_payload["timezone_offset_minutes"] = timezone_offset_minutes
 
     if "channels" in arguments:
         normalized_channels, unavailable_channels, unknown_channels = _validate_channels(arguments.get("channels"), channel_options)
@@ -565,22 +596,6 @@ def _validate_channels(raw_channels: object, channel_options: list[dict[str, obj
     return normalized, unavailable, unknown
 
 
-def _timezone_inputs(arguments: dict[str, object], fallback: tuple[str, int] | None = None) -> tuple[str, int]:
-    fallback_name, fallback_offset = fallback if fallback is not None else _server_timezone_defaults()
-
-    timezone_name = _optional_str(arguments, "timezone", fallback_name)
-    raw_offset = arguments.get("timezone_offset_minutes", fallback_offset)
-    try:
-        timezone_offset_minutes = int(str(raw_offset).strip() or str(fallback_offset))
-    except (TypeError, ValueError):
-        timezone_offset_minutes = fallback_offset
-    timezone_offset_minutes = max(-840, min(840, timezone_offset_minutes))
-
-    if not timezone_name:
-        timezone_name = fallback_name
-    return timezone_name, timezone_offset_minutes
-
-
 def _server_timezone_defaults() -> tuple[str, int]:
     now_local = datetime.now().astimezone()
     offset_delta = now_local.utcoffset() or timedelta(minutes=0)
@@ -619,8 +634,8 @@ def _next_execution_details(job: TimedJob) -> dict[str, object]:
         return {
             "status": "not_scheduled",
             "next_run_at_utc": "",
-            "next_run_at_job_timezone": "",
-            "timezone": job.timezone,
+            "next_run_at_server_timezone": "",
+            "timezone": _server_timezone_defaults()[0],
             "message": reason,
         }
 
@@ -630,22 +645,23 @@ def _next_execution_details(job: TimedJob) -> dict[str, object]:
         return {
             "status": "scheduled",
             "next_run_at_utc": raw_next,
-            "next_run_at_job_timezone": raw_next,
-            "timezone": job.timezone,
-            "message": f"Next execution in job timezone: {raw_next} ({job.timezone}).",
+            "next_run_at_server_timezone": raw_next,
+            "timezone": _server_timezone_defaults()[0],
+            "message": f"Next execution in server timezone: {raw_next}.",
         }
 
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
 
-    tz = _job_timezone(job.timezone, job.timezone_offset_minutes)
+    server_timezone_name, server_timezone_offset = _server_timezone_defaults()
+    tz = _job_timezone(server_timezone_name, server_timezone_offset)
     local_value = parsed.astimezone(tz).isoformat(timespec="minutes")
     return {
         "status": "scheduled",
         "next_run_at_utc": parsed.astimezone(timezone.utc).isoformat(timespec="minutes"),
-        "next_run_at_job_timezone": local_value,
-        "timezone": job.timezone,
-        "message": f"Next execution in job timezone: {local_value} ({job.timezone}).",
+        "next_run_at_server_timezone": local_value,
+        "timezone": server_timezone_name,
+        "message": f"Next execution in server timezone: {local_value} ({server_timezone_name}).",
     }
 
 

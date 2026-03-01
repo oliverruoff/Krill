@@ -82,7 +82,17 @@ class TelegramState(BaseModel):
     last_update_id: int = Field(default=0, ge=0)
 
 
-TimedJobInterval = Literal["daily", "weekly", "monthly", "once"]
+TimedJobInterval = Literal[
+    "daily",
+    "weekly",
+    "monthly",
+    "once",
+    "hourly",
+    "every_30_min",
+    "every_15_min",
+    "every_10_min",
+    "every_5_min",
+]
 
 
 class TimedJob(BaseModel):
@@ -289,7 +299,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           id TEXT PRIMARY KEY,
           title TEXT NOT NULL DEFAULT '',
           prompt TEXT NOT NULL DEFAULT '',
-          interval_type TEXT NOT NULL DEFAULT 'daily' CHECK (interval_type IN ('daily', 'weekly', 'monthly', 'once')),
+          interval_type TEXT NOT NULL DEFAULT 'daily' CHECK (interval_type IN ('daily', 'weekly', 'monthly', 'once', 'hourly', 'every_30_min', 'every_15_min', 'every_10_min', 'every_5_min')),
           start_date TEXT NOT NULL DEFAULT '',
           time_of_day TEXT NOT NULL DEFAULT '00:00',
           timezone TEXT NOT NULL DEFAULT 'UTC',
@@ -312,6 +322,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
     _ensure_timed_jobs_column(conn, "timezone_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_timed_jobs_interval_constraint(conn)
     conn.commit()
 
 
@@ -337,6 +348,73 @@ def _ensure_timed_jobs_column(conn: sqlite3.Connection, column_name: str, defini
     if column_name in existing:
         return
     conn.execute(f"ALTER TABLE timed_jobs ADD COLUMN {column_name} {definition}")
+
+
+def _ensure_timed_jobs_interval_constraint(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'timed_jobs'"
+    ).fetchone()
+    if row is None:
+        return
+
+    table_sql = str(row["sql"] or "").lower()
+    required_values = (
+        "hourly",
+        "every_30_min",
+        "every_15_min",
+        "every_10_min",
+        "every_5_min",
+    )
+    if all(value in table_sql for value in required_values):
+        return
+
+    conn.execute("ALTER TABLE timed_jobs RENAME TO timed_jobs_legacy")
+    conn.execute(
+        """
+        CREATE TABLE timed_jobs (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL DEFAULT '',
+          prompt TEXT NOT NULL DEFAULT '',
+          interval_type TEXT NOT NULL DEFAULT 'daily' CHECK (
+            interval_type IN (
+              'daily',
+              'weekly',
+              'monthly',
+              'once',
+              'hourly',
+              'every_30_min',
+              'every_15_min',
+              'every_10_min',
+              'every_5_min'
+            )
+          ),
+          start_date TEXT NOT NULL DEFAULT '',
+          time_of_day TEXT NOT NULL DEFAULT '00:00',
+          timezone TEXT NOT NULL DEFAULT 'UTC',
+          timezone_offset_minutes INTEGER NOT NULL DEFAULT 0,
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+          channels_json TEXT NOT NULL DEFAULT '[]',
+          next_run_at TEXT NOT NULL DEFAULT '',
+          last_run_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO timed_jobs (
+          id, title, prompt, interval_type, start_date, time_of_day, timezone,
+          timezone_offset_minutes, enabled, channels_json, next_run_at, last_run_at, created_at, updated_at
+        )
+        SELECT
+          id, title, prompt, interval_type, start_date, time_of_day, timezone,
+          timezone_offset_minutes, enabled, channels_json, next_run_at, last_run_at, created_at, updated_at
+        FROM timed_jobs_legacy
+        """
+    )
+    conn.execute("DROP TABLE timed_jobs_legacy")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_timed_jobs_next_run ON timed_jobs(enabled, next_run_at)")
 
 
 def _ensure_whatsapp_state_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
@@ -680,8 +758,38 @@ def _resolve_timezone(raw_timezone: object, raw_offset_minutes: object = 0) -> t
     return f"UTC{sign}{hours:02d}:{minutes:02d}", timezone(timedelta(minutes=safe_offset))
 
 
+def _server_timezone() -> tuple[str, tzinfo]:
+    now_local = datetime.now().astimezone()
+    tz = now_local.tzinfo
+    zone_key = getattr(tz, "key", "") if tz is not None else ""
+    if isinstance(zone_key, str) and zone_key.strip():
+        try:
+            return zone_key.strip(), ZoneInfo(zone_key.strip())
+        except ZoneInfoNotFoundError:
+            pass
+    offset = now_local.utcoffset() or timedelta(minutes=0)
+    safe_offset = max(-840, min(840, int(offset.total_seconds() // 60)))
+    if safe_offset == 0:
+        return "UTC", timezone.utc
+    sign = "+" if safe_offset >= 0 else "-"
+    abs_minutes = abs(safe_offset)
+    hours = abs_minutes // 60
+    minutes = abs_minutes % 60
+    return f"UTC{sign}{hours:02d}:{minutes:02d}", timezone(timedelta(minutes=safe_offset))
+
+
 def _normalize_interval(raw_interval: object) -> TimedJobInterval:
     value = str(raw_interval).strip().lower()
+    if value == "hourly":
+        return "hourly"
+    if value == "every_30_min":
+        return "every_30_min"
+    if value == "every_15_min":
+        return "every_15_min"
+    if value == "every_10_min":
+        return "every_10_min"
+    if value == "every_5_min":
+        return "every_5_min"
     if value == "weekly":
         return "weekly"
     if value == "monthly":
@@ -757,12 +865,10 @@ def _calculate_next_run_at(
     interval: TimedJobInterval,
     start_date_value: date,
     time_value: time,
-    timezone_name: str,
-    timezone_offset_minutes: int = 0,
     now_utc: datetime,
     last_run_at: str = "",
 ) -> str:
-    _, tz = _resolve_timezone(timezone_name, timezone_offset_minutes)
+    _, tz = _server_timezone()
     now_local = now_utc.astimezone(tz)
     base_local = _make_local_datetime(start_date_value, time_value, tz)
 
@@ -779,6 +885,22 @@ def _calculate_next_run_at(
             candidate = base_local
         if candidate <= now_local:
             candidate = candidate.replace(second=0, microsecond=0) + timedelta(days=1)
+        return candidate.astimezone(timezone.utc).isoformat()
+
+    if interval in {"hourly", "every_30_min", "every_15_min", "every_10_min", "every_5_min"}:
+        cadence_minutes = {
+            "hourly": 60,
+            "every_30_min": 30,
+            "every_15_min": 15,
+            "every_10_min": 10,
+            "every_5_min": 5,
+        }[interval]
+        cadence = timedelta(minutes=cadence_minutes)
+        candidate = base_local
+        if candidate <= now_local:
+            elapsed_seconds = (now_local - candidate).total_seconds()
+            elapsed_intervals = int(elapsed_seconds // cadence.total_seconds()) + 1
+            candidate = candidate + (cadence * elapsed_intervals)
         return candidate.astimezone(timezone.utc).isoformat()
 
     if interval == "weekly":
@@ -811,11 +933,9 @@ def _decode_channels_json(raw_value: object) -> list[str]:
 
 
 def _row_to_timed_job(row: sqlite3.Row) -> TimedJob:
-    timezone_name, _ = _resolve_timezone(row["timezone"], row["timezone_offset_minutes"])
-    try:
-        timezone_offset_minutes = int(row["timezone_offset_minutes"])
-    except (TypeError, ValueError):
-        timezone_offset_minutes = 0
+    timezone_name, tz = _server_timezone()
+    offset = tz.utcoffset(datetime.now(timezone.utc).astimezone(tz)) or timedelta(minutes=0)
+    timezone_offset_minutes = int(offset.total_seconds() // 60)
     return TimedJob(
         id=str(row["id"]),
         title=str(row["title"]),
@@ -876,14 +996,9 @@ def _get_timed_job_sync(timed_job_id: str) -> TimedJob | None:
 
 def _sanitize_timed_job_payload(payload: dict[str, object], existing_id: str = "") -> TimedJob:
     now_utc = datetime.now(timezone.utc)
-    raw_timezone = payload.get("timezone", "UTC")
-    raw_timezone_offset_minutes = payload.get("timezone_offset_minutes", 0)
-    timezone_name, _ = _resolve_timezone(raw_timezone, raw_timezone_offset_minutes)
-    try:
-        timezone_offset_minutes = int(str(raw_timezone_offset_minutes).strip() or "0")
-    except (TypeError, ValueError):
-        timezone_offset_minutes = 0
-    timezone_offset_minutes = max(-840, min(840, timezone_offset_minutes))
+    timezone_name, tz = _server_timezone()
+    offset = tz.utcoffset(now_utc.astimezone(tz)) or timedelta(minutes=0)
+    timezone_offset_minutes = int(offset.total_seconds() // 60)
     interval = _normalize_interval(payload.get("interval", "daily"))
     start_date_value = _parse_start_date(payload.get("start_date", ""))
     time_value = _parse_time_of_day(payload.get("time_of_day", ""))
@@ -906,8 +1021,6 @@ def _sanitize_timed_job_payload(payload: dict[str, object], existing_id: str = "
             interval=interval,
             start_date_value=start_date_value,
             time_value=time_value,
-            timezone_name=timezone_name,
-            timezone_offset_minutes=timezone_offset_minutes,
             now_utc=now_utc,
             last_run_at=last_run_at,
         )
@@ -1057,7 +1170,7 @@ def _list_due_timed_jobs_sync(now_utc: datetime, limit: int) -> list[TimedJob]:
                 if not last_run_at:
                     start_date_value = _parse_start_date(row["start_date"])
                     time_value = _parse_time_of_day(row["time_of_day"])
-                    _, tz = _resolve_timezone(row["timezone"], row["timezone_offset_minutes"])
+                    _, tz = _server_timezone()
                     candidate = _make_local_datetime(start_date_value, time_value, tz).astimezone(timezone.utc)
                     if candidate <= now_utc:
                         should_run = True
@@ -1100,8 +1213,6 @@ def _mark_timed_job_executed_sync(timed_job_id: str, executed_at_utc: datetime) 
                 interval=job.interval,
                 start_date_value=start_date_value,
                 time_value=time_value,
-                timezone_name=_normalize_timezone_name(job.timezone),
-                timezone_offset_minutes=job.timezone_offset_minutes,
                 now_utc=executed_at_utc,
                 last_run_at=executed_at_utc.isoformat(),
             )

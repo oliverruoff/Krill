@@ -100,7 +100,6 @@ const timedJobPromptInput = document.getElementById("timed-job-prompt");
 const timedJobIntervalSelect = document.getElementById("timed-job-interval");
 const timedJobStartDateInput = document.getElementById("timed-job-start-date");
 const timedJobTimeInput = document.getElementById("timed-job-time");
-const timedJobTimezoneInput = document.getElementById("timed-job-timezone");
 const timedJobEnabledInput = document.getElementById("timed-job-enabled");
 const timedJobChannelsNode = document.getElementById("timed-job-channels");
 const timedJobSaveButton = document.getElementById("timed-job-save");
@@ -3085,11 +3084,6 @@ async function handleShortTermAction(action, suggestionId) {
   }
 }
 
-function getBrowserTimezone() {
-  const candidate = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : "UTC";
-}
-
 function formatNowWithSeconds() {
   const now = new Date();
   const yyyy = now.getFullYear();
@@ -3140,10 +3134,6 @@ function normalizeIncomingTimedJobs(rawJobs) {
       interval: typeof entry.interval === "string" ? entry.interval : "daily",
       start_date: typeof entry.start_date === "string" ? entry.start_date : todayDateInputValue(),
       time_of_day: typeof entry.time_of_day === "string" ? entry.time_of_day.slice(0, 5) : "09:00",
-      timezone: typeof entry.timezone === "string" && entry.timezone.trim() ? entry.timezone.trim() : "UTC",
-      timezone_offset_minutes: Number.isFinite(Number(entry.timezone_offset_minutes))
-        ? Number(entry.timezone_offset_minutes)
-        : 0,
       enabled: Boolean(entry.enabled),
       channels: Array.isArray(entry.channels) ? entry.channels.map((channel) => String(channel)) : ["gateway"],
       next_run_at: typeof entry.next_run_at === "string" ? entry.next_run_at : "",
@@ -3185,9 +3175,6 @@ function resetTimedJobEditor() {
   }
   if (timedJobTimeInput instanceof HTMLInputElement) {
     timedJobTimeInput.value = "09:00";
-  }
-  if (timedJobTimezoneInput instanceof HTMLInputElement) {
-    timedJobTimezoneInput.value = getBrowserTimezone();
   }
   if (timedJobEnabledInput instanceof HTMLInputElement) {
     timedJobEnabledInput.checked = true;
@@ -3251,9 +3238,6 @@ function populateTimedJobEditor(job) {
   }
   if (timedJobTimeInput instanceof HTMLInputElement) {
     timedJobTimeInput.value = typeof job.time_of_day === "string" && job.time_of_day ? job.time_of_day.slice(0, 5) : "09:00";
-  }
-  if (timedJobTimezoneInput instanceof HTMLInputElement) {
-    timedJobTimezoneInput.value = typeof job.timezone === "string" && job.timezone ? job.timezone : "UTC";
   }
   if (timedJobEnabledInput instanceof HTMLInputElement) {
     timedJobEnabledInput.checked = Boolean(job.enabled);
@@ -3359,8 +3343,6 @@ function collectTimedJobPayload() {
   const interval = timedJobIntervalSelect instanceof HTMLSelectElement ? timedJobIntervalSelect.value : "daily";
   const startDate = timedJobStartDateInput instanceof HTMLInputElement ? timedJobStartDateInput.value : "";
   const timeOfDay = timedJobTimeInput instanceof HTMLInputElement ? timedJobTimeInput.value : "";
-  const timezoneValue = timedJobTimezoneInput instanceof HTMLInputElement ? timedJobTimezoneInput.value.trim() : "";
-  const timezoneOffsetMinutes = -new Date().getTimezoneOffset();
   const enabled = timedJobEnabledInput instanceof HTMLInputElement ? timedJobEnabledInput.checked : false;
 
   const channels = [];
@@ -3382,8 +3364,6 @@ function collectTimedJobPayload() {
     interval,
     start_date: startDate,
     time_of_day: timeOfDay,
-    timezone: timezoneValue || "UTC",
-    timezone_offset_minutes: timezoneOffsetMinutes,
     enabled,
     channels,
   };

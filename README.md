@@ -24,7 +24,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Use integrations for chat ingress channels:
   - Telegram (bot token based Telegram chat ingress)
   - WhatsApp Web (allowlisted inbound messages bridged into Gateway automation chats)
-- Schedule timed jobs (daily/weekly/monthly/one-time) with hidden prompts and channel fan-out (Gateway, Telegram)
+- Schedule timed jobs (daily/weekly/monthly/one-time/hourly/every 30m/15m/10m/5m) with hidden prompts and channel fan-out (Gateway, Telegram)
 - Let Krill orchestrate multi-step tool flows automatically (sequential recursive tool calls)
 - See live tool/system trace messages while execution runs
 - Stop running tool chains and clear queued work for the active chat

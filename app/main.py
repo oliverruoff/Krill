@@ -262,11 +262,19 @@ class MemoryCompactionResponse(BaseModel):
 class TimedJobWriteRequest(BaseModel):
     title: str = Field(default="", max_length=120)
     prompt: str = Field(default="", max_length=5000)
-    interval: Literal["daily", "weekly", "monthly", "once"] = "daily"
+    interval: Literal[
+        "daily",
+        "weekly",
+        "monthly",
+        "once",
+        "hourly",
+        "every_30_min",
+        "every_15_min",
+        "every_10_min",
+        "every_5_min",
+    ] = "daily"
     start_date: str = ""
     time_of_day: str = "00:00"
-    timezone: str = ""
-    timezone_offset_minutes: int = Field(default=0, ge=-840, le=840)
     enabled: bool = False
     channels: list[str] = Field(default_factory=lambda: ["gateway"])
 
