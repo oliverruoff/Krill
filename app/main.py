@@ -92,6 +92,15 @@ from .timed_jobs import trigger_timed_job_now
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 
+if os.name == "nt":
+    try:
+        policy = asyncio.get_event_loop_policy()
+        proactor_policy = getattr(asyncio, "WindowsProactorEventLoopPolicy", None)
+        if proactor_policy is not None and not isinstance(policy, proactor_policy):
+            asyncio.set_event_loop_policy(proactor_policy())
+    except Exception:
+        pass
+
 app = FastAPI(title="Krill")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(gemini_oauth_router)

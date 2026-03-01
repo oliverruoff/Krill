@@ -91,6 +91,7 @@ Tool integrations live in `app/mcps/` and are registered once in `app/mcps/regis
 
 Current tools:
 
+- `browser_control` (disabled by default, browser automation for navigation, form interactions, waiting, and extraction)
 - `brave_search`
 - `git_ops`
 - `home_assistant` (token-based Home Assistant access; defaults base URL to `http://homeassistant.local:8123`)
@@ -108,6 +109,13 @@ OpenCode MCP notes:
 - uses active Krill provider/model automatically (`openai`, `gemini`, `openrouter`)
 - Gemini integration for OpenCode uses API key env vars (`GEMINI_API_KEY` + `GOOGLE_API_KEY`)
 - OpenCode sessions are kept in-memory per channel/chat and reset on app/container restart
+
+Browser Control MCP notes:
+
+- disabled by default
+- supports session-based browsing actions: start/navigate/snapshot/click/fill/select/press/wait/extract/close
+- uses in-memory per-channel+chat sessions (not persisted to `braindump.db`)
+- local runtime setup requires Playwright browser install once: `playwright install chromium`
 
 Home Assistant MCP notes:
 

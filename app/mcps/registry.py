@@ -1,6 +1,7 @@
 """Registry of MCP plugins that can be enabled and called by orchestration."""
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
+from .browser_control import BrowserControlMCP
 from .brave_search import BraveSearchMCP
 from .git_ops import GitOpsMCP
 from .home_assistant import HomeAssistantMCP
@@ -13,6 +14,7 @@ from .whatsapp import WhatsAppMCP
 
 
 _MCPS: dict[str, MCPPlugin] = {
+    "browser_control": BrowserControlMCP(),
     "brave_search": BraveSearchMCP(),
     "git_ops": GitOpsMCP(),
     "home_assistant": HomeAssistantMCP(),
