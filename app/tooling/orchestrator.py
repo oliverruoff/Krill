@@ -143,8 +143,28 @@ async def generate_with_tools(
         if action == "respond":
             final_answer = plan.get("final_answer")
             if isinstance(final_answer, str) and final_answer.strip():
+                normalized_answer = final_answer.strip()
+                if not used_tools and _looks_like_tool_avoidance_response(normalized_answer):
+                    skip_payload = {
+                        "step": step_index,
+                        "error": "planner_skipped_tools",
+                        "detail": "Planner answered without tools despite enabled tools and likely external-data request.",
+                        "final_answer": normalized_answer,
+                    }
+                    await trace("tool_error", json.dumps(skip_payload, ensure_ascii=True))
+                    interaction_log.append(
+                        {
+                            "step": step_index,
+                            "tool_error": {
+                                "type": "planner_skipped_tools",
+                                "message": "Use available tools instead of claiming unavailable access.",
+                            },
+                        }
+                    )
+                    continue
+
                 return {
-                    "text": final_answer.strip(),
+                    "text": normalized_answer,
                     "used_tokens": _sum_tokens(*token_values),
                     "used_mcp_tools": used_tools,
                     "system_trace_messages": system_trace_messages,
@@ -485,6 +505,8 @@ def _build_recursive_planner_prompt(
         "You can recursively call tools.\n"
         f"Current step: {step_index} of {max_steps}.\n"
         "Return JSON only.\n"
+        "If user asks for live/external/private data (web, files, integrations, devices, Home Assistant, calendars, email), use a tool call first.\n"
+        "Do not claim you cannot access browsing/tools/devices when relevant tools are listed.\n"
         "If you need another tool call, return: "
         '{"action":"call_tool","mcp_id":"...","tool_id":"...","arguments":{...}}\n'
         "Do not repeat the same mcp_id + tool_id + identical arguments in this request.\n"
@@ -635,3 +657,23 @@ def _normalize_tool_call_arguments(arguments: dict[str, object]) -> str:
         return json.dumps(arguments, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     except TypeError:
         return json.dumps(str(arguments), ensure_ascii=True)
+
+
+def _looks_like_tool_avoidance_response(text: str) -> bool:
+    normalized = text.strip().lower().replace("’", "'").replace("`", "'")
+    if not normalized:
+        return False
+    patterns = (
+        "i don't have access",
+        "i do not have access",
+        "can't access",
+        "cannot access",
+        "unable to access",
+        "can't browse",
+        "cannot browse",
+        "unable to browse",
+        "no access to",
+        "don't have browsing",
+        "do not have browsing",
+    )
+    return any(pattern in normalized for pattern in patterns)

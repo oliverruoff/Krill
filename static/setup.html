@@ -99,12 +99,12 @@
           <section id="provider-oauth-panel" class="hidden" aria-live="polite">
             <p id="provider-oauth-status">OAuth not connected.</p>
             <div class="actions">
-              <button type="button" id="provider-oauth-connect-btn" class="secondary">Connect OpenAI</button>
+              <button type="button" id="provider-oauth-connect-btn" class="secondary">Connect OAuth</button>
               <button type="button" id="provider-oauth-disconnect-btn" class="secondary">Disconnect</button>
             </div>
-            <label for="provider_oauth_manual_input">Manual OAuth completion (paste redirect URL/code)</label>
-            <input id="provider_oauth_manual_input" type="text" placeholder="http://localhost:1455/auth/callback?code=...&state=..." />
-            <button type="button" id="provider-oauth-complete-btn" class="outline-btn">Complete Manual OAuth</button>
+            <label for="provider_oauth_manual_input" id="provider-oauth-manual-label">Manual OAuth completion</label>
+            <input id="provider_oauth_manual_input" type="text" placeholder="Paste OAuth payload" />
+            <button type="button" id="provider-oauth-complete-btn" class="outline-btn">Complete OAuth</button>
           </section>
 
           <button type="button" id="add-provider-btn" class="outline-btn">Add / Update Provider &amp; Model</button>

@@ -83,8 +83,6 @@ class OpenAICodexOAuthProvider(LLMProvider):
             "instructions": system_prompt.strip() or None,
             "input": _build_input(history, prompt),
             "text": {"verbosity": "medium"},
-            "tool_choice": "none",
-            "parallel_tool_calls": False,
         }
 
         try:
@@ -342,11 +340,17 @@ def _build_input(history: list[dict[str, str]], prompt: str) -> list[dict[str, o
         if role not in {"system", "user", "assistant"} or not isinstance(content, str) or not content.strip():
             continue
 
-        mapped_role = "assistant" if role == "assistant" else "user"
+        if role == "assistant":
+            mapped_role = "assistant"
+            content_type = "output_text"
+        else:
+            mapped_role = "user"
+            content_type = "input_text"
+
         input_items.append(
             {
                 "role": mapped_role,
-                "content": [{"type": "input_text", "text": content}],
+                "content": [{"type": content_type, "text": content}],
             }
         )
 
@@ -378,8 +382,6 @@ def _build_verify_payload(model_id: str) -> dict[str, object]:
         "instructions": "Health check.",
         "input": [{"role": "user", "content": [{"type": "input_text", "text": "Health check."}]}],
         "text": {"verbosity": "low"},
-        "tool_choice": "none",
-        "parallel_tool_calls": False,
     }
 
 

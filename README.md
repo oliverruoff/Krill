@@ -58,6 +58,7 @@ Krill is provider-agnostic through a registry pattern:
 
 - `openai`
 - `openai_codex_oauth` (ChatGPT/Codex OAuth)
+- `google_gemini_oauth` (Gemini OAuth, unofficial)
 - `gemini`
 - `openrouter`
 
@@ -75,6 +76,14 @@ OpenAI OAuth provider notes:
 Google OAuth MCP note:
 
 - Google OAuth API routes are isolated in `app/routers/google_oauth.py` and mounted from `app/main.py`
+
+Gemini OAuth provider notes:
+
+- choose `google_gemini_oauth` in Setup and click **Connect Gemini OAuth**
+- Krill tries to import local Gemini CLI credentials from `~/.gemini/oauth_creds.json` or `~/.gemini/settings.json`
+- if import fails, paste OAuth JSON (or file path) in the manual completion field
+- this is an unofficial integration and may carry account-policy risk; use at your own risk
+- Gemini OAuth provider routes are isolated in `app/routers/gemini_oauth.py` and mounted from `app/main.py`
 
 ### 3) Tools (MCP layer)
 

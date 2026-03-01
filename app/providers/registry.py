@@ -2,6 +2,7 @@
 
 from .base import LLMProvider
 from .gemini import GeminiProvider
+from .gemini_oauth import GeminiOAuthProvider
 from .openai_codex_oauth import OpenAICodexOAuthProvider
 from .openai import OpenAIProvider
 from .openrouter import OpenRouterProvider
@@ -9,6 +10,7 @@ from .openrouter import OpenRouterProvider
 
 _PROVIDERS: dict[str, LLMProvider] = {
     "gemini": GeminiProvider(),
+    "google_gemini_oauth": GeminiOAuthProvider(),
     "openai": OpenAIProvider(),
     "openai_codex_oauth": OpenAICodexOAuthProvider(),
     "openrouter": OpenRouterProvider(),

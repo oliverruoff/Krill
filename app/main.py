@@ -78,6 +78,7 @@ from .memory_extraction import (
     stop_memory_extraction_worker,
 )
 from .providers import get_provider, get_provider_options, is_supported_provider
+from .routers.gemini_oauth import router as gemini_oauth_router
 from .providers.vision import analyze_image
 from .providers.resilience import generate_with_retries
 from .routers.google_oauth import router as google_oauth_router
@@ -93,6 +94,7 @@ STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(title="Krill")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(gemini_oauth_router)
 app.include_router(google_oauth_router)
 app.include_router(openai_oauth_router)
 logger = logging.getLogger(__name__)
