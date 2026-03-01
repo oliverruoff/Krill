@@ -90,7 +90,9 @@ Home Assistant MCP notes:
 
 - configure a Home Assistant long-lived token in the tool card
 - base URL defaults to `http://homeassistant.local:8123` if left empty
-- supports listing entities, checking state, triggering/calling services (with optional `return_response`), full todo list item management, listing automations, and creating/updating automations
+- supports listing entities, checking state, triggering/calling services (with optional `return_response`), full todo list item management, listing automations, finding automations by query, and creating/updating automations
+- includes automation YAML workflows: list configured automation YAML files, read one automation YAML block, update an existing automation YAML block, and create a new automation from YAML
+- automation YAML tools prefer filesystem mode when enabled (`Config Root Path` and/or `Automations File Path`), and gracefully fall back to Home Assistant API config endpoints when files are unavailable
 
 Google Services MCP notes:
 

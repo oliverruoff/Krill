@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
-from typing import Mapping
+import re
+import tempfile
+from pathlib import Path
+from typing import Any, Mapping
 from urllib import error, parse, request
+
+try:
+    import yaml
+except Exception:  # pragma: no cover - optional dependency guard
+    yaml = None
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
 
@@ -13,6 +22,9 @@ from .base import MCPPlugin, McpConfigField, McpToolSpec
 HOME_ASSISTANT_MCP_ID = "home_assistant"
 BASE_URL_PARAM = "base_url"
 TOKEN_PARAM = "long_lived_token"
+CONFIG_ROOT_PATH_PARAM = "config_root_path"
+AUTOMATIONS_FILE_PATH_PARAM = "automations_file_path"
+PREFER_FILE_MODE_PARAM = "prefer_file_mode"
 DEFAULT_BASE_URL = "http://homeassistant.local:8123"
 
 
@@ -36,6 +48,29 @@ class HomeAssistantMCP(MCPPlugin):
             required=True,
             placeholder="eyJ0eXAiOi...",
             description="Create in Home Assistant user profile under Long-Lived Access Tokens.",
+        ),
+        McpConfigField(
+            id=CONFIG_ROOT_PATH_PARAM,
+            label="Config Root Path",
+            type="text",
+            required=False,
+            placeholder="/config",
+            description="Optional Home Assistant config root for direct YAML file access.",
+        ),
+        McpConfigField(
+            id=AUTOMATIONS_FILE_PATH_PARAM,
+            label="Automations File Path",
+            type="text",
+            required=False,
+            placeholder="/config/automations.yaml",
+            description="Optional explicit automations YAML file path. Overrides Config Root Path default.",
+        ),
+        McpConfigField(
+            id=PREFER_FILE_MODE_PARAM,
+            label="Prefer YAML File Mode",
+            type="checkbox",
+            required=False,
+            description="When enabled, automation read/write tools prioritize local YAML files and fall back to API if unavailable.",
         ),
     ]
 
@@ -191,6 +226,21 @@ class HomeAssistantMCP(MCPPlugin):
                 },
             ),
             McpToolSpec(
+                id="find_automations",
+                label="Find Automations",
+                description="Finds likely matching automations by name/id query and returns ranked candidates.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "minLength": 1},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                        "include_attributes": {"type": "boolean"},
+                        "include_config": {"type": "boolean"},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            McpToolSpec(
                 id="get_automation",
                 label="Get Automation",
                 description="Fetches one automation by automation_id or automation entity_id.",
@@ -216,16 +266,84 @@ class HomeAssistantMCP(MCPPlugin):
                     "required": ["automation_id", "automation"],
                 },
             ),
+            McpToolSpec(
+                id="list_automation_yaml_files",
+                label="List Automation YAML Files",
+                description="Lists configured Home Assistant automation YAML files and whether they are readable.",
+                input_schema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            McpToolSpec(
+                id="read_automation_yaml",
+                label="Read Automation YAML",
+                description="Finds and reads one automation YAML block from file mode (preferred) or API config fallback.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "automation_id": {"type": "string", "minLength": 1},
+                        "name_query": {"type": "string", "minLength": 1},
+                        "prefer_file_mode": {"type": "boolean"},
+                        "max_candidates": {"type": "integer", "minimum": 1, "maximum": 20},
+                    },
+                },
+            ),
+            McpToolSpec(
+                id="update_automation_yaml",
+                label="Update Automation YAML",
+                description="Updates an existing automation YAML block in file mode or API fallback and verifies state.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "automation_id": {"type": "string", "minLength": 1},
+                        "name_query": {"type": "string", "minLength": 1},
+                        "yaml": {"type": "string", "minLength": 1},
+                        "prefer_file_mode": {"type": "boolean"},
+                        "reload": {"type": "boolean"},
+                        "create_if_missing": {"type": "boolean"},
+                        "backup": {"type": "boolean"},
+                    },
+                    "required": ["yaml"],
+                },
+            ),
+            McpToolSpec(
+                id="create_automation_yaml",
+                label="Create Automation YAML",
+                description="Creates a new automation from YAML in file mode or API fallback and verifies state.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "automation_id": {"type": "string", "minLength": 1},
+                        "yaml": {"type": "string", "minLength": 1},
+                        "prefer_file_mode": {"type": "boolean"},
+                        "target_file": {"type": "string"},
+                        "reload": {"type": "boolean"},
+                        "backup": {"type": "boolean"},
+                    },
+                    "required": ["yaml"],
+                },
+            ),
         ]
 
     def tool_call_system_reminder(self, tool_id: str, params: dict[str, str]) -> str:
         del params
-        if tool_id in {"list_entities", "get_entity_state", "get_todo_items", "list_automations", "get_automation"}:
+        if tool_id in {
+            "list_entities",
+            "get_entity_state",
+            "get_todo_items",
+            "list_automations",
+            "find_automations",
+            "get_automation",
+            "list_automation_yaml_files",
+            "read_automation_yaml",
+        }:
             return ""
         return (
             "Home Assistant safety reminder:\n"
             "- Execute only actions explicitly requested by the user in this chat.\n"
             "- Confirm exact entity IDs and service intent before making device or automation changes.\n"
+            "- For automation writes, if multiple matches are plausible, return ambiguity details instead of guessing.\n"
             "- If request is ambiguous or could affect security/safety devices, ask for clarification.\n"
             "- Return JSON only with this shape: {\"arguments\":{...}}"
         )
@@ -291,11 +409,26 @@ class HomeAssistantMCP(MCPPlugin):
             if tool_id == "list_automations":
                 return await asyncio.to_thread(_list_automations, base_url, token, arguments)
 
+            if tool_id == "find_automations":
+                return await asyncio.to_thread(_find_automations, base_url, token, arguments)
+
             if tool_id == "get_automation":
                 return await asyncio.to_thread(_get_automation, base_url, token, arguments)
 
             if tool_id == "create_or_update_automation":
                 return await asyncio.to_thread(_create_or_update_automation, base_url, token, arguments)
+
+            if tool_id == "list_automation_yaml_files":
+                return await asyncio.to_thread(_list_automation_yaml_files, params)
+
+            if tool_id == "read_automation_yaml":
+                return await asyncio.to_thread(_read_automation_yaml, base_url, token, arguments, params)
+
+            if tool_id == "update_automation_yaml":
+                return await asyncio.to_thread(_update_automation_yaml, base_url, token, arguments, params)
+
+            if tool_id == "create_automation_yaml":
+                return await asyncio.to_thread(_create_automation_yaml, base_url, token, arguments, params)
         except error.HTTPError as exc:
             detail = _read_http_error(exc)
             raise RuntimeError(f"Home Assistant API request failed ({exc.code}): {detail}") from exc
@@ -901,6 +1034,773 @@ def _list_automations(base_url: str, token: str, arguments: dict[str, object]) -
     return {
         "count": len(automations),
         "automations": automations,
+    }
+
+
+def _find_automations(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
+    query = _required_str(arguments, "query")
+    include_attributes = bool(arguments.get("include_attributes", False))
+    include_config = bool(arguments.get("include_config", False))
+    limit = _optional_int(arguments, "limit", 10, 1, 50)
+
+    listed = _list_automations(
+        base_url,
+        token,
+        {
+            "include_attributes": True,
+            "include_disabled": True,
+            "limit": 1000,
+        },
+    )
+    raw_automations = listed.get("automations", [])
+    if not isinstance(raw_automations, list):
+        raw_automations = []
+
+    scored: list[dict[str, object]] = []
+    for item in raw_automations:
+        if not isinstance(item, dict):
+            continue
+        candidate = _automation_search_candidate(item)
+        score = _automation_query_score(query, candidate)
+        if score <= 0:
+            continue
+
+        payload: dict[str, object] = {
+            "entity_id": candidate["entity_id"],
+            "automation_id": candidate["automation_id"],
+            "friendly_name": candidate["friendly_name"],
+            "alias": candidate["alias"],
+            "state": candidate["state"],
+            "score": score,
+        }
+        if include_attributes:
+            payload["attributes"] = item.get("attributes", {})
+        if include_config:
+            try:
+                conf = _ha_request_json(
+                    "GET",
+                    f"{base_url}/api/config/automation/config/{parse.quote(candidate['automation_id'], safe='')}",
+                    token,
+                    None,
+                )
+                payload["config"] = conf if isinstance(conf, dict) else {}
+            except error.HTTPError as exc:
+                if exc.code not in {400, 404, 405}:
+                    raise
+                payload["config"] = {}
+            except Exception:
+                payload["config"] = {}
+
+        scored.append(payload)
+
+    scored.sort(key=lambda entry: (_score_value(entry.get("score", 0.0)), str(entry.get("friendly_name", "")).lower()), reverse=True)
+    top = scored[:limit]
+    ambiguous = len(top) > 1 and abs(_score_value(top[0].get("score", 0.0)) - _score_value(top[1].get("score", 0.0))) < 0.08
+    return {
+        "query": query,
+        "count": len(top),
+        "ambiguous": ambiguous,
+        "matches": top,
+    }
+
+
+def _list_automation_yaml_files(params: dict[str, str]) -> dict[str, object]:
+    paths = _configured_automation_file_paths(params)
+    files: list[dict[str, object]] = []
+    for path in paths:
+        files.append(
+            {
+                "path": str(path),
+                "exists": path.exists(),
+                "is_file": path.is_file(),
+                "readable": path.is_file(),
+            }
+        )
+    return {
+        "count": len(files),
+        "files": files,
+    }
+
+
+def _read_automation_yaml(
+    base_url: str,
+    token: str,
+    arguments: dict[str, object],
+    params: dict[str, str],
+) -> dict[str, object]:
+    prefer_file_mode = _effective_prefer_file_mode(arguments, params)
+    max_candidates = _optional_int(arguments, "max_candidates", 5, 1, 20)
+    selected_id = _optional_str(arguments, "automation_id", "")
+    name_query = _optional_str(arguments, "name_query", "")
+
+    if prefer_file_mode:
+        file_result = _read_automation_yaml_from_files(selected_id, name_query, max_candidates, params)
+        if bool(file_result.get("ok", False)):
+            return file_result
+
+    return _read_automation_yaml_from_api(base_url, token, selected_id, name_query, max_candidates)
+
+
+def _update_automation_yaml(
+    base_url: str,
+    token: str,
+    arguments: dict[str, object],
+    params: dict[str, str],
+) -> dict[str, object]:
+    yaml_text = _required_str(arguments, "yaml")
+    prefer_file_mode = _effective_prefer_file_mode(arguments, params)
+    reload_automations = bool(arguments.get("reload", True))
+    create_if_missing = bool(arguments.get("create_if_missing", False))
+    backup = bool(arguments.get("backup", True))
+    selected_id = _optional_str(arguments, "automation_id", "")
+    name_query = _optional_str(arguments, "name_query", "")
+
+    automation_payload = _parse_automation_yaml_block(yaml_text)
+
+    if prefer_file_mode:
+        file_result = _update_automation_yaml_in_files(
+            base_url,
+            token,
+            selected_id,
+            name_query,
+            automation_payload,
+            reload_automations,
+            create_if_missing,
+            backup,
+            params,
+        )
+        if bool(file_result.get("ok", False)):
+            return file_result
+
+    return _update_automation_via_api(
+        base_url,
+        token,
+        selected_id,
+        name_query,
+        automation_payload,
+        reload_automations,
+        create_if_missing,
+    )
+
+
+def _create_automation_yaml(
+    base_url: str,
+    token: str,
+    arguments: dict[str, object],
+    params: dict[str, str],
+) -> dict[str, object]:
+    yaml_text = _required_str(arguments, "yaml")
+    prefer_file_mode = _effective_prefer_file_mode(arguments, params)
+    reload_automations = bool(arguments.get("reload", True))
+    backup = bool(arguments.get("backup", True))
+    selected_id = _optional_str(arguments, "automation_id", "")
+    target_file = _optional_str(arguments, "target_file", "")
+
+    automation_payload = _parse_automation_yaml_block(yaml_text)
+    if selected_id:
+        automation_payload["id"] = _normalize_automation_entity_id(selected_id).split(".", 1)[1]
+
+    if prefer_file_mode:
+        file_result = _create_automation_yaml_in_files(
+            base_url,
+            token,
+            automation_payload,
+            reload_automations,
+            backup,
+            params,
+            target_file,
+        )
+        if bool(file_result.get("ok", False)):
+            return file_result
+
+    automation_id = str(automation_payload.get("id", "")).strip()
+    if not automation_id:
+        raise RuntimeError("Automation YAML must include a non-empty 'id' for API fallback mode.")
+    return _create_or_update_automation(
+        base_url,
+        token,
+        {
+            "automation_id": automation_id,
+            "automation": automation_payload,
+            "reload": reload_automations,
+        },
+    )
+
+
+def _automation_search_candidate(payload: dict[str, object]) -> dict[str, str]:
+    entity_id = str(payload.get("entity_id", "")).strip()
+    automation_id = entity_id.split(".", 1)[1] if entity_id.startswith("automation.") else entity_id
+    attrs = payload.get("attributes")
+    attrs_map = attrs if isinstance(attrs, dict) else {}
+    alias = str(attrs_map.get("friendly_name", "")).strip()
+    friendly_name = str(payload.get("friendly_name", "")).strip() or alias
+    return {
+        "entity_id": entity_id,
+        "automation_id": automation_id,
+        "friendly_name": friendly_name,
+        "alias": alias,
+        "state": str(payload.get("state", "")).strip(),
+    }
+
+
+def _tokenize_query(text: str) -> list[str]:
+    tokens = [token for token in re.split(r"[^a-z0-9]+", text.lower()) if token]
+    return tokens
+
+
+def _automation_query_score(query: str, candidate: dict[str, str]) -> float:
+    query_clean = query.strip().lower()
+    if not query_clean:
+        return 0.0
+
+    entity_id = candidate.get("entity_id", "").lower()
+    automation_id = candidate.get("automation_id", "").lower()
+    friendly_name = candidate.get("friendly_name", "").lower()
+    alias = candidate.get("alias", "").lower()
+    combined = " ".join([entity_id, automation_id, friendly_name, alias]).strip()
+    if not combined:
+        return 0.0
+
+    score = 0.0
+    if query_clean == automation_id:
+        score += 1.2
+    if query_clean == entity_id:
+        score += 1.2
+    if query_clean in {friendly_name, alias}:
+        score += 1.0
+    if query_clean in friendly_name:
+        score += 0.8
+    if query_clean in alias:
+        score += 0.8
+    if query_clean in automation_id:
+        score += 0.6
+    if query_clean in entity_id:
+        score += 0.4
+
+    tokens = _tokenize_query(query_clean)
+    if tokens:
+        fields = [friendly_name, alias, automation_id, entity_id]
+        for token in tokens:
+            if any(token and token in field for field in fields):
+                score += 0.12
+
+    similarity = max(
+        difflib.SequenceMatcher(None, query_clean, friendly_name).ratio(),
+        difflib.SequenceMatcher(None, query_clean, alias).ratio(),
+        difflib.SequenceMatcher(None, query_clean, automation_id).ratio(),
+        difflib.SequenceMatcher(None, query_clean, entity_id).ratio(),
+    )
+    score += similarity * 0.5
+    return round(score, 4)
+
+
+def _score_value(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _effective_prefer_file_mode(arguments: dict[str, object], params: dict[str, str]) -> bool:
+    if "prefer_file_mode" in arguments:
+        return bool(arguments.get("prefer_file_mode", False))
+    raw = str(params.get(PREFER_FILE_MODE_PARAM, "")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _configured_automation_file_paths(params: dict[str, str]) -> list[Path]:
+    explicit_file = str(params.get(AUTOMATIONS_FILE_PATH_PARAM, "")).strip()
+    config_root = str(params.get(CONFIG_ROOT_PATH_PARAM, "")).strip()
+
+    candidates: list[Path] = []
+    if explicit_file:
+        candidates.append(Path(explicit_file).expanduser())
+    if config_root:
+        root = Path(config_root).expanduser()
+        candidates.append(root / "automations.yaml")
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        normalized = str(path.resolve() if path.exists() else path.absolute())
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def _read_automation_yaml_from_files(
+    automation_id: str,
+    name_query: str,
+    max_candidates: int,
+    params: dict[str, str],
+) -> dict[str, object]:
+    paths = _configured_automation_file_paths(params)
+    if not paths:
+        return {
+            "ok": False,
+            "mode": "file",
+            "reason": "No Home Assistant automation YAML file paths are configured.",
+        }
+
+    records = _load_automation_records_from_files(paths)
+    selected = _select_automation_record(records, automation_id, name_query, max_candidates)
+    if not bool(selected.get("ok", False)):
+        selected["mode"] = "file"
+        return selected
+
+    record = selected.get("record")
+    if not isinstance(record, dict):
+        return {
+            "ok": False,
+            "mode": "file",
+            "reason": "Resolved automation record is invalid.",
+        }
+
+    automation = record.get("automation")
+    if not isinstance(automation, dict):
+        return {
+            "ok": False,
+            "mode": "file",
+            "reason": "Resolved automation payload is invalid.",
+        }
+
+    yaml_text = _dump_yaml_text(automation)
+    return {
+        "ok": True,
+        "mode": "file",
+        "path": str(record.get("path", "")),
+        "entity_id": str(record.get("entity_id", "")),
+        "automation_id": str(record.get("automation_id", "")),
+        "friendly_name": str(record.get("friendly_name", "")),
+        "yaml": yaml_text,
+        "automation": automation,
+    }
+
+
+def _read_automation_yaml_from_api(
+    base_url: str,
+    token: str,
+    automation_id: str,
+    name_query: str,
+    max_candidates: int,
+) -> dict[str, object]:
+    resolved_id = ""
+    if automation_id:
+        resolved_id = _normalize_automation_entity_id(automation_id).split(".", 1)[1]
+    elif name_query:
+        found = _find_automations(
+            base_url,
+            token,
+            {
+                "query": name_query,
+                "limit": max_candidates,
+                "include_attributes": False,
+                "include_config": False,
+            },
+        )
+        matches = found.get("matches", [])
+        if not isinstance(matches, list) or not matches:
+            return {
+                "ok": False,
+                "mode": "api",
+                "reason": "No automation matched the provided name query.",
+                "matches": [],
+            }
+        if len(matches) > 1 and _score_value(matches[0].get("score")) - _score_value(matches[1].get("score")) < 0.08:
+            return {
+                "ok": False,
+                "mode": "api",
+                "reason": "Multiple automations match this query. Please specify automation_id.",
+                "matches": matches,
+            }
+        top = matches[0]
+        resolved_id = str(top.get("automation_id", "")).strip()
+    else:
+        raise RuntimeError("Provide either 'automation_id' or 'name_query'.")
+
+    if not resolved_id:
+        raise RuntimeError("Could not resolve automation id.")
+
+    response = _get_automation(base_url, token, {"automation_id": resolved_id})
+    config = response.get("config", {})
+    config_dict = config if isinstance(config, dict) else {}
+    return {
+        "ok": True,
+        "mode": "api",
+        "entity_id": response.get("entity_id", ""),
+        "automation_id": response.get("automation_id", ""),
+        "friendly_name": _friendly_name({"attributes": response.get("attributes", {})}),
+        "yaml": _dump_yaml_text(config_dict),
+        "automation": config_dict,
+    }
+
+
+def _update_automation_yaml_in_files(
+    base_url: str,
+    token: str,
+    automation_id: str,
+    name_query: str,
+    automation_payload: dict[str, object],
+    reload_automations: bool,
+    create_if_missing: bool,
+    backup: bool,
+    params: dict[str, str],
+) -> dict[str, object]:
+    paths = _configured_automation_file_paths(params)
+    if not paths:
+        return {
+            "ok": False,
+            "mode": "file",
+            "reason": "No Home Assistant automation YAML file paths are configured.",
+        }
+
+    records = _load_automation_records_from_files(paths)
+    selected = _select_automation_record(records, automation_id, name_query, 5)
+
+    if bool(selected.get("ok", False)):
+        record = selected.get("record")
+        if not isinstance(record, dict):
+            raise RuntimeError("Resolved automation record is invalid.")
+        target_path = Path(str(record.get("path", "")))
+        target_index = int(record.get("index", -1))
+        if target_index < 0:
+            raise RuntimeError("Resolved automation index is invalid.")
+    else:
+        if not create_if_missing:
+            return {
+                "ok": False,
+                "mode": "file",
+                "reason": str(selected.get("reason", "Automation not found in YAML files.")),
+                "matches": selected.get("matches", []),
+            }
+        target_path = paths[0]
+        target_index = -1
+
+    content = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
+    yaml_module = _yaml_module()
+    loaded = yaml_module.safe_load(content) if content.strip() else []
+    if loaded is None:
+        loaded = []
+    if not isinstance(loaded, list):
+        raise RuntimeError(f"Automation YAML root must be a list in file: {target_path}")
+
+    normalized_payload = dict(automation_payload)
+    if not isinstance(normalized_payload.get("id"), str) or not str(normalized_payload.get("id", "")).strip():
+        resolved_id = _resolved_automation_id_for_write(selected, automation_id, name_query)
+        if resolved_id:
+            normalized_payload["id"] = resolved_id
+
+    if target_index >= 0:
+        loaded[target_index] = normalized_payload
+    else:
+        loaded.append(normalized_payload)
+
+    updated_text = _dump_yaml_text(loaded)
+    write_meta = _write_text_atomic(target_path, updated_text, backup)
+
+    reload_result: dict[str, object] | list[object] | None = None
+    if reload_automations:
+        reload_result = _ha_request_json("POST", f"{base_url}/api/services/automation/reload", token, {})
+
+    final_id = str(normalized_payload.get("id", "")).strip()
+    entity_id = _normalize_automation_entity_id(final_id) if final_id else ""
+    verification = _verify_entity_states(base_url, token, [entity_id] if entity_id else [])
+    return {
+        "ok": True,
+        "mode": "file",
+        "automation_id": final_id,
+        "entity_id": entity_id,
+        "path": str(target_path),
+        "reloaded": bool(reload_automations),
+        "reload_result": reload_result if reload_automations else {},
+        "verification": verification,
+        "write": write_meta,
+    }
+
+
+def _update_automation_via_api(
+    base_url: str,
+    token: str,
+    automation_id: str,
+    name_query: str,
+    automation_payload: dict[str, object],
+    reload_automations: bool,
+    create_if_missing: bool,
+) -> dict[str, object]:
+    resolved_id = ""
+    if automation_id:
+        resolved_id = _normalize_automation_entity_id(automation_id).split(".", 1)[1]
+    elif name_query:
+        found = _find_automations(base_url, token, {"query": name_query, "limit": 5})
+        matches = found.get("matches", [])
+        if not isinstance(matches, list) or not matches:
+            if not create_if_missing:
+                return {
+                    "ok": False,
+                    "mode": "api",
+                    "reason": "No automation matched the provided name query.",
+                    "matches": [],
+                }
+            maybe_id = str(automation_payload.get("id", "")).strip()
+            if not maybe_id:
+                raise RuntimeError("No automation matched name_query. Provide 'automation_id' or set id in YAML.")
+            resolved_id = maybe_id
+        elif len(matches) > 1 and _score_value(matches[0].get("score")) - _score_value(matches[1].get("score")) < 0.08:
+            return {
+                "ok": False,
+                "mode": "api",
+                "reason": "Multiple automations match this query. Please specify automation_id.",
+                "matches": matches,
+            }
+        else:
+            resolved_id = str(matches[0].get("automation_id", "")).strip()
+    else:
+        resolved_id = str(automation_payload.get("id", "")).strip()
+
+    if not resolved_id:
+        raise RuntimeError("Could not resolve automation id for update.")
+
+    payload = dict(automation_payload)
+    payload["id"] = resolved_id
+    result = _create_or_update_automation(
+        base_url,
+        token,
+        {
+            "automation_id": resolved_id,
+            "automation": payload,
+            "reload": reload_automations,
+        },
+    )
+    result["mode"] = "api"
+    result["ok"] = True
+    return result
+
+
+def _create_automation_yaml_in_files(
+    base_url: str,
+    token: str,
+    automation_payload: dict[str, object],
+    reload_automations: bool,
+    backup: bool,
+    params: dict[str, str],
+    target_file: str,
+) -> dict[str, object]:
+    paths = _configured_automation_file_paths(params)
+    if target_file.strip():
+        paths = [Path(target_file).expanduser()] + [path for path in paths if str(path) != target_file.strip()]
+    if not paths:
+        return {
+            "ok": False,
+            "mode": "file",
+            "reason": "No Home Assistant automation YAML file paths are configured.",
+        }
+
+    target_path = paths[0]
+    content = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
+    yaml_module = _yaml_module()
+    loaded = yaml_module.safe_load(content) if content.strip() else []
+    if loaded is None:
+        loaded = []
+    if not isinstance(loaded, list):
+        raise RuntimeError(f"Automation YAML root must be a list in file: {target_path}")
+
+    normalized_payload = dict(automation_payload)
+    automation_id = str(normalized_payload.get("id", "")).strip()
+    if not automation_id:
+        raise RuntimeError("Automation YAML must include a non-empty 'id' in file mode.")
+
+    for existing in loaded:
+        if not isinstance(existing, dict):
+            continue
+        existing_id = str(existing.get("id", "")).strip()
+        if existing_id and existing_id == automation_id:
+            raise RuntimeError(f"Automation id already exists in YAML file: {automation_id}")
+
+    loaded.append(normalized_payload)
+    updated_text = _dump_yaml_text(loaded)
+    write_meta = _write_text_atomic(target_path, updated_text, backup)
+
+    reload_result: dict[str, object] | list[object] | None = None
+    if reload_automations:
+        reload_result = _ha_request_json("POST", f"{base_url}/api/services/automation/reload", token, {})
+
+    entity_id = _normalize_automation_entity_id(automation_id)
+    verification = _verify_entity_states(base_url, token, [entity_id])
+    return {
+        "ok": True,
+        "mode": "file",
+        "action": "created",
+        "automation_id": automation_id,
+        "entity_id": entity_id,
+        "path": str(target_path),
+        "reloaded": bool(reload_automations),
+        "reload_result": reload_result if reload_automations else {},
+        "verification": verification,
+        "write": write_meta,
+    }
+
+
+def _load_automation_records_from_files(paths: list[Path]) -> list[dict[str, object]]:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required for YAML automation file mode. Install dependency 'pyyaml'.")
+
+    records: list[dict[str, object]] = []
+    for path in paths:
+        if not path.exists() or not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        yaml_module = _yaml_module()
+        loaded = yaml_module.safe_load(text) if text.strip() else []
+        if loaded is None:
+            loaded = []
+        if not isinstance(loaded, list):
+            continue
+        for index, item in enumerate(loaded):
+            if not isinstance(item, dict):
+                continue
+            automation_id = str(item.get("id", "")).strip()
+            alias = str(item.get("alias", "")).strip()
+            entity_id = _normalize_automation_entity_id(automation_id) if automation_id else ""
+            records.append(
+                {
+                    "path": str(path),
+                    "index": index,
+                    "automation": item,
+                    "automation_id": automation_id,
+                    "entity_id": entity_id,
+                    "friendly_name": alias,
+                    "alias": alias,
+                }
+            )
+    return records
+
+
+def _select_automation_record(
+    records: list[dict[str, object]],
+    automation_id: str,
+    name_query: str,
+    max_candidates: int,
+) -> dict[str, object]:
+    if automation_id:
+        target = _normalize_automation_entity_id(automation_id).split(".", 1)[1]
+        for record in records:
+            current_id = str(record.get("automation_id", "")).strip()
+            if current_id and current_id == target:
+                return {"ok": True, "record": record}
+        return {
+            "ok": False,
+            "reason": f"Automation id not found in YAML files: {target}",
+            "matches": [],
+        }
+
+    if not name_query:
+        return {
+            "ok": False,
+            "reason": "Provide either 'automation_id' or 'name_query'.",
+            "matches": [],
+        }
+
+    scored: list[dict[str, object]] = []
+    for record in records:
+        candidate = {
+            "entity_id": str(record.get("entity_id", "")).strip(),
+            "automation_id": str(record.get("automation_id", "")).strip(),
+            "friendly_name": str(record.get("friendly_name", "")).strip(),
+            "alias": str(record.get("alias", "")).strip(),
+            "state": "",
+        }
+        score = _automation_query_score(name_query, candidate)
+        if score <= 0:
+            continue
+        scored.append(
+            {
+                "score": score,
+                "record": record,
+                "path": record.get("path", ""),
+                "entity_id": candidate["entity_id"],
+                "automation_id": candidate["automation_id"],
+                "friendly_name": candidate["friendly_name"],
+            }
+        )
+
+    scored.sort(key=lambda entry: (_score_value(entry.get("score")), str(entry.get("friendly_name", "")).lower()), reverse=True)
+    if not scored:
+        return {
+            "ok": False,
+            "reason": "No automation matched the provided name query in YAML files.",
+            "matches": [],
+        }
+    if len(scored) > 1 and _score_value(scored[0].get("score")) - _score_value(scored[1].get("score")) < 0.08:
+        return {
+            "ok": False,
+            "reason": "Multiple automations match this query in YAML files. Please specify automation_id.",
+            "matches": scored[:max_candidates],
+        }
+    return {"ok": True, "record": scored[0]["record"]}
+
+
+def _resolved_automation_id_for_write(selected: dict[str, object], automation_id: str, name_query: str) -> str:
+    if automation_id:
+        return _normalize_automation_entity_id(automation_id).split(".", 1)[1]
+    if bool(selected.get("ok", False)):
+        record = selected.get("record")
+        if isinstance(record, dict):
+            return str(record.get("automation_id", "")).strip()
+    if name_query:
+        return ""
+    return ""
+
+
+def _yaml_module() -> Any:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required for YAML automation tools. Install dependency 'pyyaml'.")
+    return yaml
+
+
+def _parse_automation_yaml_block(yaml_text: str) -> dict[str, object]:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required for YAML automation tools. Install dependency 'pyyaml'.")
+    yaml_module = _yaml_module()
+    loaded = yaml_module.safe_load(yaml_text)
+    if isinstance(loaded, dict):
+        return loaded
+    if isinstance(loaded, list) and len(loaded) == 1 and isinstance(loaded[0], dict):
+        return loaded[0]
+    raise RuntimeError("Automation YAML must parse to one object (or a single-item list containing one object).")
+
+
+def _dump_yaml_text(value: object) -> str:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required for YAML automation tools. Install dependency 'pyyaml'.")
+    yaml_module = _yaml_module()
+    dumped = yaml_module.safe_dump(value, sort_keys=False, allow_unicode=False)
+    return dumped if dumped.endswith("\n") else dumped + "\n"
+
+
+def _write_text_atomic(path: Path, content: str, backup: bool) -> dict[str, object]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    backup_path = Path(f"{path}.bak")
+    if backup and path.exists():
+        backup_path.write_bytes(path.read_bytes())
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent), suffix=".tmp") as handle:
+        handle.write(content)
+        temp_path = Path(handle.name)
+
+    temp_path.replace(path)
+    return {
+        "path": str(path),
+        "backup_created": bool(backup and backup_path.exists()),
+        "backup_path": str(backup_path) if backup and backup_path.exists() else "",
+        "bytes_written": len(content.encode("utf-8")),
     }
 
 
