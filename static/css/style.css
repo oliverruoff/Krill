@@ -2857,6 +2857,16 @@ button:disabled {
   background: var(--bg-gradient);
 }
 
+:root[data-theme="dark"] button,
+:root[data-theme="dark"] .button-link {
+  background-position: 100% 50%;
+}
+
+:root[data-theme="dark"] button:hover,
+:root[data-theme="dark"] .button-link:hover {
+  background-position: 0% 50%;
+}
+
 :root[data-theme="dark"] .card,
 :root[data-theme="dark"] .gateway-topbar,
 :root[data-theme="dark"] .chat-history-panel,

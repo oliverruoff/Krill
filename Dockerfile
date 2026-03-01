@@ -4,6 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV KRILL_BRAINDUMP_PATH=/app/data/braindump.db
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV KRILL_ENABLE_XVFB=1
+ENV DISPLAY=:99
 
 WORKDIR /app
 
@@ -13,6 +15,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         chromium \
+        xvfb \
         git \
         openssh-client \
         gh \

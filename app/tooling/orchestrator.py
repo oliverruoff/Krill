@@ -144,6 +144,29 @@ async def generate_with_tools(
             final_answer = plan.get("final_answer")
             if isinstance(final_answer, str) and final_answer.strip():
                 normalized_answer = final_answer.strip()
+                goal_status = _normalize_goal_status(plan.get("goal_status"))
+
+                if goal_status != "complete" and step_index < normalized_recursion:
+                    incomplete_payload = {
+                        "step": step_index,
+                        "error": "planner_marked_incomplete",
+                        "detail": "Planner responded before objective completion; continuing tool loop.",
+                        "goal_status": goal_status,
+                        "final_answer": normalized_answer,
+                    }
+                    await trace("tool_error", json.dumps(incomplete_payload, ensure_ascii=True))
+                    interaction_log.append(
+                        {
+                            "step": step_index,
+                            "planner_feedback": {
+                                "type": "planner_marked_incomplete",
+                                "message": "Continue using tools until the task is complete or blocked.",
+                                "goal_status": goal_status,
+                            },
+                        }
+                    )
+                    continue
+
                 if not used_tools and _looks_like_tool_avoidance_response(normalized_answer):
                     skip_payload = {
                         "step": step_index,
@@ -171,6 +194,30 @@ async def generate_with_tools(
                 }
 
             break
+
+        if action == "blocked":
+            blocking_reason = str(plan.get("blocking_reason", "")).strip()
+            required_user_input = str(plan.get("required_user_input", "")).strip()
+            blocked_payload = {
+                "step": step_index,
+                "blocking_reason": blocking_reason,
+                "required_user_input": required_user_input,
+            }
+            await trace("tool_blocked", json.dumps(blocked_payload, ensure_ascii=True))
+            blocked_message_parts: list[str] = []
+            if blocking_reason:
+                blocked_message_parts.append(blocking_reason)
+            if required_user_input:
+                blocked_message_parts.append(f"Needed from user: {required_user_input}")
+            blocked_message = "\n\n".join(blocked_message_parts).strip() or (
+                "I am blocked by a required external step and need user input to continue."
+            )
+            return {
+                "text": blocked_message,
+                "used_tokens": _sum_tokens(*token_values),
+                "used_mcp_tools": used_tools,
+                "system_trace_messages": system_trace_messages,
+            }
 
         if action != "call_tool":
             break
@@ -308,6 +355,13 @@ async def generate_with_tools(
                 token_values.append(reminder_tokens)
             tool_call_payload["arguments"] = tool_arguments
 
+        tool_arguments = _align_tool_timeout_argument(
+            arguments=tool_arguments,
+            input_schema=cast(dict[str, object], tool_entry.get("input_schema", {})),
+            timeout_seconds=timeout_seconds,
+        )
+        tool_call_payload["arguments"] = tool_arguments
+
         missing_required_arguments = _missing_required_arguments(
             cast(dict[str, object], tool_entry.get("input_schema", {})),
             tool_arguments,
@@ -369,9 +423,26 @@ async def generate_with_tools(
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
-            raise RuntimeError(
-                f"MCP hard error: {plugin.display_name} ({tool_id}) exceeded timeout of {timeout_seconds}s."
-            ) from exc
+            tool_error_payload = {
+                "mcp_id": mcp_id,
+                "tool_id": tool_id,
+                "arguments": tool_arguments,
+                "step": step_index,
+                "error": "tool_execution_timeout",
+                "detail": f"{plugin.display_name} ({tool_id}) exceeded timeout of {timeout_seconds}s.",
+            }
+            await trace("tool_error", json.dumps(tool_error_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_call": tool_call_payload,
+                    "tool_error": {
+                        "type": "tool_execution_timeout",
+                        "message": f"{plugin.display_name} ({tool_id}) exceeded timeout of {timeout_seconds}s.",
+                    },
+                }
+            )
+            continue
         except Exception as exc:
             tool_error_payload = {
                 "mcp_id": mcp_id,
@@ -505,13 +576,19 @@ def _build_recursive_planner_prompt(
         "You can recursively call tools.\n"
         f"Current step: {step_index} of {max_steps}.\n"
         "Return JSON only.\n"
+        "Your goal is to complete the user's original request end-to-end, not to stop at intermediate status updates.\n"
         "If user asks for live/external/private data (web, files, integrations, devices, Home Assistant, calendars, email), use a tool call first.\n"
         "Do not claim you cannot access browsing/tools/devices when relevant tools are listed.\n"
+        "Only ask the user for help if truly blocked by missing user-only input, explicit approval, or an external challenge that tools cannot resolve.\n"
+        "If information can be fetched via enabled tools, fetch it yourself and continue.\n"
         "If you need another tool call, return: "
         '{"action":"call_tool","mcp_id":"...","tool_id":"...","arguments":{...}}\n'
         "Do not repeat the same mcp_id + tool_id + identical arguments in this request.\n"
-        "If you can answer now, return: "
-        '{"action":"respond","final_answer":"..."}\n'
+        "If the objective is complete, return: "
+        '{"action":"respond","goal_status":"complete","final_answer":"..."}\n'
+        "If the objective is not complete yet, return another tool call instead of a status-only response.\n"
+        "If hard-blocked, return: "
+        '{"action":"blocked","blocking_reason":"...","required_user_input":"..."}\n'
         f"Current datetime (server local): {current_local_time}\n"
         "When user asks relative dates (today/tomorrow/day after tomorrow), convert using this datetime and keep the correct year.\n"
         f"User message: {user_message}\n"
@@ -659,6 +736,50 @@ def _normalize_tool_call_arguments(arguments: dict[str, object]) -> str:
         return json.dumps(str(arguments), ensure_ascii=True)
 
 
+def _align_tool_timeout_argument(
+    *,
+    arguments: dict[str, object],
+    input_schema: dict[str, object],
+    timeout_seconds: int,
+) -> dict[str, object]:
+    properties = input_schema.get("properties") if isinstance(input_schema, dict) else None
+    if not isinstance(properties, dict) or "timeout_ms" not in properties:
+        return arguments
+
+    effective_max_ms = max(1000, (max(5, int(timeout_seconds)) * 1000) - 1000)
+    aligned_arguments = dict(arguments)
+
+    raw_timeout = aligned_arguments.get("timeout_ms")
+    if raw_timeout is None:
+        aligned_arguments["timeout_ms"] = effective_max_ms
+        return aligned_arguments
+
+    parsed_timeout = _safe_int(raw_timeout)
+    if parsed_timeout is None:
+        return aligned_arguments
+
+    aligned_arguments["timeout_ms"] = max(1000, min(parsed_timeout, effective_max_ms))
+    return aligned_arguments
+
+
+def _safe_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(stripped)
+        except ValueError:
+            return None
+    return None
+
+
 def _looks_like_tool_avoidance_response(text: str) -> bool:
     normalized = text.strip().lower().replace("’", "'").replace("`", "'")
     if not normalized:
@@ -677,3 +798,12 @@ def _looks_like_tool_avoidance_response(text: str) -> bool:
         "do not have browsing",
     )
     return any(pattern in normalized for pattern in patterns)
+
+
+def _normalize_goal_status(raw_value: object) -> str:
+    if not isinstance(raw_value, str):
+        return ""
+    normalized = raw_value.strip().lower()
+    if normalized in {"complete", "incomplete", "blocked"}:
+        return normalized
+    return ""

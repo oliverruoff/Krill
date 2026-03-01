@@ -191,6 +191,16 @@ Advanced controls (setup -> Advanced Settings):
 - tool timeout in seconds
 - memory extraction interval (defaults to 10 user messages)
 
+Recommended baseline for autonomous web-heavy flows (Browser Control + integrations):
+
+- max tool recursion: `8`
+- tool timeout in seconds: `90`
+
+Notes:
+
+- new installations use these defaults automatically
+- existing installations keep their current saved values until you change them in Advanced Settings
+
 ### 5) API + Streaming
 
 Core chat endpoint: `POST /api/chat/stream`
@@ -284,6 +294,13 @@ docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
 
 The container image includes Node.js/npm and Git tooling (`git`, `ssh`, `ssh-keygen`, `gh`) so OpenCode/Git MCP workflows run end-to-end.
+It also starts `Xvfb` by default (`KRILL_ENABLE_XVFB=1`) so Browser Control headed mode can run inside Docker without a host X server.
+
+Optional (disable virtual display/Xvfb):
+
+```bash
+docker run --name krill -p 8055:8055 -e KRILL_ENABLE_XVFB=0 -v krill_data:/app/data krill:latest
+```
 
 ### Updating Krill (Docker)
 

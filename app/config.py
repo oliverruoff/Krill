@@ -116,8 +116,8 @@ class Settings(BaseModel):
     chats: list[ChatSession] = Field(default_factory=list)
     mcp_configs: dict[str, McpConfig] = Field(default_factory=dict)
     integration_configs: dict[str, IntegrationConfig] = Field(default_factory=dict)
-    tool_max_recursion: int = Field(default=6, ge=1, le=20)
-    tool_timeout_seconds: int = Field(default=45, ge=5, le=300)
+    tool_max_recursion: int = Field(default=8, ge=1, le=20)
+    tool_timeout_seconds: int = Field(default=90, ge=5, le=300)
     memory_extraction_interval: int = Field(default=10, ge=1, le=500)
     user_message_count: int = Field(default=0, ge=0)
     daily_token_usage: list[DailyTokenUsage] = Field(default_factory=list)
@@ -157,8 +157,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           active_provider_id TEXT NOT NULL DEFAULT '',
           active_model_id TEXT NOT NULL DEFAULT '',
           active_chat_id TEXT NOT NULL DEFAULT '',
-          tool_max_recursion INTEGER NOT NULL DEFAULT 6,
-          tool_timeout_seconds INTEGER NOT NULL DEFAULT 45,
+          tool_max_recursion INTEGER NOT NULL DEFAULT 8,
+          tool_timeout_seconds INTEGER NOT NULL DEFAULT 90,
           memory_extraction_interval INTEGER NOT NULL DEFAULT 10,
           user_message_count INTEGER NOT NULL DEFAULT 0,
           theme TEXT NOT NULL DEFAULT 'light'
