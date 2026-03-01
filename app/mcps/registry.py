@@ -12,6 +12,7 @@ from .opencode import OpenCodeMCP
 from .ssh_control import SSHControlMCP
 from .timed_jobs import TimedJobsMCP
 from .whatsapp import WhatsAppMCP
+from .youtube_summarizer import YouTubeSummarizerMCP
 
 
 _MCPS: dict[str, MCPPlugin] = {
@@ -26,6 +27,7 @@ _MCPS: dict[str, MCPPlugin] = {
     "ssh_control": SSHControlMCP(),
     "timed_jobs": TimedJobsMCP(),
     "whatsapp": WhatsAppMCP(),
+    "youtube_summarizer": YouTubeSummarizerMCP(),
 }
 
 

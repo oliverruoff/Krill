@@ -101,6 +101,7 @@ Current tools:
 - `opencode` (disabled by default, delegates coding work to `npx opencode run`)
 - `ssh_control` (disabled by default, chat-driven SSH connect/execute/session management)
 - `timed_jobs` (manage timed jobs via tools: list/get/create/update/delete/trigger)
+- `youtube_summarizer` (enabled by default, fetches YouTube transcripts and summarizes videos)
 
 OpenCode MCP notes:
 
@@ -150,6 +151,13 @@ Google Services MCP notes:
 - Drive local uploads (`drive_upload_local_file`) now allow `max_bytes` up to 1GB
 - if Google OAuth shows private-IP redirect errors in Docker, set `KRILL_PUBLIC_BASE_URL` to a reachable host URL (for local host-browser use: `http://localhost:8055`)
 - OAuth tokens and resolved client credentials are persisted in `braindump.db` (`mcp_config_params`), so export/import keeps the connection usable
+
+YouTube Summarizer MCP notes:
+
+- enabled by default
+- uses `youtube-transcript-api` to fetch transcript text from a YouTube URL or video id
+- supports summary depth levels via tool argument: `brief`, `standard`, `detailed`
+- returns transcript metadata plus summary and key points
 
 Current integrations:
 

@@ -4,3 +4,4 @@ pydantic
 python-multipart
 playwright
 paramiko
+youtube-transcript-api
