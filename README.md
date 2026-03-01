@@ -99,6 +99,7 @@ Current tools:
 - `local_files` (enabled by default)
 - `memory_access` (enabled by default)
 - `opencode` (disabled by default, delegates coding work to `npx opencode run`)
+- `ssh_control` (disabled by default, chat-driven SSH connect/execute/session management)
 - `timed_jobs` (manage timed jobs via tools: list/get/create/update/delete/trigger)
 
 OpenCode MCP notes:
@@ -116,6 +117,14 @@ Browser Control MCP notes:
 - supports session-based browsing actions: start/navigate/snapshot/click/fill/select/press/wait/extract/close
 - uses in-memory per-channel+chat sessions (not persisted to `braindump.db`)
 - local runtime setup requires Playwright browser install once: `playwright install chromium`
+
+SSH Control MCP notes:
+
+- disabled by default
+- no tool-card config fields; connection details are supplied directly in tool arguments by the planner
+- supports password auth and private-key auth (with optional key passphrase)
+- default host key behavior is permissive (`strict_host_key_checking=false`) and accepts unknown keys automatically
+- keeps one in-memory SSH session per channel+chat until disconnected or restart
 
 Home Assistant MCP notes:
 

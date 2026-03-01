@@ -9,6 +9,7 @@ from .local_files import LocalFilesMCP
 from .memory_access import MemoryAccessMCP
 from .google_services import GoogleServicesMCP
 from .opencode import OpenCodeMCP
+from .ssh_control import SSHControlMCP
 from .timed_jobs import TimedJobsMCP
 from .whatsapp import WhatsAppMCP
 
@@ -22,6 +23,7 @@ _MCPS: dict[str, MCPPlugin] = {
     "memory_access": MemoryAccessMCP(),
     "google_services": GoogleServicesMCP(),
     "opencode": OpenCodeMCP(),
+    "ssh_control": SSHControlMCP(),
     "timed_jobs": TimedJobsMCP(),
     "whatsapp": WhatsAppMCP(),
 }

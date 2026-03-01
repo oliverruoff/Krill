@@ -294,10 +294,11 @@ async def generate_with_tools(
                     if str(entry.get("mcp_id", "")) == mcp_id
                 }
             )
+            redacted_arguments = _redact_sensitive_payload(tool_arguments)
             unavailable_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
-                "arguments": tool_arguments,
+                "arguments": redacted_arguments,
                 "step": step_index,
                 "error": "planner_selected_unavailable_tool",
                 "available_tool_ids_for_mcp": available_for_mcp,
@@ -309,7 +310,7 @@ async def generate_with_tools(
                     "tool_call": {
                         "mcp_id": mcp_id,
                         "tool_id": tool_id,
-                        "arguments": tool_arguments,
+                        "arguments": redacted_arguments,
                         "step": step_index,
                     },
                     "tool_error": {
@@ -333,7 +334,7 @@ async def generate_with_tools(
         tool_call_payload = {
             "mcp_id": mcp_id,
             "tool_id": tool_id,
-            "arguments": tool_arguments,
+            "arguments": _redact_sensitive_payload(tool_arguments),
             "step": step_index,
         }
 
@@ -353,14 +354,14 @@ async def generate_with_tools(
             )
             if isinstance(reminder_tokens, int):
                 token_values.append(reminder_tokens)
-            tool_call_payload["arguments"] = tool_arguments
+            tool_call_payload["arguments"] = _redact_sensitive_payload(tool_arguments)
 
         tool_arguments = _align_tool_timeout_argument(
             arguments=tool_arguments,
             input_schema=cast(dict[str, object], tool_entry.get("input_schema", {})),
             timeout_seconds=timeout_seconds,
         )
-        tool_call_payload["arguments"] = tool_arguments
+        tool_call_payload["arguments"] = _redact_sensitive_payload(tool_arguments)
 
         missing_required_arguments = _missing_required_arguments(
             cast(dict[str, object], tool_entry.get("input_schema", {})),
@@ -370,7 +371,7 @@ async def generate_with_tools(
             missing_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
-                "arguments": tool_arguments,
+                "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "missing_required_arguments",
                 "missing_required_arguments": missing_required_arguments,
@@ -394,7 +395,7 @@ async def generate_with_tools(
             duplicate_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
-                "arguments": tool_arguments,
+                "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "duplicate_tool_call_blocked",
                 "detail": "Blocked duplicate MCP tool call with identical arguments in this orchestration run.",
@@ -426,7 +427,7 @@ async def generate_with_tools(
             tool_error_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
-                "arguments": tool_arguments,
+                "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "tool_execution_timeout",
                 "detail": f"{plugin.display_name} ({tool_id}) exceeded timeout of {timeout_seconds}s.",
@@ -447,7 +448,7 @@ async def generate_with_tools(
             tool_error_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
-                "arguments": tool_arguments,
+                "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "tool_execution_failed",
                 "detail": str(exc),
@@ -465,7 +466,7 @@ async def generate_with_tools(
             )
             continue
 
-        await trace("tool_result", json.dumps(tool_result, ensure_ascii=True))
+        await trace("tool_result", json.dumps(_redact_sensitive_payload(tool_result), ensure_ascii=True))
         interaction_log.append({
             "step": step_index,
             "tool_call": tool_call_payload,
@@ -807,3 +808,35 @@ def _normalize_goal_status(raw_value: object) -> str:
     if normalized in {"complete", "incomplete", "blocked"}:
         return normalized
     return ""
+
+
+_SENSITIVE_FIELD_KEYWORDS = (
+    "password",
+    "passwd",
+    "private_key",
+    "passphrase",
+    "secret",
+    "token",
+    "api_key",
+    "authorization",
+)
+
+
+def _redact_sensitive_payload(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _is_sensitive_field_name(key_text):
+                redacted[key_text] = "[REDACTED]"
+            else:
+                redacted[key_text] = _redact_sensitive_payload(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive_payload(item) for item in value]
+    return value
+
+
+def _is_sensitive_field_name(field_name: str) -> bool:
+    lowered = field_name.strip().lower()
+    return any(keyword in lowered for keyword in _SENSITIVE_FIELD_KEYWORDS)
