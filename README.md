@@ -70,6 +70,11 @@ OpenAI OAuth provider notes:
 - no owner-managed OAuth client id/secret required for this provider flow
 - automatic callback mode uses `KRILL_PUBLIC_BASE_URL` if set; manual mode is also supported by pasting the final redirect URL/code
 - this uses ChatGPT/Codex OAuth tokens (subscription auth), not OpenAI Platform API keys
+- OpenAI OAuth API routes are isolated in `app/routers/openai_oauth.py` and mounted from `app/main.py`
+
+Google OAuth MCP note:
+
+- Google OAuth API routes are isolated in `app/routers/google_oauth.py` and mounted from `app/main.py`
 
 ### 3) Tools (MCP layer)
 
