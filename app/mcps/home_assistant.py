@@ -8,13 +8,8 @@ import json
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Mapping
 from urllib import error, parse, request
-
-try:
-    import yaml
-except Exception:  # pragma: no cover - optional dependency guard
-    yaml = None
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
 
@@ -1156,6 +1151,7 @@ def _update_automation_yaml(
     name_query = _optional_str(arguments, "name_query", "")
 
     automation_payload = _parse_automation_yaml_block(yaml_text)
+    normalized_yaml = _normalize_mapping_yaml_text(yaml_text)
 
     if prefer_file_mode:
         file_result = _update_automation_yaml_in_files(
@@ -1163,7 +1159,7 @@ def _update_automation_yaml(
             token,
             selected_id,
             name_query,
-            automation_payload,
+            normalized_yaml,
             reload_automations,
             create_if_missing,
             backup,
@@ -1199,12 +1195,13 @@ def _create_automation_yaml(
     automation_payload = _parse_automation_yaml_block(yaml_text)
     if selected_id:
         automation_payload["id"] = _normalize_automation_entity_id(selected_id).split(".", 1)[1]
+    normalized_yaml = _dump_yaml_text(automation_payload)
 
     if prefer_file_mode:
         file_result = _create_automation_yaml_in_files(
             base_url,
             token,
-            automation_payload,
+            normalized_yaml,
             reload_automations,
             backup,
             params,
@@ -1363,15 +1360,16 @@ def _read_automation_yaml_from_files(
             "reason": "Resolved automation record is invalid.",
         }
 
-    automation = record.get("automation")
-    if not isinstance(automation, dict):
-        return {
-            "ok": False,
-            "mode": "file",
-            "reason": "Resolved automation payload is invalid.",
-        }
+    mapping_yaml = str(record.get("yaml", "")).strip()
+    yaml_text = mapping_yaml + ("\n" if mapping_yaml else "")
+    automation_obj: dict[str, object] = {}
+    try:
+        parsed = _parse_automation_yaml_block(yaml_text)
+        if isinstance(parsed, dict):
+            automation_obj = parsed
+    except Exception:
+        automation_obj = {}
 
-    yaml_text = _dump_yaml_text(automation)
     return {
         "ok": True,
         "mode": "file",
@@ -1380,7 +1378,7 @@ def _read_automation_yaml_from_files(
         "automation_id": str(record.get("automation_id", "")),
         "friendly_name": str(record.get("friendly_name", "")),
         "yaml": yaml_text,
-        "automation": automation,
+        "automation": automation_obj,
     }
 
 
@@ -1447,7 +1445,7 @@ def _update_automation_yaml_in_files(
     token: str,
     automation_id: str,
     name_query: str,
-    automation_payload: dict[str, object],
+    automation_yaml: str,
     reload_automations: bool,
     create_if_missing: bool,
     backup: bool,
@@ -1483,33 +1481,18 @@ def _update_automation_yaml_in_files(
         target_path = paths[0]
         target_index = -1
 
-    content = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
-    yaml_module = _yaml_module()
-    loaded = yaml_module.safe_load(content) if content.strip() else []
-    if loaded is None:
-        loaded = []
-    if not isinstance(loaded, list):
-        raise RuntimeError(f"Automation YAML root must be a list in file: {target_path}")
+    normalized_block = _normalize_mapping_yaml_text(automation_yaml)
+    resolved_id = _resolved_automation_id_for_write(selected, automation_id, name_query)
+    if resolved_id:
+        normalized_block = _ensure_top_level_yaml_key(normalized_block, "id", resolved_id)
 
-    normalized_payload = dict(automation_payload)
-    if not isinstance(normalized_payload.get("id"), str) or not str(normalized_payload.get("id", "")).strip():
-        resolved_id = _resolved_automation_id_for_write(selected, automation_id, name_query)
-        if resolved_id:
-            normalized_payload["id"] = resolved_id
+    write_meta = _write_or_append_automation_block(target_path, target_index, normalized_block, backup)
 
-    if target_index >= 0:
-        loaded[target_index] = normalized_payload
-    else:
-        loaded.append(normalized_payload)
-
-    updated_text = _dump_yaml_text(loaded)
-    write_meta = _write_text_atomic(target_path, updated_text, backup)
-
+    final_id = _extract_top_level_yaml_key(normalized_block, "id")
     reload_result: dict[str, object] | list[object] | None = None
     if reload_automations:
         reload_result = _ha_request_json("POST", f"{base_url}/api/services/automation/reload", token, {})
 
-    final_id = str(normalized_payload.get("id", "")).strip()
     entity_id = _normalize_automation_entity_id(final_id) if final_id else ""
     verification = _verify_entity_states(base_url, token, [entity_id] if entity_id else [])
     return {
@@ -1586,7 +1569,7 @@ def _update_automation_via_api(
 def _create_automation_yaml_in_files(
     base_url: str,
     token: str,
-    automation_payload: dict[str, object],
+    automation_yaml: str,
     reload_automations: bool,
     backup: bool,
     params: dict[str, str],
@@ -1603,29 +1586,18 @@ def _create_automation_yaml_in_files(
         }
 
     target_path = paths[0]
-    content = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
-    yaml_module = _yaml_module()
-    loaded = yaml_module.safe_load(content) if content.strip() else []
-    if loaded is None:
-        loaded = []
-    if not isinstance(loaded, list):
-        raise RuntimeError(f"Automation YAML root must be a list in file: {target_path}")
-
-    normalized_payload = dict(automation_payload)
-    automation_id = str(normalized_payload.get("id", "")).strip()
+    records = _load_automation_records_from_files([target_path])
+    normalized_block = _normalize_mapping_yaml_text(automation_yaml)
+    automation_id = _extract_top_level_yaml_key(normalized_block, "id")
     if not automation_id:
-        raise RuntimeError("Automation YAML must include a non-empty 'id' in file mode.")
+        raise RuntimeError("Automation YAML must include a non-empty top-level 'id' in file mode.")
 
-    for existing in loaded:
-        if not isinstance(existing, dict):
-            continue
-        existing_id = str(existing.get("id", "")).strip()
+    for existing in records:
+        existing_id = str(existing.get("automation_id", "")).strip()
         if existing_id and existing_id == automation_id:
             raise RuntimeError(f"Automation id already exists in YAML file: {automation_id}")
 
-    loaded.append(normalized_payload)
-    updated_text = _dump_yaml_text(loaded)
-    write_meta = _write_text_atomic(target_path, updated_text, backup)
+    write_meta = _write_or_append_automation_block(target_path, -1, normalized_block, backup)
 
     reload_result: dict[str, object] | list[object] | None = None
     if reload_automations:
@@ -1648,37 +1620,30 @@ def _create_automation_yaml_in_files(
 
 
 def _load_automation_records_from_files(paths: list[Path]) -> list[dict[str, object]]:
-    if yaml is None:
-        raise RuntimeError("PyYAML is required for YAML automation file mode. Install dependency 'pyyaml'.")
-
     records: list[dict[str, object]] = []
     for path in paths:
         if not path.exists() or not path.is_file():
             continue
         text = path.read_text(encoding="utf-8")
-        yaml_module = _yaml_module()
-        loaded = yaml_module.safe_load(text) if text.strip() else []
-        if loaded is None:
-            loaded = []
-        if not isinstance(loaded, list):
+        parsed = _extract_automation_blocks(text)
+        blocks = parsed.get("blocks", [])
+        if not isinstance(blocks, list):
             continue
-        for index, item in enumerate(loaded):
-            if not isinstance(item, dict):
+        for block in blocks:
+            if not isinstance(block, dict):
                 continue
-            automation_id = str(item.get("id", "")).strip()
-            alias = str(item.get("alias", "")).strip()
-            entity_id = _normalize_automation_entity_id(automation_id) if automation_id else ""
-            records.append(
-                {
-                    "path": str(path),
-                    "index": index,
-                    "automation": item,
-                    "automation_id": automation_id,
-                    "entity_id": entity_id,
-                    "friendly_name": alias,
-                    "alias": alias,
-                }
-            )
+            block_record = {
+                "path": str(path),
+                "index": block.get("index", -1),
+                "start_line": block.get("start_line", -1),
+                "end_line": block.get("end_line", -1),
+                "yaml": block.get("yaml", ""),
+                "automation_id": block.get("automation_id", ""),
+                "entity_id": block.get("entity_id", ""),
+                "friendly_name": block.get("alias", ""),
+                "alias": block.get("alias", ""),
+            }
+            records.append(block_record)
     return records
 
 
@@ -1758,30 +1723,389 @@ def _resolved_automation_id_for_write(selected: dict[str, object], automation_id
     return ""
 
 
-def _yaml_module() -> Any:
-    if yaml is None:
-        raise RuntimeError("PyYAML is required for YAML automation tools. Install dependency 'pyyaml'.")
-    return yaml
-
-
 def _parse_automation_yaml_block(yaml_text: str) -> dict[str, object]:
-    if yaml is None:
-        raise RuntimeError("PyYAML is required for YAML automation tools. Install dependency 'pyyaml'.")
-    yaml_module = _yaml_module()
-    loaded = yaml_module.safe_load(yaml_text)
-    if isinstance(loaded, dict):
-        return loaded
-    if isinstance(loaded, list) and len(loaded) == 1 and isinstance(loaded[0], dict):
-        return loaded[0]
+    parsed_lines = _prepare_yaml_lines(_normalize_mapping_yaml_text(yaml_text))
+    if not parsed_lines:
+        raise RuntimeError("Automation YAML cannot be empty.")
+    value, next_index = _parse_yaml_node(parsed_lines, 0)
+    if next_index != len(parsed_lines):
+        raise RuntimeError("Automation YAML contains unexpected trailing content.")
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict):
+        return value[0]
     raise RuntimeError("Automation YAML must parse to one object (or a single-item list containing one object).")
 
 
 def _dump_yaml_text(value: object) -> str:
-    if yaml is None:
-        raise RuntimeError("PyYAML is required for YAML automation tools. Install dependency 'pyyaml'.")
-    yaml_module = _yaml_module()
-    dumped = yaml_module.safe_dump(value, sort_keys=False, allow_unicode=False)
-    return dumped if dumped.endswith("\n") else dumped + "\n"
+    lines: list[str] = []
+    _emit_yaml(value, 0, lines)
+    dumped = "\n".join(lines).rstrip("\n")
+    return dumped + "\n"
+
+
+def _extract_automation_blocks(file_text: str) -> dict[str, object]:
+    lines = file_text.splitlines()
+    starts: list[int] = []
+    for index, line in enumerate(lines):
+        if line.startswith("-") and (len(line) == 1 or line[1] in {" ", "\t"}):
+            starts.append(index)
+
+    blocks: list[dict[str, object]] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] - 1 if index + 1 < len(starts) else len(lines) - 1
+        block_lines = lines[start : end + 1]
+        mapping_yaml = _list_item_lines_to_mapping_yaml(block_lines)
+        automation_id = _extract_top_level_yaml_key(mapping_yaml, "id")
+        alias = _extract_top_level_yaml_key(mapping_yaml, "alias")
+        blocks.append(
+            {
+                "index": index,
+                "start_line": start,
+                "end_line": end,
+                "yaml": mapping_yaml,
+                "automation_id": automation_id,
+                "entity_id": _normalize_automation_entity_id(automation_id) if automation_id else "",
+                "alias": alias,
+            }
+        )
+
+    return {
+        "lines": lines,
+        "blocks": blocks,
+    }
+
+
+def _list_item_lines_to_mapping_yaml(block_lines: list[str]) -> str:
+    if not block_lines:
+        return ""
+    first = block_lines[0]
+    if first == "-":
+        first_content = ""
+    elif first.startswith("- "):
+        first_content = first[2:]
+    else:
+        first_content = first[1:].lstrip()
+
+    normalized: list[str] = []
+    if first_content:
+        normalized.append(first_content)
+    for line in block_lines[1:]:
+        normalized.append(line[2:] if line.startswith("  ") else line)
+
+    text = "\n".join(normalized).strip("\n")
+    return text + ("\n" if text else "")
+
+
+def _mapping_yaml_to_list_item_lines(mapping_yaml: str) -> list[str]:
+    cleaned = _normalize_mapping_yaml_text(mapping_yaml)
+    raw_lines = cleaned.splitlines()
+    if not raw_lines:
+        return ["-"]
+
+    output: list[str] = []
+    output.append("- " + raw_lines[0] if raw_lines[0].strip() else "-")
+    for line in raw_lines[1:]:
+        output.append("  " + line if line else "")
+    return output
+
+
+def _write_or_append_automation_block(path: Path, target_index: int, mapping_yaml: str, backup: bool) -> dict[str, object]:
+    existing_text = path.read_text(encoding="utf-8") if path.exists() else ""
+    extracted = _extract_automation_blocks(existing_text)
+    lines = extracted.get("lines", [])
+    blocks = extracted.get("blocks", [])
+    if not isinstance(lines, list) or not isinstance(blocks, list):
+        raise RuntimeError("Failed to parse automation YAML file structure.")
+
+    replacement_lines = _mapping_yaml_to_list_item_lines(mapping_yaml)
+
+    updated_lines: list[str]
+    if target_index >= 0:
+        if target_index >= len(blocks):
+            raise RuntimeError("Target automation index was out of range for YAML replacement.")
+        target = blocks[target_index]
+        start = int(target.get("start_line", -1))
+        end = int(target.get("end_line", -1))
+        if start < 0 or end < start:
+            raise RuntimeError("Invalid automation block range in YAML file.")
+        updated_lines = [*lines[:start], *replacement_lines, *lines[end + 1 :]]
+    else:
+        updated_lines = list(lines)
+        while updated_lines and not str(updated_lines[-1]).strip():
+            updated_lines.pop()
+        if updated_lines:
+            updated_lines.append("")
+        updated_lines.extend(replacement_lines)
+
+    updated_text = "\n".join(str(line) for line in updated_lines).rstrip("\n") + "\n"
+    return _write_text_atomic(path, updated_text, backup)
+
+
+def _normalize_mapping_yaml_text(yaml_text: str) -> str:
+    lines = [line.rstrip() for line in str(yaml_text).replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return ""
+
+    first = lines[0].lstrip()
+    if first.startswith("-"):
+        return _list_item_lines_to_mapping_yaml(lines)
+    return "\n".join(lines) + "\n"
+
+
+def _extract_top_level_yaml_key(mapping_yaml: str, key: str) -> str:
+    target = key.strip()
+    for raw_line in mapping_yaml.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if indent != 0:
+            continue
+        stripped = raw_line.strip()
+        if ":" not in stripped:
+            continue
+        candidate_key, candidate_value = stripped.split(":", 1)
+        if candidate_key.strip() != target:
+            continue
+        return _normalize_inline_yaml_value(candidate_value.strip())
+    return ""
+
+
+def _ensure_top_level_yaml_key(mapping_yaml: str, key: str, value: str) -> str:
+    lines = _normalize_mapping_yaml_text(mapping_yaml).splitlines()
+    if not lines:
+        return f"{key}: {_yaml_quote_string(value)}\n"
+
+    replaced = False
+    output: list[str] = []
+    for raw_line in lines:
+        if not replaced:
+            indent = len(raw_line) - len(raw_line.lstrip(" "))
+            stripped = raw_line.strip()
+            if indent == 0 and ":" in stripped:
+                candidate_key, _ = stripped.split(":", 1)
+                if candidate_key.strip() == key:
+                    output.append(f"{key}: {_yaml_quote_string(value)}")
+                    replaced = True
+                    continue
+        output.append(raw_line)
+
+    if not replaced:
+        output.insert(0, f"{key}: {_yaml_quote_string(value)}")
+    return "\n".join(output).rstrip("\n") + "\n"
+
+
+def _prepare_yaml_lines(yaml_text: str) -> list[tuple[int, str]]:
+    parsed: list[tuple[int, str]] = []
+    for raw_line in yaml_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped_right = raw_line.rstrip()
+        if not stripped_right.strip():
+            continue
+        left_trimmed = stripped_right.lstrip(" ")
+        if left_trimmed.startswith("#"):
+            continue
+        indent = len(stripped_right) - len(left_trimmed)
+        parsed.append((indent, left_trimmed))
+    return parsed
+
+
+def _parse_yaml_node(lines: list[tuple[int, str]], start_index: int) -> tuple[object, int]:
+    if start_index >= len(lines):
+        raise RuntimeError("Unexpected end of YAML content.")
+    indent, text = lines[start_index]
+    if text.startswith("-"):
+        return _parse_yaml_list(lines, start_index, indent)
+    return _parse_yaml_map(lines, start_index, indent)
+
+
+def _parse_yaml_map(lines: list[tuple[int, str]], start_index: int, base_indent: int) -> tuple[dict[str, object], int]:
+    result: dict[str, object] = {}
+    index = start_index
+    while index < len(lines):
+        indent, text = lines[index]
+        if indent < base_indent:
+            break
+        if indent > base_indent:
+            raise RuntimeError("Invalid YAML indentation in mapping.")
+        if text.startswith("-"):
+            break
+        if ":" not in text:
+            raise RuntimeError(f"Invalid YAML mapping line: '{text}'")
+
+        key_text, value_text = text.split(":", 1)
+        key = key_text.strip()
+        value_inline = value_text.strip()
+        index += 1
+        if value_inline:
+            result[key] = _parse_yaml_scalar(value_inline)
+            continue
+
+        if index < len(lines) and lines[index][0] > indent:
+            nested_value, index = _parse_yaml_node(lines, index)
+            result[key] = nested_value
+        else:
+            result[key] = {}
+    return result, index
+
+
+def _parse_yaml_list(lines: list[tuple[int, str]], start_index: int, base_indent: int) -> tuple[list[object], int]:
+    result: list[object] = []
+    index = start_index
+    while index < len(lines):
+        indent, text = lines[index]
+        if indent < base_indent:
+            break
+        if indent > base_indent:
+            raise RuntimeError("Invalid YAML indentation in list.")
+        if not text.startswith("-"):
+            break
+
+        item_inline = text[1:].strip()
+        index += 1
+        if not item_inline:
+            if index < len(lines) and lines[index][0] > indent:
+                nested_value, index = _parse_yaml_node(lines, index)
+                result.append(nested_value)
+            else:
+                result.append(None)
+            continue
+
+        if ":" in item_inline and not item_inline.startswith(("'", '"')):
+            key_text, value_text = item_inline.split(":", 1)
+            item_map: dict[str, object] = {}
+            key = key_text.strip()
+            value_inline = value_text.strip()
+            if value_inline:
+                item_map[key] = _parse_yaml_scalar(value_inline)
+            elif index < len(lines) and lines[index][0] > indent:
+                nested_value, index = _parse_yaml_node(lines, index)
+                item_map[key] = nested_value
+            else:
+                item_map[key] = {}
+
+            while index < len(lines) and lines[index][0] > indent:
+                nested_indent = lines[index][0]
+                nested_map, next_index = _parse_yaml_map(lines, index, nested_indent)
+                if not nested_map:
+                    break
+                item_map.update(nested_map)
+                index = next_index
+            result.append(item_map)
+            continue
+
+        result.append(_parse_yaml_scalar(item_inline))
+    return result, index
+
+
+def _parse_yaml_scalar(text: str) -> object:
+    cleaned = text.strip()
+    lower = cleaned.lower()
+    if lower in {"null", "~"}:
+        return None
+    if lower == "true":
+        return True
+    if lower == "false":
+        return False
+    if re.fullmatch(r"-?\d+", cleaned):
+        try:
+            return int(cleaned)
+        except ValueError:
+            pass
+    if re.fullmatch(r"-?\d+\.\d+", cleaned):
+        try:
+            return float(cleaned)
+        except ValueError:
+            pass
+    if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+        return _normalize_inline_yaml_value(cleaned)
+    return cleaned
+
+
+def _normalize_inline_yaml_value(raw_value: str) -> str:
+    value = raw_value.strip()
+    if len(value) >= 2 and ((value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")):
+        return value[1:-1]
+    return value
+
+
+def _emit_yaml(value: object, indent: int, lines: list[str]) -> None:
+    prefix = " " * indent
+    if isinstance(value, dict):
+        if not value:
+            lines.append(prefix + "{}")
+            return
+        for key, nested in value.items():
+            key_text = str(key)
+            if _is_yaml_scalar(nested):
+                lines.append(prefix + f"{key_text}: {_yaml_scalar_text(nested)}")
+            else:
+                lines.append(prefix + f"{key_text}:")
+                _emit_yaml(nested, indent + 2, lines)
+        return
+
+    if isinstance(value, list):
+        if not value:
+            lines.append(prefix + "[]")
+            return
+        for item in value:
+            if _is_yaml_scalar(item):
+                lines.append(prefix + f"- {_yaml_scalar_text(item)}")
+            elif isinstance(item, dict) and item:
+                keys = list(item.keys())
+                first_key = str(keys[0])
+                first_value = item[keys[0]]
+                if _is_yaml_scalar(first_value):
+                    lines.append(prefix + f"- {first_key}: {_yaml_scalar_text(first_value)}")
+                else:
+                    lines.append(prefix + f"- {first_key}:")
+                    _emit_yaml(first_value, indent + 4, lines)
+
+                for extra_key in keys[1:]:
+                    extra_value = item[extra_key]
+                    extra_prefix = " " * (indent + 2)
+                    key_text = str(extra_key)
+                    if _is_yaml_scalar(extra_value):
+                        lines.append(extra_prefix + f"{key_text}: {_yaml_scalar_text(extra_value)}")
+                    else:
+                        lines.append(extra_prefix + f"{key_text}:")
+                        _emit_yaml(extra_value, indent + 4, lines)
+            else:
+                lines.append(prefix + "-")
+                _emit_yaml(item, indent + 2, lines)
+        return
+
+    lines.append(prefix + _yaml_scalar_text(value))
+
+
+def _is_yaml_scalar(value: object) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _yaml_scalar_text(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return _yaml_quote_string(value)
+    return _yaml_quote_string(str(value))
+
+
+def _yaml_quote_string(value: str) -> str:
+    text = value.replace("\\", "\\\\").replace('"', '\\"')
+    if text == "":
+        return '""'
+    if re.fullmatch(r"[A-Za-z0-9_./:-]+", text):
+        lowered = text.lower()
+        if lowered not in {"true", "false", "null", "~"}:
+            return text
+    return f'"{text}"'
 
 
 def _write_text_atomic(path: Path, content: str, backup: bool) -> dict[str, object]:
