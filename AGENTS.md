@@ -2,22 +2,26 @@
 Operational guide for agentic coding tools working in `Krill`.
 
 ## 1) Project Snapshot
-- Stack: Python 3.11+, FastAPI, Uvicorn, Pydantic, vanilla HTML/CSS/JS.
-- Entrypoint: `app/main.py`.
-- Core persisted state: `data/braindump.db`.
+- Stack: Python 3.11+, FastAPI, Uvicorn, Pydantic v2, vanilla HTML/CSS/JS.
+- Entrypoint: `app/main.py` (1600+ lines; routes, SSE, settings, integration APIs).
+- Core persisted state: `data/braindump.db` (SQLite; path overridable via `KRILL_BRAINDUMP_PATH`).
 - Product: setup flow + gateway chat UI + provider/tool orchestration + optional integrations.
+- No committed lint/formatter config; no external test framework (pytest not wired up).
 
 ## 2) Architecture Map
-- `app/main.py`: FastAPI routes, SSE chat endpoint, settings and integration APIs.
-- `app/config.py`: settings models, normalization, robust file load/save.
-- `app/chat_engine.py`: shared chat execution path used by Gateway and Telegram.
-- `app/runtime_prompt.py`: system prompt composition helper.
+- `app/main.py`: FastAPI app, SSE chat endpoint, all HTTP API routes.
+- `app/config.py`: Pydantic settings models + all SQLite persistence helpers (`load_settings`, `save_settings`, `upsert_timed_job`, `view_braindump`, etc.). Single source of truth for schema.
+- `app/chat_engine.py`: shared async chat execution path (`generate_chat_response`) used by Gateway SSE and Telegram.
+- `app/runtime_prompt.py`: composes the runtime system prompt from settings + memories.
 - `app/usage.py`: shared daily token usage helpers.
-- `app/providers/`: LLM provider protocol + registry + provider implementations.
-- `app/mcps/`: tool plugin protocol + registry + tools (`brave_search`, `git_ops`, `local_files`).
+- `app/timed_jobs.py`: scheduled job runner (`run_due_timed_jobs_once`).
+- `app/memory_extraction.py`: background async worker for short-term memory extraction.
+- `app/providers/`: LLM provider protocol (`base.py`), registry, implementations (gemini, openai, openrouter, minimax, etc.), resilience helpers.
+- `app/mcps/`: MCP tool plugin protocol (`base.py`), registry, tools: `brave_search`, `git_ops`, `local_files`, `google_services`, `browser_control`, `youtube_summarizer`, `home_assistant`, `ssh_control`, `timed_jobs`, `memory_access`, `whatsapp`, `opencode`.
 - `app/tooling/orchestrator.py`: recursive tool-calling loop (`generate_with_tools`).
-- `app/integrations/`: integration protocol + registry.
-- `app/integrations/telegram/`: Telegram integration config/client/worker/plugin.
+- `app/tooling/runtime_context.py`: per-request runtime context for tool calls.
+- `app/integrations/`: integration protocol + registry + `telegram/` + `whatsapp/` + `chat_runtime.py`.
+- `app/routers/`: OAuth callback routers (`gemini_oauth`, `google_oauth`, `openai_oauth`).
 - `static/js/setup.js`: setup page behavior.
 - `static/js/gateway.js`: gateway UI, queueing, streaming, settings sync.
 
@@ -28,21 +32,16 @@ Operational guide for agentic coding tools working in `Krill`.
 - Treat this file as the canonical in-repo agent guide.
 
 ## 4) Setup / Run Commands
-Run from repo root: `C:\Users\olive\Documents\develop\Krill`
+Create virtual environment and install dependencies:
 
-Create virtual environment:
 ```bash
 python -m venv .venv
-```
 
-Install dependencies (PowerShell):
-```bash
+# PowerShell
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
 
-Install dependencies (macOS/Linux):
-```bash
+# macOS/Linux
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -59,103 +58,113 @@ docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
 
 ## 5) Build / Lint / Test Commands
-Current repo state:
-- No dedicated lint tool config committed (`ruff`, `flake8`, `eslint`, etc.).
-- No formatter config committed (`black`, `prettier`, etc.).
-- No committed test suite directory at the moment.
 
-Backend sanity check:
+**Backend syntax check** (run after every Python edit):
 ```bash
 python -m compileall app
 ```
 
-Frontend syntax checks:
+**Frontend syntax check** (run after every JS edit):
 ```bash
 node --check static/js/setup.js
 node --check static/js/gateway.js
 ```
 
-If tests are added, use `pytest`:
+**Test suite location**: `test/` (not `tests/`). Tests are standalone async scripts, not pytest-based.
+
+Run individual tests directly with Python:
 ```bash
-pytest
+# Telegram /new seed injection smoke test (no real API key needed)
+python test/test_telegram_new_chat_seed.py
+
+# Timed jobs integration test (requires .env_test with GEMINI_API_KEY)
+python test/test_timed_jobs_run.py
+
+# Full Docker E2E test (requires Docker + .env_test with GEMINI_API_KEY)
+python test/e2e_docker_test.py
+python test/e2e_docker_test.py --env-file .env_test --model gemini-2.5-flash
+python test/e2e_docker_test.py --keep-artifacts
 ```
 
-Run a single test file:
-```bash
-pytest tests/test_api.py
+Create `.env_test` for tests that hit the live Gemini API:
+```
+GEMINI_API_KEY=your-key-here
 ```
 
-Run a single test function (important):
-```bash
-pytest tests/test_api.py::test_chat_stream_returns_sse
-```
-
-Useful focused options:
-```bash
-pytest -k settings
-pytest -x
-pytest -q
-```
+There is no pytest configuration. Do not introduce pytest unless requested.
 
 ## 6) Code Style Guidelines
 
-### Python
+### Python imports
 - Use explicit imports; no wildcard imports.
-- Naming: `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants.
-- Add type hints to new or edited functions whenever practical.
-- Keep modules cohesive and avoid hidden side effects.
-- Use module docstrings (already standard in this repo).
+- Standard library first, then third-party, then local (`from app.X import Y`).
+- Internal imports use relative form inside `app/` (e.g., `from .config import load_settings`), but test files use absolute form after manually inserting `repo_root` into `sys.path`.
+- Use `from __future__ import annotations` in files that need it (present in all test files and several app modules).
+- Defer heavy imports inside functions only when necessary (e.g., dynamic plugin loading); annotate with `# pylint: disable=import-outside-toplevel`.
 
 ### Formatting
-- Preserve existing style in each file.
-- Keep line lengths readable; avoid dense one-liners.
-- Do not introduce new formatting tools unless requested.
+- Preserve the existing style in each file; do not reformat unrelated code.
+- Readable line lengths; avoid dense one-liners.
+- Blank line between class-level constants and class definitions (see `config.py`).
+- Do not introduce `black`, `ruff`, `flake8`, or any formatter unless explicitly requested.
 
 ### Types and Data Models
-- Prefer explicit Pydantic models for API inputs/outputs.
-- Put constraints/defaults in `Field(...)` where relevant.
-- Normalize persisted fields in `app/config.py` when adding/changing schema.
+- Prefer explicit Pydantic `BaseModel` subclasses for API inputs/outputs and persisted records.
+- Use `Field(...)` for constraints, defaults, and `max_length` where relevant.
+- Use `TypedDict` for internal return structures (see `ChatEngineResult`, `ChatEngineToolUsage`).
+- Add type hints (`-> ReturnType`, parameter annotations) to all new or edited functions.
+- Use `Literal[...]` for fields with a fixed set of values (e.g., `role`, `type`).
+- Any new persisted field requires schema support in `app/config.py` (both the Pydantic model and the SQLite read/write path).
 
-### Naming and Semantics
-- Provider IDs, MCP IDs, integration IDs are lowercase strings.
-- Keep route/model names explicit and aligned (`/api/integrations/status` -> `IntegrationStatusResponse`).
+### Naming
+- `snake_case` for functions and variables.
+- `PascalCase` for classes.
+- `UPPER_SNAKE_CASE` for module-level constants.
+- Provider IDs, MCP IDs, integration IDs: lowercase strings (e.g., `"gemini"`, `"git_ops"`, `"telegram"`).
+- Route paths and response model names aligned: `/api/integrations/status` → `IntegrationStatusResponse`.
+- Private helpers prefixed with `_` (e.g., `_now_iso`, `_DB_LOCK`, `_server_timezone`).
 
 ## 7) Error Handling Conventions
-- Fail fast on invalid state, but return actionable detail.
-- For API validation/state issues, use `HTTPException` with clear `detail`.
-- Preserve SSE contract: `tool_step`, `meta`, `token`, `done`, `error`.
-- In streaming paths, prefer graceful `error` events over uncaught crashes.
-- Log unexpected backend exceptions with context.
+- Fail fast on invalid state; return actionable detail.
+- For HTTP API issues, raise `HTTPException` with a clear `detail` string.
+- SSE contract events: `tool_step`, `meta`, `token`, `done`, `error`. Do not break this protocol.
+- In streaming paths, emit a graceful `error` SSE event rather than letting exceptions propagate uncaught.
+- Log unexpected backend exceptions with sufficient context for diagnosis.
+- In tests, raise `RuntimeError` (or the script-local `E2EFailure`) with a descriptive message on assertion failure.
 
 ## 8) Persistence and State Rules
-- `data/braindump.db` is the source of truth for core app settings/state.
-- Use `load_settings()` / `save_settings()` helpers; do not bypass them.
-- Settings I/O is locked; keep that behavior intact.
-- Any new persisted field requires schema support in `app/config.py`.
-- Telegram chat sessions are intentionally ephemeral and must not be written to `settings.chats`.
-- Telegram persisted state is limited (owner binding + update offset + integration config).
+- `data/braindump.db` is the source of truth. Path is controlled by `KRILL_BRAINDUMP_PATH` env var.
+- Always use `load_settings()` / `save_settings()` helpers. Never read/write the SQLite file directly from application code outside `app/config.py`.
+- Settings I/O is protected by `_DB_LOCK` (`asyncio.Lock()`); keep that behavior intact.
+- Any new persisted field requires changes to both the Pydantic model and the SQL read/write helpers in `app/config.py`.
+- Telegram chat sessions are intentionally ephemeral: do not write them to `settings.chats`.
+- Telegram persisted state is limited to: owner binding, update offset, integration config.
 
 ## 9) Chat Flow Rules
-- Shared chat execution must go through `app/chat_engine.py`.
-- Keep orchestration logic centralized in `generate_with_tools(...)`.
-- If chat behavior changes, update shared engine first, then channel adapters if needed.
-- Gateway and Telegram should share execution behavior but keep channel state isolated.
+- All chat execution goes through `app/chat_engine.py::generate_chat_response`.
+- Tool-calling orchestration is centralized in `app/tooling/orchestrator.py::generate_with_tools`.
+- If chat behavior changes, update the shared engine first; then update channel adapters if needed.
+- Gateway (SSE) and Telegram share execution logic but keep channel state isolated.
+- Runtime context (per-request tool state) lives in `app/tooling/runtime_context.py`; reset it before each request.
 
 ## 10) Frontend Rules
-- Vanilla JS only; avoid introducing frameworks.
+- Vanilla JS only. Do not introduce frameworks (no React, Vue, etc.).
 - Keep state updates explicit and predictable.
-- Preserve accessibility attributes and semantic structure.
+- Preserve accessibility attributes and semantic HTML structure.
 - Keep integration status polling separate from chat state sync.
+- Run `node --check` on any edited `.js` file before committing.
 
 ## 11) Security and Secrets
 - Never commit real API keys, tokens, or private keys.
-- Avoid logging secret values from provider/integration config.
+- `SENSITIVE_KEYWORDS` in `app/config.py` lists fields that must not be logged: `api_key`, `token`, `secret`, `password`, `private_key`, `ssh_private`.
 - Be especially careful with Git MCP SSH key paths/content.
+- `.env_test` is gitignored; never commit it.
 
 ## 12) Agent Execution Checklist
 - Read relevant modules before editing.
-- Keep diffs minimal and scoped to user request.
+- Keep diffs minimal and scoped to the user's request; do not reformat unrelated code.
 - Do not revert unrelated local changes.
-- After backend edits: `python -m compileall app`.
-- After frontend JS edits: `node --check` on changed JS files.
+- After any Python edit: `python -m compileall app`.
+- After any JS edit: `node --check static/js/<file>.js`.
+- After adding a persisted field: update both the Pydantic model and SQL helpers in `app/config.py`.
 - Update `README.md` when user-facing behavior or architecture changes.
