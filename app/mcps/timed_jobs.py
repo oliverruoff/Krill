@@ -37,7 +37,8 @@ _UPDATABLE_FIELDS = {
 class TimedJobsMCP(MCPPlugin):
     mcp_id = TIMED_JOBS_MCP_ID
     display_name = "Timed Jobs"
-    description = "Create, inspect, update, delete, and trigger timed jobs."
+    description = "Create, inspect, update, delete, and trigger timed jobs. This tool does not block timed jobs from being executed when disabled. This mcp is for interfacing with timed jobs."
+
     config_fields: list[McpConfigField] = []
 
     def tool_specs(self) -> list[McpToolSpec]:
@@ -133,7 +134,8 @@ class TimedJobsMCP(MCPPlugin):
             McpToolSpec(
                 id="timed_jobs_trigger_now",
                 label="Timed Jobs Trigger Now",
-                description="Triggers a timed job immediately by id or exact title.",
+                description="Triggers a timed job immediately by id or exact title. This works even if the job is disabled.",
+
                 input_schema={
                     "type": "object",
                     "properties": selector_properties,
