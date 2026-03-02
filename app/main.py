@@ -37,7 +37,9 @@ from .config import (
     upsert_timed_job,
     view_braindump,
     ChatMessage,
+    _server_timezone,
 )
+
 from .integrations import (
     get_integration,
     get_integration_options,
@@ -400,8 +402,18 @@ async def get_settings() -> Settings:
 
 
 @app.get("/api/version")
-async def get_version() -> dict[str, str]:
-    return {"version": APP_VERSION}
+async def get_version() -> dict[str, object]:
+    from datetime import datetime, timedelta, timezone
+    now_utc = datetime.now(timezone.utc)
+    name, tz = _server_timezone()
+    offset = tz.utcoffset(now_utc.astimezone(tz)) or timedelta(minutes=0)
+    offset_minutes = int(offset.total_seconds() // 60)
+    return {
+        "version": APP_VERSION,
+        "server_timezone": name,
+        "server_timezone_offset": offset_minutes,
+    }
+
 
 
 @app.get("/api/chat/state", response_model=ChatStateResponse)

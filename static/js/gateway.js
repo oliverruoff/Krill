@@ -178,7 +178,10 @@ const state = {
   timedJobChannels: [],
   timedJobEditingId: "",
   timedJobsClockTimerId: null,
+  serverTimezoneName: "UTC",
+  serverTimezoneOffset: 0,
   lastChatStateSignature: "",
+
   telegramEnabled: false,
   telegramTokenConfigured: false,
   telegramOwnerUserId: "",
@@ -918,17 +921,28 @@ function sendAssistantResponseNotification(chat, assistantMessage) {
   };
 }
 
+function getServerDate(rawValue) {
+  const date = rawValue ? new Date(rawValue) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return new Date();
+  }
+  const serverOffsetMs = (state.serverTimezoneOffset || 0) * 60 * 1000;
+  const browserOffsetMs = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() + serverOffsetMs + browserOffsetMs);
+}
+
 function formatMessageTimestamp(rawValue = "") {
-  const parsed = rawValue ? new Date(rawValue) : new Date();
-  const date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  const date = getServerDate(rawValue);
   const hour = String(date.getHours()).padStart(2, "0");
   const minute = String(date.getMinutes()).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   const year = date.getFullYear();
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const month = months[date.getMonth()];
-  return `${hour}:${minute} ${day}. ${month}. ${year}`;
+  const zone = state.serverTimezoneName ? ` (${state.serverTimezoneName})` : "";
+  return `${hour}:${minute} ${day}. ${month}. ${year}${zone}`;
 }
+
 
 function createTimestamp() {
   return new Date().toISOString();
@@ -970,7 +984,7 @@ function formatMemoryTimestamp(rawValue) {
     return "Unknown time";
   }
 
-  const parsed = new Date(value);
+  const parsed = getServerDate(value);
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
@@ -982,6 +996,7 @@ function formatMemoryTimestamp(rawValue) {
   const minutes = String(parsed.getMinutes()).padStart(2, "0");
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
+
 
 function getFilteredMemories(memories, searchTerm) {
   const normalizedSearch = String(searchTerm || "").trim().toLowerCase();
@@ -1935,12 +1950,13 @@ function formatNumber(value) {
 }
 
 function getTodayDateKey() {
-  const now = new Date();
+  const now = getServerDate();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
+
 
 function addDaysToDateKey(dateKey, daysDelta) {
   const parts = String(dateKey || "").split("-");
@@ -2069,10 +2085,16 @@ async function loadAppVersion() {
     }
     const payload = await response.json();
     const version = typeof payload?.version === "string" ? payload.version.trim() : "";
-    if (!version) {
-      return;
+    if (version) {
+      appVersionNode.textContent = `v${version}`;
     }
-    appVersionNode.textContent = `v${version}`;
+    if (typeof payload?.server_timezone === "string") {
+      state.serverTimezoneName = payload.server_timezone;
+    }
+    if (typeof payload?.server_timezone_offset === "number") {
+      state.serverTimezoneOffset = payload.server_timezone_offset;
+    }
+
   } catch (error) {
     // Best-effort display only.
   }
@@ -3085,7 +3107,7 @@ async function handleShortTermAction(action, suggestionId) {
 }
 
 function formatNowWithSeconds() {
-  const now = new Date();
+  const now = getServerDate();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, "0");
   const dd = String(now.getDate()).padStart(2, "0");
@@ -3095,12 +3117,15 @@ function formatNowWithSeconds() {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 }
 
+
 function updateTimedJobsNowLabel() {
   if (!(timedJobsNowNode instanceof HTMLElement)) {
     return;
   }
-  timedJobsNowNode.innerHTML = `<strong>Now:</strong> ${formatNowWithSeconds()}`;
+  const zone = state.serverTimezoneName ? ` (${state.serverTimezoneName})` : "";
+  timedJobsNowNode.innerHTML = `<strong>Now:</strong> ${formatNowWithSeconds()}${zone}`;
 }
+
 
 function startTimedJobsClock() {
   updateTimedJobsNowLabel();
@@ -3118,8 +3143,13 @@ function stopTimedJobsClock() {
 }
 
 function todayDateInputValue() {
-  return new Date().toISOString().slice(0, 10);
+  const now = getServerDate();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
+
 
 function normalizeIncomingTimedJobs(rawJobs) {
   if (!Array.isArray(rawJobs)) {
@@ -3174,8 +3204,12 @@ function resetTimedJobEditor() {
     timedJobStartDateInput.value = todayDateInputValue();
   }
   if (timedJobTimeInput instanceof HTMLInputElement) {
-    timedJobTimeInput.value = "09:00";
+    const now = getServerDate();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    timedJobTimeInput.value = `${hh}:${mm}`;
   }
+
   if (timedJobEnabledInput instanceof HTMLInputElement) {
     timedJobEnabledInput.checked = true;
   }
