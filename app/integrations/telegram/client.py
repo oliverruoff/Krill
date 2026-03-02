@@ -21,7 +21,7 @@ def telegram_get_updates(token: str, offset: int, timeout_seconds: int) -> dict[
 
 def telegram_send_message(token: str, chat_id: int, text: str) -> dict[str, object]:
     url = f"https://api.telegram.org/bot{parse.quote(token, safe=':')}/sendMessage"
-    payload = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2"}).encode("utf-8")
+    payload = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
     req = request.Request(
         url=url,
         data=payload,
