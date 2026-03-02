@@ -47,6 +47,8 @@ fi
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
+  -v /etc/localtime:/etc/localtime:ro \
+  -v /etc/timezone:/etc/timezone:ro \
   -p 80:8055 \
   "${ENV_ARGS[@]}" \
   "$IMAGE_NAME"

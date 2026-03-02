@@ -4343,7 +4343,7 @@ function renderConfigPanel(container, items, getConfig, options) {
       }
 
       let activeField = field;
-      if (options.kind === "mcp" && item.id === "whatsapp" && fieldId === "allowed_numbers") {
+      if (options.kind === "mcp" && item.id === "whatsapp" && (fieldId === "allowed_numbers_send" || fieldId === "allowed_numbers_receive")) {
         const contactOptions = Array.isArray(state.whatsappContacts)
           ? state.whatsappContacts.map((entry) => ({
             value: String(entry.number || ""),
@@ -4403,7 +4403,7 @@ function renderConfigPanel(container, items, getConfig, options) {
         const optionsList = Array.isArray(activeField.options) ? activeField.options : [];
         const storedValues = parseMultiselectParam(config.params?.[fieldId]);
         const selectedSet = new Set(storedValues);
-        const isWhatsappAllowedNumbers = options.kind === "mcp" && item.id === "whatsapp" && fieldId === "allowed_numbers";
+        const isWhatsappAllowedNumbers = options.kind === "mcp" && item.id === "whatsapp" && (fieldId === "allowed_numbers_send" || fieldId === "allowed_numbers_receive");
         let contactListNode = fieldsetNode;
         const existingOptionValues = new Set(
           optionsList
@@ -4434,7 +4434,7 @@ function renderConfigPanel(container, items, getConfig, options) {
 
           const selectedOnlyToggleInput = document.createElement("input");
           selectedOnlyToggleInput.type = "checkbox";
-          selectedOnlyToggleInput.checked = Boolean(state.whatsappAllowlistOnlySelected);
+          selectedOnlyToggleInput.checked = Boolean(state[`whatsappAllowlistOnlySelected_${fieldId}`]);
 
           const selectedOnlyToggleText = document.createElement("span");
           selectedOnlyToggleText.textContent = "Only show allow list contacts";
@@ -4479,7 +4479,7 @@ function renderConfigPanel(container, items, getConfig, options) {
 
           filterInput.addEventListener("input", applyContactFilter);
           selectedOnlyToggleInput.addEventListener("change", () => {
-            state.whatsappAllowlistOnlySelected = selectedOnlyToggleInput.checked;
+            state[`whatsappAllowlistOnlySelected_${fieldId}`] = selectedOnlyToggleInput.checked;
             applyContactFilter();
           });
 

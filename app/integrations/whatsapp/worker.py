@@ -74,7 +74,7 @@ class WhatsAppBridgeWorker:
         if mcp_config is None or not mcp_config.enabled:
             return
 
-        allowlist = parse_allowlist(mcp_config.params.get("allowed_numbers", ""))
+        allowlist = parse_allowlist(mcp_config.params.get("allowed_numbers_receive", ""))
         prompt = str(mcp_config.params.get("automation_prompt", "")).strip()
         auto_answer_enabled = _is_truthy_flag(mcp_config.params.get("auto_answer", ""))
         if not auto_answer_enabled or not allowlist or not prompt:

@@ -34,12 +34,20 @@ class WhatsAppMCP(MCPPlugin):
             placeholder="Instruction used when auto answer is enabled and allowlisted inbound messages are bridged to Gateway.",
         ),
         McpConfigField(
-            id="allowed_numbers",
-            label="Allowed numbers",
+            id="allowed_numbers_send",
+            label="Allowed numbers (Send)",
             type="textarea",
             required=True,
             placeholder="00491234567;00491987654",
-            description="Semicolon-separated allowlist used for inbound filtering and outbound restriction.",
+            description="Contacts the system is allowed to proactively send messages to.",
+        ),
+        McpConfigField(
+            id="allowed_numbers_receive",
+            label="Allowed numbers (Receive)",
+            type="textarea",
+            required=False,
+            placeholder="00491234567;00491987654",
+            description="Contacts that can trigger automated responses when Auto Answer is enabled.",
         ),
     ]
 
@@ -48,13 +56,12 @@ class WhatsAppMCP(MCPPlugin):
             McpToolSpec(
                 id="whatsapp_find_contact_number",
                 label="WhatsApp Find Contact Number",
-                description="Finds allowlisted WhatsApp contacts by name and returns matching phone numbers.",
+                description="Lists all allowlisted WhatsApp contacts from the send allow list, or searches them by name.",
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "name_query": {"type": "string", "minLength": 1},
+                        "name_query": {"type": "string", "description": "Optional name to search for. Leave empty to return all allowed contacts."},
                     },
-                    "required": ["name_query"],
                 },
             ),
             McpToolSpec(
@@ -76,7 +83,9 @@ class WhatsAppMCP(MCPPlugin):
         await connect()
         current = await status()
         state = str(current.get("status", "")).strip().lower()
-        allowlist = parse_allowlist(params.get("allowed_numbers", ""))
+        allowlist_send = parse_allowlist(params.get("allowed_numbers_send", ""))
+        allowlist_recv = parse_allowlist(params.get("allowed_numbers_receive", ""))
+        allowlist = allowlist_send | allowlist_recv
 
         if state in {"error", "auth_failure"}:
             return False, "WhatsApp failed to initialize. Reconnect and scan the QR code again."
@@ -101,7 +110,7 @@ class WhatsAppMCP(MCPPlugin):
         if not text:
             raise RuntimeError("text is required.")
 
-        allowlist = parse_allowlist(params.get("allowed_numbers", ""))
+        allowlist = parse_allowlist(params.get("allowed_numbers_send", ""))
         raw_target = str(arguments.get("to_number", "")).strip()
         to_number = normalize_phone_number(raw_target)
 
@@ -127,7 +136,7 @@ class WhatsAppMCP(MCPPlugin):
 
     def tool_call_system_reminder(self, tool_id: str, params: dict[str, str]) -> str:
         del tool_id
-        allowlist = sorted(parse_allowlist(params.get("allowed_numbers", "")))
+        allowlist = sorted(parse_allowlist(params.get("allowed_numbers_send", "")))
         if not allowlist:
             return "Only send messages to explicit allowlisted numbers."
         if len(allowlist) == 1:
@@ -150,10 +159,8 @@ async def _resolve_allowlisted_contact(target: str, allowlist: set[str]) -> str:
 
 async def _discover_allowlisted_numbers(arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
     name_query = str(arguments.get("name_query", "")).strip()
-    if not name_query:
-        raise RuntimeError("name_query is required.")
 
-    allowlist = parse_allowlist(params.get("allowed_numbers", ""))
+    allowlist = parse_allowlist(params.get("allowed_numbers_send", ""))
     matches = await _find_allowlisted_contacts(name_query, allowlist)
     return {
         "status": "ok",
@@ -164,29 +171,43 @@ async def _discover_allowlisted_numbers(arguments: dict[str, object], params: di
 
 
 async def _find_allowlisted_contacts(target: str, allowlist: set[str]) -> list[dict[str, str]]:
-    lowered_target = target.strip().lower()
-    if not lowered_target or not allowlist:
+    if not allowlist:
         return []
+
+    lowered_target = target.strip().lower()
 
     try:
         contacts = await list_contacts()
     except Exception:
-        return []
+        contacts = []
 
-    exact_matches: list[dict[str, str]] = []
-    partial_matches: list[dict[str, str]] = []
+    known_contacts: list[dict[str, str]] = []
     for entry in contacts:
         number = normalize_phone_number(str(entry.get("number", "")))
         if not number or number not in allowlist:
             continue
         name_display = str(entry.get("name", "")).strip() or number
+        known_contacts.append({"name": name_display, "number": number})
+
+    known_numbers = {c["number"] for c in known_contacts}
+    for num in allowlist:
+        if num not in known_numbers:
+            known_contacts.append({"name": num, "number": num})
+
+    if not lowered_target:
+        known_contacts.sort(key=lambda item: item["name"].lower())
+        return known_contacts
+
+    exact_matches: list[dict[str, str]] = []
+    partial_matches: list[dict[str, str]] = []
+    for entry in known_contacts:
+        name_display = entry["name"]
+        number = entry["number"]
         name = name_display.lower()
-        if not name_display:
-            continue
         if name == lowered_target:
-            exact_matches.append({"name": name_display, "number": number})
+            exact_matches.append(entry)
         elif lowered_target in name:
-            partial_matches.append({"name": name_display, "number": number})
+            partial_matches.append(entry)
 
     ordered = exact_matches if exact_matches else partial_matches
     ordered.sort(key=lambda item: item["name"].lower())

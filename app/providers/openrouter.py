@@ -17,6 +17,11 @@ class OpenRouterProvider(LLMProvider):
         {"id": "qwen/qwen3.5-flash-02-23", "label": "Qwen 3.5 Flash", "token_limit": 1000000, "supports_images": False},
         {"id": "moonshotai/kimi-k2.5", "label": "Kimi K2.5", "token_limit": 262144, "supports_images": False},
         {"id": "z-ai/glm-5", "label": "GLM 5", "token_limit": 204800, "supports_images": False},
+        {"id": "anthropic/claude-sonnet-4.6", "label": "Claude 4.6 Sonnet", "token_limit": 1000000, "supports_images": True},
+        {"id": "anthropic/claude-opus-4.6", "label": "Claude 4.6 Opus", "token_limit": 1000000, "supports_images": True},
+        {"id": "anthropic/claude-haiku-4.5", "label": "Claude 4.5 Haiku", "token_limit": 200000, "supports_images": True},
+        {"id": "openai/gpt-5.3-codex", "label": "GPT-5.3 Codex", "token_limit": 400000, "supports_images": True},
+        {"id": "google/gemini-3-flash-preview", "label": "Gemini 3 Flash Preview", "token_limit": 1048576, "supports_images": True},
     ]
 
     async def generate(
