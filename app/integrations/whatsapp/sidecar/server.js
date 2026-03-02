@@ -190,7 +190,36 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/messages/history") {
+      await ensureClient();
+      if (status !== "ready") {
+        json(res, 422, { ok: false, detail: "WhatsApp is not ready." });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const number = String(body.number || "");
+      const limit = Number.parseInt(body.limit || "10", 10);
+      if (!number) {
+        json(res, 422, { ok: false, detail: "number is required" });
+        return;
+      }
+      const chatId = toChatId(number);
+      const chat = await client.getChatById(chatId);
+      const messages = await chat.fetchMessages({ limit });
+      const history = messages
+        .filter((m) => m.type === "chat")
+        .map((m) => ({
+          id: m.id._serialized,
+          body: m.body,
+          from_me: m.fromMe,
+          timestamp: m.timestamp,
+        }));
+      json(res, 200, { ok: true, history });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/allowlist") {
+
       const body = await readJsonBody(req);
       const numbers = Array.isArray(body.numbers) ? body.numbers : [];
       const next = new Set();

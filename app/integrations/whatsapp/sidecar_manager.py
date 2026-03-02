@@ -170,6 +170,21 @@ async def list_contacts() -> list[dict[str, str]]:
     return normalized
 
 
+async def get_message_history(number: str, limit: int = 10) -> list[dict[str, Any]]:
+    await ensure_sidecar_running()
+    payload = await asyncio.to_thread(
+        _request_json,
+        "POST",
+        f"{_SIDECAR_BASE}/messages/history",
+        {"number": number, "limit": limit},
+    )
+    history = payload.get("history") if isinstance(payload, dict) else None
+    if not isinstance(history, list):
+        return []
+    return [item for item in history if isinstance(item, dict)]
+
+
+
 def normalize_phone_number(raw: str) -> str:
     cleaned = "".join(ch for ch in str(raw or "") if ch.isdigit() or ch == "+").strip()
     if not cleaned:
