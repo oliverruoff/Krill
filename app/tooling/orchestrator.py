@@ -109,10 +109,12 @@ async def generate_with_tools(
     if len(planner_context) > 4000:
         planner_context = planner_context[:4000] + "\n...[truncated runtime context]"
     planner_system = (
-        "You are selecting tools for a user request. Return JSON only without markdown and without extra prose.\n"
-        "Use the runtime context below (identity/preferences/memory) when selecting tools and arguments.\n"
-        f"Runtime context:\n{planner_context}"
+        "You are in the technical TOOL SELECTION phase. Your ONLY goal is to choose the correct tools and arguments.\n"
+        "You must suppress your conversational persona (buddy, bro, etc.) and avoid all prose during this phase.\n\n"
+        f"Runtime context (identity/memory/preferences):\n{planner_context}\n\n"
+        "Return JSON only. No markdown. No conversational output. No prose."
     )
+
     await trace("tool_planner_system", planner_system)
 
     for step_index in range(1, normalized_recursion + 1):
