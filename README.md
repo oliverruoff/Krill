@@ -46,6 +46,14 @@ Krill persists runtime state in a normalized SQLite database at `data/braindump.
 - daily token usage
 - advanced tool execution settings
 - UI theme preference (`light`/`dark`)
+- authentication state (admin user hash, login sessions, and login-attempt IP locks)
+
+Authentication bootstrap behavior:
+
+- if no auth user exists in `braindump.db`, Krill automatically redirects to `/auth/setup`
+- create the first admin username/password once; it is stored as a password hash
+- after bootstrap, all app/API routes require login (except `/login` and `/api/auth/*`)
+- failed logins are tracked by client IP and automatically ban for 1 hour after 5 wrong attempts
 
 Because all important runtime state is in one file, backup/restore is simple:
 

@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse, HTMLResponse
+from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File, Request
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -80,6 +80,8 @@ from .memory_extraction import (
     stop_memory_extraction_worker,
 )
 from .providers import get_provider, get_provider_options, is_supported_provider
+from .auth import is_bootstrap_required, resolve_session_from_request
+from .routers.auth import router as auth_router
 from .routers.gemini_oauth import router as gemini_oauth_router
 from .providers.vision import analyze_image
 from .providers.resilience import generate_with_retries
@@ -105,10 +107,38 @@ if os.name == "nt":
 
 app = FastAPI(title="Krill")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(auth_router)
 app.include_router(gemini_oauth_router)
 app.include_router(google_oauth_router)
 app.include_router(openai_oauth_router)
 logger = logging.getLogger(__name__)
+
+
+@app.middleware("http")
+async def require_authentication(request: Request, call_next):
+    path = request.url.path or "/"
+
+    if await is_bootstrap_required():
+        if path == "/auth/setup" or path.startswith("/api/auth/"):
+            return await call_next(request)
+        if path == "/login":
+            return RedirectResponse(url="/auth/setup", status_code=307)
+        if path.startswith("/api/"):
+            return JSONResponse(status_code=428, content={"detail": "Authentication bootstrap is required."})
+        return RedirectResponse(url="/auth/setup", status_code=307)
+
+    if path in {"/login", "/favicon.ico"} or path.startswith("/api/auth/"):
+        return await call_next(request)
+
+    session = await resolve_session_from_request(request)
+    if session is None:
+        if path.startswith("/api/"):
+            return JSONResponse(status_code=401, content={"detail": "Not authenticated."})
+        return RedirectResponse(url="/login", status_code=307)
+
+    request.state.auth_user_id = session["user_id"]
+    request.state.auth_username = session["username"]
+    return await call_next(request)
 
 
 class ModelOption(BaseModel):

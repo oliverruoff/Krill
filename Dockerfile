@@ -34,13 +34,13 @@ RUN npm --prefix /app/app/integrations/whatsapp/sidecar install --omit=dev
 
 RUN mkdir -p /app/data
 
-RUN chmod +x /app/docker-entrypoint.sh && chown -R krill:krill /app
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh && chown -R krill:krill /app
 
 USER krill
 
 EXPOSE 8055
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8055/api/settings', timeout=4)"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8055/api/auth/status', timeout=4)"
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8055"]

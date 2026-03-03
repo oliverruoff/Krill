@@ -26,6 +26,9 @@ SENSITIVE_KEYWORDS = {
     "token",
     "secret",
     "password",
+    "password_hash",
+    "session_hash",
+    "session_id",
     "private_key",
     "ssh_private",
 }
@@ -266,6 +269,38 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS whatsapp_state (
           id INTEGER PRIMARY KEY CHECK (id = 1),
           session_blob TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS auth_users (
+          id TEXT PRIMARY KEY,
+          username TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)),
+          created_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_auth_users_username ON auth_users(username);
+
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+          session_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          session_hash TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT '',
+          expires_at TEXT NOT NULL DEFAULT '',
+          last_seen_at TEXT NOT NULL DEFAULT '',
+          revoked_at TEXT NOT NULL DEFAULT '',
+          ip TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY (user_id) REFERENCES auth_users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_sessions_hash ON auth_sessions(session_hash);
+        CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+
+        CREATE TABLE IF NOT EXISTS auth_ip_locks (
+          ip TEXT PRIMARY KEY,
+          failed_count INTEGER NOT NULL DEFAULT 0,
+          first_failed_at TEXT NOT NULL DEFAULT '',
+          last_failed_at TEXT NOT NULL DEFAULT '',
+          banned_until TEXT NOT NULL DEFAULT ''
         );
         
         INSERT OR IGNORE INTO settings_core (id) VALUES (1);
@@ -1593,6 +1628,344 @@ def _resolve_short_term_memories_sync(items: list[dict[str, object]]) -> int:
         return changed
     finally:
         conn.close()
+
+
+async def count_auth_users() -> int:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_count_auth_users_sync)
+
+
+def _count_auth_users_sync() -> int:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute("SELECT COUNT(*) AS count FROM auth_users WHERE is_active = 1").fetchone()
+        return int(row["count"] if row else 0)
+    finally:
+        conn.close()
+
+
+async def create_auth_user(username: str, password_hash: str) -> dict[str, str]:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_create_auth_user_sync, username, password_hash)
+
+
+def _create_auth_user_sync(username: str, password_hash: str) -> dict[str, str]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    normalized_username = str(username).strip().lower()
+    now_iso = _utc_now_iso()
+    user_id = str(uuid.uuid4())
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        existing_row = conn.execute("SELECT id FROM auth_users WHERE username = ?", (normalized_username,)).fetchone()
+        if existing_row is not None:
+            raise ValueError("Username already exists.")
+        conn.execute(
+            """
+            INSERT INTO auth_users (id, username, password_hash, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?)
+            """,
+            (user_id, normalized_username, password_hash, now_iso, now_iso),
+        )
+        conn.commit()
+        return {"id": user_id, "username": normalized_username, "password_hash": password_hash}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def get_auth_user_by_username(username: str) -> dict[str, str] | None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_get_auth_user_by_username_sync, username)
+
+
+def _get_auth_user_by_username_sync(username: str) -> dict[str, str] | None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    normalized_username = str(username).strip().lower()
+    try:
+        row = conn.execute(
+            "SELECT id, username, password_hash FROM auth_users WHERE username = ? AND is_active = 1",
+            (normalized_username,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": str(row["id"]),
+            "username": str(row["username"]),
+            "password_hash": str(row["password_hash"]),
+        }
+    finally:
+        conn.close()
+
+
+async def create_auth_session(
+    *,
+    session_id: str,
+    user_id: str,
+    session_hash: str,
+    expires_at: str,
+    ip: str,
+) -> None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        await asyncio.to_thread(
+            _create_auth_session_sync,
+            session_id,
+            user_id,
+            session_hash,
+            expires_at,
+            ip,
+        )
+
+
+def _create_auth_session_sync(
+    session_id: str,
+    user_id: str,
+    session_hash: str,
+    expires_at: str,
+    ip: str,
+) -> None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    now_iso = _utc_now_iso()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute(
+            """
+            INSERT INTO auth_sessions
+            (session_id, user_id, session_hash, created_at, expires_at, last_seen_at, revoked_at, ip)
+            VALUES (?, ?, ?, ?, ?, ?, '', ?)
+            """,
+            (session_id, user_id, session_hash, now_iso, expires_at, now_iso, str(ip).strip()),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def get_auth_session_by_id(session_id: str) -> dict[str, str] | None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_get_auth_session_by_id_sync, session_id)
+
+
+def _get_auth_session_by_id_sync(session_id: str) -> dict[str, str] | None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute(
+            """
+            SELECT s.session_id, s.user_id, s.session_hash, s.expires_at, s.revoked_at, u.username
+            FROM auth_sessions s
+            JOIN auth_users u ON u.id = s.user_id
+            WHERE s.session_id = ? AND u.is_active = 1
+            """,
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "session_id": str(row["session_id"]),
+            "user_id": str(row["user_id"]),
+            "session_hash": str(row["session_hash"]),
+            "expires_at": str(row["expires_at"]),
+            "revoked_at": str(row["revoked_at"]),
+            "username": str(row["username"]),
+        }
+    finally:
+        conn.close()
+
+
+async def touch_auth_session(session_id: str) -> None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        await asyncio.to_thread(_touch_auth_session_sync, session_id)
+
+
+def _touch_auth_session_sync(session_id: str) -> None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    now_iso = _utc_now_iso()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute("UPDATE auth_sessions SET last_seen_at = ? WHERE session_id = ?", (now_iso, session_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def revoke_auth_session(session_id: str) -> None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        await asyncio.to_thread(_revoke_auth_session_sync, session_id)
+
+
+def _revoke_auth_session_sync(session_id: str) -> None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    now_iso = _utc_now_iso()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute(
+            "UPDATE auth_sessions SET revoked_at = ? WHERE session_id = ? AND revoked_at = ''",
+            (now_iso, session_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def clear_auth_ip_lock(ip: str) -> None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        await asyncio.to_thread(_clear_auth_ip_lock_sync, ip)
+
+
+def _clear_auth_ip_lock_sync(ip: str) -> None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute("DELETE FROM auth_ip_locks WHERE ip = ?", (str(ip).strip(),))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def get_auth_ip_lock(ip: str) -> dict[str, object] | None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_get_auth_ip_lock_sync, ip)
+
+
+def _get_auth_ip_lock_sync(ip: str) -> dict[str, object] | None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute(
+            "SELECT ip, failed_count, first_failed_at, last_failed_at, banned_until FROM auth_ip_locks WHERE ip = ?",
+            (str(ip).strip(),),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "ip": str(row["ip"]),
+            "failed_count": int(row["failed_count"]),
+            "first_failed_at": str(row["first_failed_at"]),
+            "last_failed_at": str(row["last_failed_at"]),
+            "banned_until": str(row["banned_until"]),
+        }
+    finally:
+        conn.close()
+
+
+async def register_auth_failed_attempt(
+    ip: str,
+    *,
+    failure_window_seconds: int = 3600,
+    lockout_threshold: int = 5,
+    ban_seconds: int = 3600,
+) -> dict[str, object]:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(
+            _register_auth_failed_attempt_sync,
+            ip,
+            failure_window_seconds,
+            lockout_threshold,
+            ban_seconds,
+        )
+
+
+def _register_auth_failed_attempt_sync(
+    ip: str,
+    failure_window_seconds: int,
+    lockout_threshold: int,
+    ban_seconds: int,
+) -> dict[str, object]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    ip_value = str(ip).strip()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    banned_until = ""
+    failed_count = 1
+    first_failed_at = now_iso
+    try:
+        row = conn.execute(
+            "SELECT failed_count, first_failed_at, banned_until FROM auth_ip_locks WHERE ip = ?",
+            (ip_value,),
+        ).fetchone()
+
+        if row is not None:
+            existing_count = int(row["failed_count"]) if row["failed_count"] is not None else 0
+            existing_first = str(row["first_failed_at"] or "")
+            existing_ban = str(row["banned_until"] or "")
+            existing_ban_dt = _parse_utc_iso(existing_ban)
+
+            if existing_ban_dt is not None and existing_ban_dt > now:
+                failed_count = max(1, existing_count)
+                first_failed_at = existing_first or now_iso
+                banned_until = existing_ban_dt.isoformat()
+            else:
+                first_dt = _parse_utc_iso(existing_first)
+                if first_dt is None or (now - first_dt).total_seconds() > max(1, failure_window_seconds):
+                    failed_count = 1
+                    first_failed_at = now_iso
+                else:
+                    failed_count = max(0, existing_count) + 1
+                    first_failed_at = first_dt.isoformat()
+
+                if failed_count >= max(1, lockout_threshold):
+                    banned_until = (now + timedelta(seconds=max(1, ban_seconds))).isoformat()
+
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute(
+            """
+            INSERT INTO auth_ip_locks (ip, failed_count, first_failed_at, last_failed_at, banned_until)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(ip) DO UPDATE SET
+              failed_count = excluded.failed_count,
+              first_failed_at = excluded.first_failed_at,
+              last_failed_at = excluded.last_failed_at,
+              banned_until = excluded.banned_until
+            """,
+            (ip_value, failed_count, first_failed_at, now_iso, banned_until),
+        )
+        conn.commit()
+        return {
+            "ip": ip_value,
+            "failed_count": failed_count,
+            "banned_until": banned_until,
+            "is_banned": bool(banned_until),
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _parse_utc_iso(value: str) -> datetime | None:
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _quote_identifier(identifier: str) -> str:
