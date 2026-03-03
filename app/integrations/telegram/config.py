@@ -16,7 +16,15 @@ CONFIG_FIELDS = [
         required=True,
         placeholder="123456:ABCDEF...",
         description="Telegram bot token from @BotFather.",
-    )
+    ),
+    IntegrationConfigField(
+        id="markdown_enabled",
+        label="Enable Markdown formatting",
+        type="text",
+        required=False,
+        placeholder="true",
+        description="Enable MarkdownV2 formatting in messages (bold, italic, code, etc). Default: true",
+    ),
 ]
 
 

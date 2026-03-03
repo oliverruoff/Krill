@@ -179,20 +179,23 @@ class TelegramBridgeWorker:
         try:
             image_payload = await self._extract_message_image(token, message)
         except Exception as exc:
-            await asyncio.to_thread(telegram_send_message, token, chat_id, f"Image handling failed: {exc}")
+            error_text = _escape_markdown_v2(f"Image handling failed: {exc}")
+            await asyncio.to_thread(telegram_send_message, token, chat_id, error_text, "MarkdownV2")
             return
 
         command, command_arg = _parse_command(prompt_text, bot_username)
         if command:
             response_text = await self._handle_command(command, command_arg, settings)
             if response_text:
-                await asyncio.to_thread(telegram_send_message, token, chat_id, response_text)
+                escaped_response = _escape_markdown_v2(response_text)
+                await asyncio.to_thread(telegram_send_message, token, chat_id, escaped_response, "MarkdownV2")
             return
 
         response_text = await self._handle_user_message(settings, prompt_text, image=image_payload)
         if response_text:
             for chunk in _chunk_telegram_text(response_text):
-                await asyncio.to_thread(telegram_send_message, token, chat_id, chunk)
+                escaped_chunk = _escape_markdown_v2(chunk)
+                await asyncio.to_thread(telegram_send_message, token, chat_id, escaped_chunk, "MarkdownV2")
 
     async def _extract_message_image(self, token: str, message: dict[str, Any]) -> dict[str, object] | None:
         photo = message.get("photo")
@@ -492,6 +495,16 @@ def _bridge_is_enabled(settings: Settings, token: str) -> bool:
         return False
     config = settings.integration_configs.get("telegram") or IntegrationConfig()
     return bool(config.enabled)
+
+
+def _escape_markdown_v2(text: str) -> str:
+    """Escape special characters for Telegram MarkdownV2 parse_mode.
+    
+    MarkdownV2 requires escaping these 18 special characters: _*[]()~`>#+-=|{}.!
+    Each must be prefixed with a backslash.
+    """
+    special_chars = "_*[]()~`>#+-=|{}.!"
+    return "".join(f"\\{char}" if char in special_chars else char for char in text)
 
 
 def _get_bot_token(settings: Settings) -> str:

@@ -19,9 +19,12 @@ def telegram_get_updates(token: str, offset: int, timeout_seconds: int) -> dict[
         return json.loads(response.read().decode("utf-8"))
 
 
-def telegram_send_message(token: str, chat_id: int, text: str) -> dict[str, object]:
+def telegram_send_message(token: str, chat_id: int, text: str, parse_mode: str | None = None) -> dict[str, object]:
     url = f"https://api.telegram.org/bot{parse.quote(token, safe=':')}/sendMessage"
-    payload = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
+    payload_dict: dict[str, object] = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload_dict["parse_mode"] = parse_mode
+    payload = json.dumps(payload_dict).encode("utf-8")
     req = request.Request(
         url=url,
         data=payload,
