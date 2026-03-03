@@ -54,6 +54,7 @@ Authentication bootstrap behavior:
 - create the first admin username/password once; it is stored as a password hash
 - after bootstrap, all app/API routes require login (except `/login` and `/api/auth/*`)
 - failed logins are tracked by client IP and automatically ban for 1 hour after 5 wrong attempts
+- password changes are available from Gateway settings (old password + new password + confirmation)
 
 Because all important runtime state is in one file, backup/restore is simple:
 

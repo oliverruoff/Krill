@@ -63,12 +63,14 @@ const mobileMemoryManagementButton = document.getElementById("mobile-memory-mana
 const mobileShortTermMemoryButton = document.getElementById("mobile-short-term-memory-btn");
 const mobileTimedJobsButton = document.getElementById("mobile-timed-jobs-btn");
 const mobileTokenUsageButton = document.getElementById("mobile-token-usage-btn");
+const mobileChangePasswordButton = document.getElementById("mobile-change-password-btn");
 const mobileThemeToggleButton = document.getElementById("mobile-theme-toggle-btn");
 const mobileBrainViewButton = document.getElementById("mobile-brain-view-btn");
 const memoryManagementButton = document.getElementById("memory-management-btn");
 const shortTermMemoryButton = document.getElementById("short-term-memory-btn");
 const timedJobsButton = document.getElementById("timed-jobs-btn");
 const tokenUsageButton = document.getElementById("token-usage-btn");
+const changePasswordButton = document.getElementById("change-password-btn");
 const themeToggleButton = document.getElementById("theme-toggle-btn");
 const brainViewButton = document.getElementById("brain-view-btn");
 const memoryModal = document.getElementById("memory-modal");
@@ -116,6 +118,14 @@ const tokenUsageTotalNode = document.getElementById("token-usage-total");
 const tokenUsageAverageNode = document.getElementById("token-usage-average");
 const tokenUsagePeakNode = document.getElementById("token-usage-peak");
 const tokenUsageChartNode = document.getElementById("token-usage-chart");
+const changePasswordModal = document.getElementById("change-password-modal");
+const changePasswordBackdrop = document.getElementById("change-password-backdrop");
+const changePasswordCloseButton = document.getElementById("change-password-close");
+const changePasswordForm = document.getElementById("change-password-form");
+const changePasswordOldInput = document.getElementById("change-password-old");
+const changePasswordNewInput = document.getElementById("change-password-new");
+const changePasswordConfirmInput = document.getElementById("change-password-confirm");
+const changePasswordSubmitButton = document.getElementById("change-password-submit");
 const memoryTokenTotalNode = document.getElementById("memory-token-total");
 const coreMemoryTokenCountNode = document.getElementById("core-memory-token-count");
 const normalMemoryTokenCountNode = document.getElementById("normal-memory-token-count");
@@ -267,7 +277,8 @@ function isAnyModalOpen() {
   const shortTermOpen = shortTermMemoryModal instanceof HTMLElement && !shortTermMemoryModal.classList.contains("hidden");
   const timedJobsOpen = timedJobsModal instanceof HTMLElement && !timedJobsModal.classList.contains("hidden");
   const tokenUsageOpen = tokenUsageModal instanceof HTMLElement && !tokenUsageModal.classList.contains("hidden");
-  return memoryOpen || brainOpen || shortTermOpen || timedJobsOpen || tokenUsageOpen;
+  const changePasswordOpen = changePasswordModal instanceof HTMLElement && !changePasswordModal.classList.contains("hidden");
+  return memoryOpen || brainOpen || shortTermOpen || timedJobsOpen || tokenUsageOpen || changePasswordOpen;
 }
 
 function syncMobileDrawerUi() {
@@ -2532,6 +2543,7 @@ function closeMemoryManagementModal() {
   if ((!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
     && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
     && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))
+    && (!(changePasswordModal instanceof HTMLElement) || changePasswordModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)) {
     document.body.style.overflow = "";
   }
@@ -2688,7 +2700,8 @@ function closeBrainModal() {
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
     && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
     && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))
-    && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))) {
+    && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))
+    && (!(changePasswordModal instanceof HTMLElement) || changePasswordModal.classList.contains("hidden"))) {
     document.body.style.overflow = "";
   }
 }
@@ -2817,6 +2830,7 @@ function closeShortTermMemoryModal() {
     && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
     && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
     && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))
+    && (!(changePasswordModal instanceof HTMLElement) || changePasswordModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
   ) {
     document.body.style.overflow = "";
@@ -3034,9 +3048,113 @@ function closeTokenUsageModal() {
     && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
     && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
     && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))
+    && (!(changePasswordModal instanceof HTMLElement) || changePasswordModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
   ) {
     document.body.style.overflow = "";
+  }
+}
+
+function resetChangePasswordForm() {
+  if (changePasswordForm instanceof HTMLFormElement) {
+    changePasswordForm.reset();
+  }
+}
+
+function setChangePasswordSubmitting(submitting) {
+  const disabled = Boolean(submitting);
+  if (changePasswordOldInput instanceof HTMLInputElement) {
+    changePasswordOldInput.disabled = disabled;
+  }
+  if (changePasswordNewInput instanceof HTMLInputElement) {
+    changePasswordNewInput.disabled = disabled;
+  }
+  if (changePasswordConfirmInput instanceof HTMLInputElement) {
+    changePasswordConfirmInput.disabled = disabled;
+  }
+  if (changePasswordSubmitButton instanceof HTMLButtonElement) {
+    changePasswordSubmitButton.disabled = disabled;
+  }
+}
+
+function openChangePasswordModal() {
+  if (!(changePasswordModal instanceof HTMLElement)) {
+    return;
+  }
+  resetChangePasswordForm();
+  setChangePasswordSubmitting(false);
+  changePasswordModal.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  if (changePasswordOldInput instanceof HTMLInputElement) {
+    changePasswordOldInput.focus();
+  }
+}
+
+function closeChangePasswordModal() {
+  if (!(changePasswordModal instanceof HTMLElement)) {
+    return;
+  }
+  changePasswordModal.classList.add("hidden");
+  setChangePasswordSubmitting(false);
+  resetChangePasswordForm();
+  if (
+    (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
+    && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
+    && (!(timedJobsModal instanceof HTMLElement) || timedJobsModal.classList.contains("hidden"))
+    && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))
+    && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))
+    && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
+  ) {
+    document.body.style.overflow = "";
+  }
+}
+
+async function submitPasswordChange(oldPassword, newPassword, confirmNewPassword) {
+  const response = await fetch("/api/auth/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      old_password: oldPassword,
+      new_password: newPassword,
+      confirm_new_password: confirmNewPassword,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await buildHttpErrorDetail(response, "Failed to change password.");
+    throw new Error(detail);
+  }
+}
+
+async function handleChangePasswordSubmit(event) {
+  event.preventDefault();
+  if (!(changePasswordOldInput instanceof HTMLInputElement)
+    || !(changePasswordNewInput instanceof HTMLInputElement)
+    || !(changePasswordConfirmInput instanceof HTMLInputElement)) {
+    return;
+  }
+
+  const oldPassword = String(changePasswordOldInput.value || "");
+  const newPassword = String(changePasswordNewInput.value || "");
+  const confirmNewPassword = String(changePasswordConfirmInput.value || "");
+  if (!oldPassword || !newPassword || !confirmNewPassword) {
+    setStatus("All password fields are required.", true);
+    return;
+  }
+  if (newPassword !== confirmNewPassword) {
+    setStatus("New password and confirmation do not match.", true);
+    return;
+  }
+
+  setChangePasswordSubmitting(true);
+  try {
+    await submitPasswordChange(oldPassword, newPassword, confirmNewPassword);
+    closeChangePasswordModal();
+    setStatus("Password updated.");
+    showToast("Password updated.");
+  } catch (error) {
+    setStatus(normalizeErrorMessage(error, "Failed to change password."), true);
+  } finally {
+    setChangePasswordSubmitting(false);
   }
 }
 
@@ -3509,6 +3627,7 @@ function closeTimedJobsModal() {
     && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
     && (!(shortTermMemoryModal instanceof HTMLElement) || shortTermMemoryModal.classList.contains("hidden"))
     && (!(tokenUsageModal instanceof HTMLElement) || tokenUsageModal.classList.contains("hidden"))
+    && (!(changePasswordModal instanceof HTMLElement) || changePasswordModal.classList.contains("hidden"))
     && (!state.mobileLeftDrawerOpen && !state.mobileRightDrawerOpen)
   ) {
     document.body.style.overflow = "";
@@ -6130,6 +6249,13 @@ if (tokenUsageButton instanceof HTMLButtonElement) {
   });
 }
 
+if (changePasswordButton instanceof HTMLButtonElement) {
+  changePasswordButton.addEventListener("click", () => {
+    toggleMenu(false);
+    openChangePasswordModal();
+  });
+}
+
 if (themeToggleButton instanceof HTMLButtonElement) {
   themeToggleButton.addEventListener("click", async () => {
     toggleMenu(false);
@@ -6186,6 +6312,18 @@ if (tokenUsageCloseButton instanceof HTMLButtonElement) {
 
 if (tokenUsageBackdrop instanceof HTMLElement) {
   tokenUsageBackdrop.addEventListener("click", closeTokenUsageModal);
+}
+
+if (changePasswordCloseButton instanceof HTMLButtonElement) {
+  changePasswordCloseButton.addEventListener("click", closeChangePasswordModal);
+}
+
+if (changePasswordBackdrop instanceof HTMLElement) {
+  changePasswordBackdrop.addEventListener("click", closeChangePasswordModal);
+}
+
+if (changePasswordForm instanceof HTMLFormElement) {
+  changePasswordForm.addEventListener("submit", handleChangePasswordSubmit);
 }
 
 if (tokenUsageRangeSelect instanceof HTMLSelectElement) {
@@ -6496,6 +6634,14 @@ if (mobileTokenUsageButton instanceof HTMLButtonElement) {
   });
 }
 
+if (mobileChangePasswordButton instanceof HTMLButtonElement) {
+  mobileChangePasswordButton.addEventListener("click", () => {
+    toggleMobileSettingsMenu(false);
+    closeMobileDrawers();
+    openChangePasswordModal();
+  });
+}
+
 if (mobileThemeToggleButton instanceof HTMLButtonElement) {
   mobileThemeToggleButton.addEventListener("click", async () => {
     toggleMobileSettingsMenu(false);
@@ -6588,6 +6734,11 @@ document.addEventListener("keydown", (event) => {
 
   if (tokenUsageModal instanceof HTMLElement && !tokenUsageModal.classList.contains("hidden")) {
     closeTokenUsageModal();
+    return;
+  }
+
+  if (changePasswordModal instanceof HTMLElement && !changePasswordModal.classList.contains("hidden")) {
+    closeChangePasswordModal();
     return;
   }
 

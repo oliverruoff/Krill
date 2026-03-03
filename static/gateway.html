@@ -57,6 +57,7 @@
             <button type="button" id="short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
             <button type="button" id="timed-jobs-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◷</span>Timed Jobs</button>
             <button type="button" id="token-usage-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▇</span>Token Usage</button>
+            <button type="button" id="change-password-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">#</span>Change Password</button>
             <button type="button" id="theme-toggle-btn" class="menu-item menu-item-button" role="menuitem" aria-label="Switch to Dark Mode" title="Switch to Dark Mode"><span class="menu-item-icon" aria-hidden="true">◐</span>Switch to Dark Mode</button>
             <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
             <button type="button" id="brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
@@ -138,6 +139,7 @@
               <button type="button" id="mobile-short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
               <button type="button" id="mobile-timed-jobs-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◷</span>Timed Jobs</button>
               <button type="button" id="mobile-token-usage-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▇</span>Token Usage</button>
+              <button type="button" id="mobile-change-password-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">#</span>Change Password</button>
               <button type="button" id="mobile-theme-toggle-btn" class="menu-item menu-item-button" role="menuitem" aria-label="Switch to Dark Mode" title="Switch to Dark Mode"><span class="menu-item-icon" aria-hidden="true">◐</span>Switch to Dark Mode</button>
               <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
               <button type="button" id="mobile-brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
@@ -362,6 +364,36 @@
           <p id="token-usage-peak" class="token-usage-stat">Peak: -</p>
         </div>
         <div id="token-usage-chart" class="token-usage-chart" aria-live="polite"></div>
+      </section>
+    </div>
+
+    <div id="change-password-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="change-password-title">
+      <div id="change-password-backdrop" class="brain-modal-backdrop"></div>
+      <section class="brain-modal-card change-password-modal-card">
+        <header class="brain-modal-header">
+          <div>
+            <h2 id="change-password-title">Change Password</h2>
+            <p id="change-password-meta" class="brain-modal-meta">Update your login password for this Krill instance.</p>
+          </div>
+          <button type="button" id="change-password-close" class="brain-modal-close" aria-label="Close change password">&times;</button>
+        </header>
+        <form id="change-password-form" class="change-password-form" novalidate>
+          <label class="token-usage-field" for="change-password-old">
+            <span>Old password</span>
+            <input id="change-password-old" type="password" autocomplete="current-password" required maxlength="200" />
+          </label>
+          <label class="token-usage-field" for="change-password-new">
+            <span>New password</span>
+            <input id="change-password-new" type="password" autocomplete="new-password" required maxlength="200" />
+          </label>
+          <label class="token-usage-field" for="change-password-confirm">
+            <span>Confirm new password</span>
+            <input id="change-password-confirm" type="password" autocomplete="new-password" required maxlength="200" />
+          </label>
+          <div class="change-password-actions">
+            <button type="submit" id="change-password-submit" class="secondary">Update password</button>
+          </div>
+        </form>
       </section>
     </div>
 

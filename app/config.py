@@ -1824,6 +1824,71 @@ def _revoke_auth_session_sync(session_id: str) -> None:
         conn.close()
 
 
+async def revoke_other_auth_sessions(user_id: str, *, except_session_id: str = "") -> int:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_revoke_other_auth_sessions_sync, user_id, except_session_id)
+
+
+def _revoke_other_auth_sessions_sync(user_id: str, except_session_id: str) -> int:
+    conn = _get_conn(BRAINDUMP_PATH)
+    now_iso = _utc_now_iso()
+    user_id_value = str(user_id).strip()
+    except_value = str(except_session_id).strip()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        if except_value:
+            cursor = conn.execute(
+                """
+                UPDATE auth_sessions
+                SET revoked_at = ?
+                WHERE user_id = ? AND session_id != ? AND revoked_at = ''
+                """,
+                (now_iso, user_id_value, except_value),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                UPDATE auth_sessions
+                SET revoked_at = ?
+                WHERE user_id = ? AND revoked_at = ''
+                """,
+                (now_iso, user_id_value),
+            )
+        conn.commit()
+        return int(cursor.rowcount if cursor.rowcount is not None else 0)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def update_auth_user_password(user_id: str, password_hash: str) -> None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        await asyncio.to_thread(_update_auth_user_password_sync, user_id, password_hash)
+
+
+def _update_auth_user_password_sync(user_id: str, password_hash: str) -> None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    now_iso = _utc_now_iso()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        cursor = conn.execute(
+            "UPDATE auth_users SET password_hash = ?, updated_at = ? WHERE id = ? AND is_active = 1",
+            (str(password_hash), now_iso, str(user_id).strip()),
+        )
+        if int(cursor.rowcount if cursor.rowcount is not None else 0) <= 0:
+            raise ValueError("User account not found.")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 async def clear_auth_ip_lock(ip: str) -> None:
     await ensure_settings_file()
     async with _DB_LOCK:

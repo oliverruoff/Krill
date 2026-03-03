@@ -22,8 +22,10 @@ from .config import (
     get_auth_session_by_id,
     get_auth_user_by_username,
     register_auth_failed_attempt,
+    revoke_other_auth_sessions,
     revoke_auth_session,
     touch_auth_session,
+    update_auth_user_password,
 )
 
 
@@ -279,3 +281,35 @@ async def logout_session(cookie_value: str) -> None:
         return
     session_id, _ = parsed
     await revoke_auth_session(session_id)
+
+
+async def change_password_for_session(
+    cookie_value: str,
+    *,
+    old_password: str,
+    new_password: str,
+    confirm_new_password: str,
+) -> None:
+    session = await resolve_session(cookie_value)
+    if session is None:
+        raise PermissionError("Not authenticated.")
+
+    current_user = await get_auth_user_by_username(str(session["username"]))
+    if current_user is None:
+        raise PermissionError("Not authenticated.")
+
+    old_value = validate_password(old_password)
+    new_value = validate_password(new_password)
+    confirm_value = validate_password(confirm_new_password)
+
+    if not hmac.compare_digest(new_value, confirm_value):
+        raise ValueError("New password and confirmation do not match.")
+
+    if not verify_password(old_value, str(current_user.get("password_hash", ""))):
+        raise PermissionError("Old password is incorrect.")
+
+    if verify_password(new_value, str(current_user.get("password_hash", ""))):
+        raise ValueError("New password must be different from the old password.")
+
+    await update_auth_user_password(str(session["user_id"]), hash_password(new_value))
+    await revoke_other_auth_sessions(str(session["user_id"]), except_session_id=str(session["session_id"]))

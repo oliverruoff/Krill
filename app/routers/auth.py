@@ -10,6 +10,7 @@ from ..auth import (
     SESSION_COOKIE_NAME,
     authenticate_login,
     bootstrap_single_admin,
+    change_password_for_session,
     create_login_session,
     get_client_ip,
     is_bootstrap_required,
@@ -37,6 +38,12 @@ class AuthStatusResponse(BaseModel):
     authenticated: bool
     bootstrap_required: bool
     username: str = ""
+
+
+class AuthChangePasswordRequest(BaseModel):
+    old_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=1, max_length=200)
+    confirm_new_password: str = Field(min_length=1, max_length=200)
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -111,6 +118,27 @@ async def auth_logout(request: Request) -> JSONResponse:
     response = JSONResponse({"ok": True})
     _clear_session_cookie(response, request)
     return response
+
+
+@router.post("/api/auth/change-password")
+async def auth_change_password(payload: AuthChangePasswordRequest, request: Request) -> JSONResponse:
+    if await is_bootstrap_required():
+        raise HTTPException(status_code=409, detail="Authentication is not initialized. Complete bootstrap first.")
+
+    cookie_value = str(request.cookies.get(SESSION_COOKIE_NAME, ""))
+    try:
+        await change_password_for_session(
+            cookie_value,
+            old_password=payload.old_password,
+            new_password=payload.new_password,
+            confirm_new_password=payload.confirm_new_password,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return JSONResponse({"ok": True})
 
 
 def _set_session_cookie(response: JSONResponse, cookie_value: str, request: Request) -> None:
