@@ -179,6 +179,7 @@ class TelegramBridgeWorker:
         try:
             image_payload = await self._extract_message_image(token, message)
         except Exception as exc:
+            # Error messages: escape for MarkdownV2 (no markdown expected)
             error_text = _escape_markdown_v2(f"Image handling failed: {exc}")
             await asyncio.to_thread(telegram_send_message, token, chat_id, error_text, "MarkdownV2")
             return
@@ -187,6 +188,7 @@ class TelegramBridgeWorker:
         if command:
             response_text = await self._handle_command(command, command_arg, settings)
             if response_text:
+                # Command responses: escape for MarkdownV2 (plain text, no markdown)
                 escaped_response = _escape_markdown_v2(response_text)
                 await asyncio.to_thread(telegram_send_message, token, chat_id, escaped_response, "MarkdownV2")
             return
@@ -194,8 +196,9 @@ class TelegramBridgeWorker:
         response_text = await self._handle_user_message(settings, prompt_text, image=image_payload)
         if response_text:
             for chunk in _chunk_telegram_text(response_text):
-                escaped_chunk = _escape_markdown_v2(chunk)
-                await asyncio.to_thread(telegram_send_message, token, chat_id, escaped_chunk, "MarkdownV2")
+                # LLM responses: convert markdown to HTML
+                html_chunk = _markdown_to_html(chunk)
+                await asyncio.to_thread(telegram_send_message, token, chat_id, html_chunk, "HTML")
 
     async def _extract_message_image(self, token: str, message: dict[str, Any]) -> dict[str, object] | None:
         photo = message.get("photo")
@@ -502,9 +505,48 @@ def _escape_markdown_v2(text: str) -> str:
     
     MarkdownV2 requires escaping these 18 special characters: _*[]()~`>#+-=|{}.!
     Each must be prefixed with a backslash.
+    
+    Note: This is kept for error messages. For LLM responses, use HTML mode instead.
     """
     special_chars = "_*[]()~`>#+-=|{}.!"
     return "".join(f"\\{char}" if char in special_chars else char for char in text)
+
+
+def _markdown_to_html(text: str) -> str:
+    """Convert common markdown patterns to HTML for Telegram HTML parse_mode.
+    
+    Converts:
+    - **bold** or *bold* -> <b>bold</b>
+    - __italic__ or _italic_ -> <i>italic</i>
+    - `code` -> <code>code</code>
+    - ```code block``` -> <pre>code block</pre>
+    - [link](url) -> <a href="url">link</a>
+    - Escapes HTML entities: <, >, &
+    """
+    import re
+    
+    # First, escape HTML entities in the raw text
+    result = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    # Convert code blocks (triple backticks) - must be done before inline code
+    # Pattern: ```optional_lang\ncode\n```
+    result = re.sub(r'```(?:\w+)?\n?(.*?)\n?```', r'<pre>\1</pre>', result, flags=re.DOTALL)
+    
+    # Convert inline code (single backticks)
+    result = re.sub(r'`([^`]+)`', r'<code>\1</code>', result)
+    
+    # Convert bold: **text** or __text__
+    result = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', result)
+    result = re.sub(r'__(.+?)__', r'<b>\1</b>', result)
+    
+    # Convert italic: *text* or _text_ (but not inside words)
+    result = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'<i>\1</i>', result)
+    result = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'<i>\1</i>', result)
+    
+    # Convert links: [text](url)
+    result = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'<a href="\2">\1</a>', result)
+    
+    return result
 
 
 def _get_bot_token(settings: Settings) -> str:
