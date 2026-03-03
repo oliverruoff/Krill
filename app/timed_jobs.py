@@ -6,14 +6,12 @@ import asyncio
 import contextlib
 import logging
 from datetime import datetime, timezone
-from typing import Any
 from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
 from app.config import (
     ChatMessage,
     ChatSession,
-    IntegrationConfig,
     Settings,
     TimedJob,
     get_timed_job,
@@ -23,14 +21,12 @@ from app.config import (
     save_settings,
 )
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed
+from app.integrations.registry import get_runtime_integrations
 from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from app.usage import add_daily_usage
 
-from .integrations.telegram.client import telegram_send_message
-
 
 TIMED_JOB_POLL_INTERVAL_SECONDS = 15
-TELEGRAM_MAX_MESSAGE_LENGTH = 3500
 
 _WORKER_TASK: asyncio.Task[None] | None = None
 _STOP_EVENT = asyncio.Event()
@@ -46,27 +42,7 @@ def _derive_chat_title(job: TimedJob) -> str:
     title = " ".join(job.title.split()).strip()
     if title:
         return title[:120]
-    fallback = "Timed job"
-    return fallback
-
-
-def _chunk_telegram_text(text: str, max_len: int = TELEGRAM_MAX_MESSAGE_LENGTH) -> list[str]:
-    if len(text) <= max_len:
-        return [text]
-    chunks: list[str] = []
-    remaining = text
-    while remaining:
-        if len(remaining) <= max_len:
-            chunks.append(remaining)
-            break
-        split_at = remaining.rfind("\n", 0, max_len)
-        if split_at <= 0:
-            split_at = remaining.rfind(" ", 0, max_len)
-        if split_at <= 0:
-            split_at = max_len
-        chunks.append(remaining[:split_at].strip())
-        remaining = remaining[split_at:].lstrip()
-    return [chunk for chunk in chunks if chunk]
+    return "Timed job"
 
 
 def _is_setup_ready(settings: Settings) -> bool:
@@ -83,32 +59,13 @@ def _is_setup_ready(settings: Settings) -> bool:
     return True
 
 
-def _telegram_target(settings: Settings) -> tuple[str, int] | None:
-    config = settings.integration_configs.get("telegram") or IntegrationConfig()
-    if not config.enabled:
-        return None
-    token = str(config.params.get("bot_token", "")).strip()
-    if not token:
-        return None
-    raw_chat_id = settings.telegram_state.owner_chat_id.strip()
-    if not raw_chat_id:
-        # Backward-compatible fallback: in private chats owner user id equals chat id.
-        raw_chat_id = settings.telegram_state.owner_user_id.strip()
-    if not raw_chat_id:
-        return None
-    try:
-        chat_id = int(raw_chat_id)
-    except ValueError:
-        return None
-    return token, chat_id
-
-
 def get_timed_job_channel_options(settings: Settings) -> list[dict[str, object]]:
-    telegram_target = _telegram_target(settings)
-    telegram_description = "Sends job output to Telegram owner chat."
-    if telegram_target is None:
-        telegram_description = "Unavailable: enable Telegram, set bot token, and send one owner message first."
-    return [
+    """Return the list of available dispatch channels for the timed job UI.
+
+    Gateway is a built-in channel. All registered integrations are queried
+    for their optional timed job channel option.
+    """
+    options: list[dict[str, object]] = [
         {
             "id": "gateway",
             "label": "Gateway",
@@ -116,14 +73,12 @@ def get_timed_job_channel_options(settings: Settings) -> list[dict[str, object]]
             "available": True,
             "default": True,
         },
-        {
-            "id": "telegram",
-            "label": "Telegram",
-            "description": telegram_description,
-            "available": telegram_target is not None,
-            "default": False,
-        },
     ]
+    for plugin in get_runtime_integrations():
+        option = plugin.get_timed_job_channel_option(settings)
+        if option is not None:
+            options.append(option)
+    return options
 
 
 async def start_timed_jobs_worker() -> None:
@@ -246,20 +201,14 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
                 ]
 
         safe_output = output_text.strip() or "(No response text returned.)"
-        channels = [channel for channel in job.channels if channel in {"gateway", "telegram"}]
-
-        if "gateway" in channels:
-            await _dispatch_gateway(
-                job=job,
-                assistant_text=safe_output,
-                used_tokens=used_tokens,
-                used_tools=used_tools,
-                trace_messages=trace_messages,
-                executed_at=executed_at,
-            )
-
-        if "telegram" in channels:
-            await _dispatch_telegram(job=job, assistant_text=safe_output)
+        await _dispatch_all(
+            job=job,
+            safe_output=safe_output,
+            used_tokens=used_tokens,
+            used_tools=used_tools,
+            trace_messages=trace_messages,
+            executed_at=executed_at,
+        )
 
         await register_completed_turn(
             source_channel="timed_job",
@@ -279,26 +228,50 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
         else:
             LOGGER.exception("Timed job execution failed", extra={"timed_job_id": job.id})
         error_text = f"Timed job error: {exc}"
-        channels = [channel for channel in job.channels if channel in {"gateway", "telegram"}]
-        if "gateway" in channels:
-            with contextlib.suppress(Exception):
-                await _dispatch_gateway(
-                    job=job,
-                    assistant_text=error_text,
-                    used_tokens=None,
-                    used_tools=[],
-                    trace_messages=[],
-                    executed_at=executed_at,
-                )
-        if "telegram" in channels:
-            with contextlib.suppress(Exception):
-                await _dispatch_telegram(job=job, assistant_text=error_text)
+        with contextlib.suppress(Exception):
+            await _dispatch_all(
+                job=job,
+                safe_output=error_text,
+                used_tokens=None,
+                used_tools=[],
+                trace_messages=[],
+                executed_at=executed_at,
+            )
         await register_completed_turn(
             source_channel="timed_job",
             source_chat_id=job.id,
             user_message=job.prompt,
             assistant_message=error_text,
         )
+
+
+async def _dispatch_all(
+    *,
+    job: TimedJob,
+    safe_output: str,
+    used_tokens: int | None,
+    used_tools: list[dict[str, str]],
+    trace_messages: list[dict[str, str]],
+    executed_at: datetime,
+) -> None:
+    """Fan out job results to all requested channels."""
+    settings = await load_settings()
+
+    if "gateway" in job.channels:
+        await _dispatch_gateway(
+            job=job,
+            assistant_text=safe_output,
+            used_tokens=used_tokens,
+            used_tools=used_tools,
+            trace_messages=trace_messages,
+            executed_at=executed_at,
+            settings=settings,
+        )
+
+    for plugin in get_runtime_integrations():
+        if plugin.integration_id in job.channels:
+            with contextlib.suppress(Exception):
+                await plugin.dispatch_timed_job(job, safe_output, settings)
 
 
 async def _dispatch_gateway(
@@ -309,8 +282,8 @@ async def _dispatch_gateway(
     used_tools: list[dict[str, str]],
     trace_messages: list[dict[str, str]],
     executed_at: datetime,
+    settings: Settings,
 ) -> None:
-    settings = await load_settings()
     timestamp = executed_at.isoformat()
     chat = ChatSession(
         id=str(uuid4()),
@@ -364,18 +337,6 @@ async def _dispatch_gateway(
 
     settings.chats.insert(0, chat)
     await save_settings(settings)
-
-
-async def _dispatch_telegram(*, job: TimedJob, assistant_text: str) -> None:
-    settings = await load_settings()
-    telegram_target = _telegram_target(settings)
-    if telegram_target is None:
-        return
-    token, chat_id = telegram_target
-    title = _derive_chat_title(job)
-    decorated = f"{title}\n\n{assistant_text}" if title else assistant_text
-    for chunk in _chunk_telegram_text(decorated):
-        await asyncio.to_thread(telegram_send_message, token, chat_id, chunk)
 
 
 def _is_transient_provider_error(exc: Exception) -> bool:
