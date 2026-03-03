@@ -635,6 +635,12 @@ async def verify_provider(payload: VerifyProviderRequest) -> VerifyProviderRespo
     if provider is None:
         raise HTTPException(status_code=422, detail="Provider not found.")
 
+    # For OAuth providers with no api_key (credentials not yet obtained), skip verification.
+    # User must complete OAuth flow first; model selection can be changed without full verification.
+    auth_mode = getattr(provider, "auth_mode", "api_key") or "api_key"
+    if auth_mode == "oauth" and not payload.api_key.strip():
+        return VerifyProviderResponse(ok=True, detail="OAuth provider selected. Complete OAuth flow to activate.")
+
     ok, detail = await provider.verify(payload.model, payload.api_key)
     if not ok:
         raise HTTPException(status_code=422, detail=detail)

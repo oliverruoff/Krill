@@ -4974,7 +4974,7 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
     state.activeModelId = previousModelId;
     syncSwitcherControls();
     updateMetaIndicators();
-    setStatus(hardErrorText, true);
+    setStatus(error instanceof Error ? error.message : "Provider switch failed.", true);
   } finally {
     state.isSwitching = false;
     setSwitchersDisabled(state.isCompacting);
