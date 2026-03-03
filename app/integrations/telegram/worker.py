@@ -516,17 +516,38 @@ def _markdown_to_html(text: str) -> str:
     """Convert common markdown patterns to HTML for Telegram HTML parse_mode.
     
     Converts:
+    - # Headline -> <b>Headline</b>
     - **bold** or *bold* -> <b>bold</b>
     - __italic__ or _italic_ -> <i>italic</i>
     - `code` -> <code>code</code>
     - ```code block``` -> <pre>code block</pre>
     - [link](url) -> <a href="url">link</a>
+    - * bullet or - bullet -> • bullet (Unicode bullet)
+    - > quote -> ▌quote (blockquote with visual marker)
     - Escapes HTML entities: <, >, &
     """
     import re
     
-    # First, escape HTML entities in the raw text
+    # Convert blockquotes FIRST, before escaping > character
+    # > quote (must be at start of line) -> ▌<i>quote</i>
+    text = re.sub(r'^>\s+(.+)$', r'▌⟪QUOTE⟫\1⟪/QUOTE⟫', text, flags=re.MULTILINE)
+    
+    # Convert headlines: # Headline or ## Headline or ### Headline (must be at start of line)
+    # Do this before escaping # character
+    text = re.sub(r'^#{1,3}\s+(.+)$', r'⟪HEADLINE⟫\1⟪/HEADLINE⟫', text, flags=re.MULTILINE)
+    
+    # Convert bullet points: * item or - item (at start of line)
+    # Do this before escaping * character
+    text = re.sub(r'^(\s*)[*\-]\s+', r'\1• ', text, flags=re.MULTILINE)
+    
+    # Now escape HTML entities in the text
     result = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    # Replace headline placeholders with HTML tags
+    result = result.replace("⟪HEADLINE⟫", "<b>").replace("⟪/HEADLINE⟫", "</b>")
+    
+    # Replace blockquote placeholders with HTML tags
+    result = result.replace("⟪QUOTE⟫", "<i>").replace("⟪/QUOTE⟫", "</i>")
     
     # Convert code blocks (triple backticks) - must be done before inline code
     # Pattern: ```optional_lang\ncode\n```
@@ -539,7 +560,8 @@ def _markdown_to_html(text: str) -> str:
     result = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', result)
     result = re.sub(r'__(.+?)__', r'<b>\1</b>', result)
     
-    # Convert italic: *text* or _text_ (but not inside words)
+    # Convert italic: *text* or _text_ (but not inside words or at start of line as bullet)
+    # This must be done AFTER bullets are converted
     result = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'<i>\1</i>', result)
     result = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'<i>\1</i>', result)
     

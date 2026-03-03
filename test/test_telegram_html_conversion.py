@@ -12,6 +12,64 @@ sys.path.insert(0, str(repo_root))
 from app.integrations.telegram.worker import _markdown_to_html
 
 
+def test_headlines():
+    """Test headline conversion."""
+    assert _markdown_to_html("# Headline") == "<b>Headline</b>"
+    assert _markdown_to_html("## Subheadline") == "<b>Subheadline</b>"
+    assert _markdown_to_html("### Third level") == "<b>Third level</b>"
+    
+    # Headlines in multi-line text
+    text = """# Main Title
+Some content here
+## Section"""
+    result = _markdown_to_html(text)
+    assert "<b>Main Title</b>" in result
+    assert "<b>Section</b>" in result
+    print("[PASS] Headlines conversion")
+
+
+def test_bullet_points():
+    """Test bullet point conversion."""
+    assert _markdown_to_html("* First item") == "• First item"
+    assert _markdown_to_html("- Second item") == "• Second item"
+    
+    # Multi-line bullets
+    text = """Points:
+* First
+* Second
+* Third"""
+    result = _markdown_to_html(text)
+    assert result.count("•") == 3
+    print("[PASS] Bullet points conversion")
+
+
+def test_sub_bullets():
+    """Test nested bullet points (indented)."""
+    text = """* Main point
+  * Sub point 1
+  * Sub point 2
+* Another main point"""
+    result = _markdown_to_html(text)
+    # Both main and sub bullets should have bullet characters
+    assert result.count("•") == 4
+    # Indentation should be preserved
+    assert "  •" in result
+    print("[PASS] Sub-bullet points conversion")
+
+
+def test_blockquotes():
+    """Test blockquote conversion."""
+    assert _markdown_to_html("> This is a quote") == "▌<i>This is a quote</i>"
+    
+    # Multi-line quotes
+    text = """> First quote
+> Second line"""
+    result = _markdown_to_html(text)
+    assert result.count("▌") == 2
+    assert result.count("<i>") == 2
+    print("[PASS] Blockquotes conversion")
+
+
 def test_bold_conversion():
     """Test bold markdown -> HTML conversion."""
     assert _markdown_to_html("**bold**") == "<b>bold</b>"
@@ -96,8 +154,9 @@ def test_list_items():
 - Second item
 - Third item"""
     result = _markdown_to_html(text)
-    # Bullets are just text in HTML, not converted to <ul><li>
-    assert "- First item" in result or "-" in result
+    # Bullets are converted to Unicode bullet character •
+    assert "• First item" in result
+    assert result.count("•") == 3  # Three bullet points
     print("[PASS] List items handled")
 
 
@@ -162,6 +221,10 @@ def main():
     """Run all tests."""
     print("Running Telegram markdown-to-HTML tests...\n")
     
+    test_headlines()
+    test_bullet_points()
+    test_sub_bullets()
+    test_blockquotes()
     test_bold_conversion()
     test_italic_conversion()
     test_inline_code_conversion()
