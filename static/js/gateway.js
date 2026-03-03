@@ -4553,22 +4553,23 @@ function renderConfigPanel(container, items, getConfig, options) {
         textNode.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
         textNode.placeholder = typeof activeField.placeholder === "string" ? activeField.placeholder : "";
         fieldInput = textNode;
-      } else {
-        const inputNode = document.createElement("input");
-        inputNode.type = activeField.type === "password" ? "password" : "text";
-        if (activeField.type === "password") {
-          inputNode.autocomplete = "new-password";
-          inputNode.name = `krill-ignore-${options.kind}-${item.id}-${fieldId}`;
-          inputNode.setAttribute("autocapitalize", "off");
-          inputNode.setAttribute("autocorrect", "off");
-          inputNode.spellcheck = false;
-          inputNode.setAttribute("data-lpignore", "true");
-          inputNode.setAttribute("data-1p-ignore", "true");
-        }
-        inputNode.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
-        inputNode.placeholder = typeof activeField.placeholder === "string" ? activeField.placeholder : "";
-        fieldInput = inputNode;
-      }
+       } else {
+         const inputNode = document.createElement("input");
+         inputNode.type = activeField.type === "password" ? "password" : "text";
+         // Suppress password managers and browser autofill for ALL config inputs
+         // (not just password types) to prevent unwanted credential-save prompts
+         inputNode.autocomplete = activeField.type === "password" ? "new-password" : "off";
+         inputNode.name = `krill-ignore-${options.kind}-${item.id}-${fieldId}`;
+         inputNode.setAttribute("autocapitalize", "off");
+         inputNode.setAttribute("autocorrect", "off");
+         inputNode.spellcheck = false;
+         inputNode.setAttribute("data-lpignore", "true");
+         inputNode.setAttribute("data-1p-ignore", "true");
+         inputNode.setAttribute("data-form-type", "other");
+         inputNode.value = typeof config.params?.[fieldId] === "string" ? config.params[fieldId] : "";
+         inputNode.placeholder = typeof activeField.placeholder === "string" ? activeField.placeholder : "";
+         fieldInput = inputNode;
+       }
 
       fieldInput.id = `${options.kind}-${item.id}-${fieldId}`;
       fieldInput.dataset.action = "param";
