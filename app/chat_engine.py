@@ -2,8 +2,12 @@
 
 from typing import Awaitable, Callable, TypedDict
 
-from app.config import Settings
+from app.config import load_settings, save_settings, Settings
 from app.providers import get_provider, get_provider_model_limit
+from app.providers.openai_codex_oauth import (
+    OPENAI_CODEX_OAUTH_PROVIDER_ID,
+    get_refreshed_bundle_for_persistence,
+)
 from app.runtime_prompt import compose_runtime_system_prompt
 from app.tooling import generate_with_tools
 from app.tooling.runtime_context import reset_runtime_context, set_runtime_context
@@ -58,6 +62,7 @@ async def generate_chat_response(
 
     model_id = model.strip() if model.strip() else provider_config.model
     api_key_value = api_key if api_key.strip() else provider_config.api_key
+    used_stored_provider_api_key = not api_key.strip()
     runtime_system_prompt = compose_runtime_system_prompt(
         memory_block=memory_block,
     )
@@ -83,6 +88,9 @@ async def generate_chat_response(
         )
     finally:
         reset_runtime_context(context_token)
+
+    if used_stored_provider_api_key and active_provider_id == OPENAI_CODEX_OAUTH_PROVIDER_ID:
+        await _persist_refreshed_openai_oauth_bundle_if_needed()
 
     normalized_tools: list[ChatEngineToolUsage] = []
     raw_tools = orchestration.get("used_mcp_tools", [])
@@ -120,3 +128,19 @@ async def generate_chat_response(
         "system_trace_messages": normalized_trace,
     }
     return result, token_limit
+
+
+async def _persist_refreshed_openai_oauth_bundle_if_needed() -> None:
+    settings = await load_settings()
+    provider_config = settings.provider_configs.get(OPENAI_CODEX_OAUTH_PROVIDER_ID)
+    if provider_config is None:
+        return
+
+    refreshed_bundle = get_refreshed_bundle_for_persistence(provider_config.api_key)
+    if not refreshed_bundle:
+        return
+
+    settings.provider_configs[OPENAI_CODEX_OAUTH_PROVIDER_ID] = provider_config.model_copy(
+        update={"api_key": refreshed_bundle}
+    )
+    await save_settings(settings)

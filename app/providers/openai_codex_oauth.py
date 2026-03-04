@@ -73,8 +73,16 @@ class OpenAICodexOAuthProvider(LLMProvider):
         if not model_id:
             raise RuntimeError("Model is required.")
 
-        credentials = parse_oauth_bundle(api_key)
-        credentials = await asyncio.to_thread(resolve_fresh_credentials, credentials)
+        try:
+            credentials = parse_oauth_bundle(api_key)
+            credentials = await asyncio.to_thread(resolve_fresh_credentials, credentials)
+        except error.HTTPError as exc:
+            response_text = _safe_read_error(exc)
+            if exc.code in {401, 403}:
+                raise RuntimeError("OpenAI OAuth refresh token was rejected. Reconnect your OpenAI account.") from exc
+            raise RuntimeError(f"OpenAI OAuth credential refresh failed ({exc.code}): {response_text}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"OpenAI OAuth credentials are invalid: {exc}") from exc
 
         payload = {
             "model": model_id,
@@ -110,6 +118,11 @@ class OpenAICodexOAuthProvider(LLMProvider):
         try:
             credentials = parse_oauth_bundle(api_key)
             credentials = await asyncio.to_thread(resolve_fresh_credentials, credentials)
+        except error.HTTPError as exc:
+            response_text = _safe_read_error(exc)
+            if exc.code in {401, 403}:
+                return False, "OpenAI OAuth refresh token was rejected. Reconnect your OpenAI account."
+            return False, f"OpenAI OAuth credential refresh failed ({exc.code}): {response_text}"
         except Exception as exc:
             return False, f"OAuth credentials are invalid: {exc}"
 
@@ -185,6 +198,23 @@ def serialize_oauth_bundle(credentials: OpenAICodexOAuthCredentials) -> str:
         },
         separators=(",", ":"),
     )
+
+
+def get_refreshed_bundle_for_persistence(raw_bundle: str) -> str | None:
+    try:
+        current = parse_oauth_bundle(raw_bundle)
+    except Exception:
+        return None
+
+    refreshed = _TOKEN_CACHE_BY_REFRESH.get(current.refresh_token)
+    if refreshed is None:
+        return None
+
+    refreshed_bundle = serialize_oauth_bundle(refreshed)
+    if refreshed_bundle == str(raw_bundle).strip():
+        return None
+
+    return refreshed_bundle
 
 
 def resolve_fresh_credentials(credentials: OpenAICodexOAuthCredentials) -> OpenAICodexOAuthCredentials:
