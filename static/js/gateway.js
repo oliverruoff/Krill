@@ -6027,13 +6027,26 @@ function handleMcpInputChange(event) {
     if (!fieldId) {
       return;
     }
+    let persistImmediately = false;
     if (target instanceof HTMLInputElement && target.type === "checkbox") {
       config.params[fieldId] = target.checked ? "true" : "false";
+      if (configKind === "mcp" && configId === "whatsapp" && fieldId === "auto_answer" && !target.checked) {
+        persistImmediately = true;
+      }
     } else {
       config.params[fieldId] = target.value;
     }
     if (configKind === "mcp") {
-      scheduleMcpAutosave(configId);
+      if (persistImmediately) {
+        if (state.mcpAutosaveTimerId) {
+          window.clearTimeout(state.mcpAutosaveTimerId);
+          state.mcpAutosaveTimerId = null;
+        }
+        state.mcpAutosavePendingId = "";
+        void runMcpAutosave(configId);
+      } else {
+        scheduleMcpAutosave(configId);
+      }
     }
     if (configKind === "integration" && configId === "telegram") {
       syncTelegramFlagsFromIntegrationConfig();

@@ -126,18 +126,25 @@ async function ensureClient() {
     status = "disconnected";
   });
   client.on("message", (msg) => {
+    if (msg.fromMe) {
+      return;
+    }
     const from = String(msg.from || "").trim();
     if (!from.endsWith("@c.us")) {
       return;
     }
     const number = normalizeNumber(from.replace("@c.us", ""));
+    const text = String(msg.body || "").trim();
+    if (!text) {
+      return;
+    }
     if (allowlist.size > 0 && !allowlist.has(number)) {
       return;
     }
     events.push({
       id: String(msg.id?._serialized || ""),
       from_number: number,
-      text: String(msg.body || ""),
+      text,
       timestamp_ms: Date.now(),
     });
     if (events.length > 300) {

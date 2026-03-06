@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import contextlib
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
@@ -38,6 +40,7 @@ class WhatsAppBridgeWorker:
         self._stop_event = asyncio.Event()
         self._seen_event_ids: set[str] = set()
         self._last_runtime_error: str = ""
+        self._automation_runtime_active = False
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -75,22 +78,13 @@ class WhatsAppBridgeWorker:
             await asyncio.sleep(sleep_seconds)
 
     async def _poll_once(self) -> None:
-        settings = await load_settings()
-        integration_config = settings.integration_configs.get("whatsapp") or IntegrationConfig()
-        if not integration_config.enabled:
+        automation_state = await self._load_automation_state()
+        if not automation_state.enabled:
+            await self._deactivate_automation_runtime()
             return
 
-        mcp_config = settings.mcp_configs.get("whatsapp")
-        if mcp_config is None or not mcp_config.enabled:
-            return
-
-        allowlist = parse_allowlist(mcp_config.params.get("allowed_numbers_receive", ""))
-        prompt = str(mcp_config.params.get("automation_prompt", "")).strip()
-        auto_answer_enabled = _is_truthy_flag(mcp_config.params.get("auto_answer", ""))
-        if not auto_answer_enabled or not allowlist or not prompt:
-            return
-
-        await set_allowlist(allowlist)
+        await set_allowlist(automation_state.allowlist)
+        self._automation_runtime_active = True
 
         events = await poll_events()
         for event in events:
@@ -104,29 +98,25 @@ class WhatsAppBridgeWorker:
 
             number = str(event.get("from_number", "")).strip()
             text = str(event.get("text", "")).strip()
-            if not number or number not in allowlist or not text:
+            if not number or number not in automation_state.allowlist or not text:
                 continue
 
-            await self._dispatch_inbound_message(settings, number, text, prompt)
+            latest_state = await self._load_automation_state()
+            if not latest_state.enabled:
+                await self._deactivate_automation_runtime()
+                return
 
-    async def _dispatch_inbound_message(self, settings, number: str, inbound_text: str, prompt: str) -> None:
+            if number not in latest_state.allowlist:
+                continue
+
+            await self._dispatch_inbound_message(number, text, latest_state.prompt)
+
+    async def _dispatch_inbound_message(self, number: str, inbound_text: str, prompt: str) -> None:
+        settings = await load_settings()
         now_iso = datetime.now(timezone.utc).isoformat()
 
         history_items = await get_message_history(number, limit=10)
-        history_context = ""
-        if history_items:
-            # Exclude the current trigger message if it's already in history (often is).
-            last_idx = -1
-            if history_items[-1].get("body", "").strip() == inbound_text:
-                last_idx = -1
-            # Build history text
-            history_lines = []
-            for h in history_items[:last_idx]:
-                sender = "System" if h.get("from_me") else f"User ({number})"
-                body = h.get("body", "")
-                history_lines.append(f"[{sender}]: {body}")
-            if history_lines:
-                history_context = "Recent context:\n" + "\n".join(history_lines)
+        history_context = _build_history_context(history_items, number)
 
         chat = ChatSession(
             id=str(uuid4()),
@@ -201,8 +191,11 @@ class WhatsAppBridgeWorker:
 
         if final_text:
             try:
-                await asyncio.sleep(random.randint(AUTO_REPLY_DELAY_MIN_SECONDS, AUTO_REPLY_DELAY_MAX_SECONDS))
-                await send_message(number, final_text)
+                send_allowed = await self._wait_for_send_window(number)
+                if not send_allowed:
+                    LOGGER.info("WhatsApp auto-reply aborted before send for %s", number)
+                else:
+                    await send_message(number, final_text)
             except Exception:
                 LOGGER.exception("WhatsApp auto-reply send failed for %s", number)
 
@@ -212,6 +205,92 @@ class WhatsAppBridgeWorker:
             user_message=f"Inbound WhatsApp from {number}: {inbound_text}\n\n{prompt}",
             assistant_message=final_text,
         )
+
+    async def _wait_for_send_window(self, number: str) -> bool:
+        delay_seconds = random.randint(AUTO_REPLY_DELAY_MIN_SECONDS, AUTO_REPLY_DELAY_MAX_SECONDS)
+        for _ in range(delay_seconds):
+            if self._stop_event.is_set():
+                return False
+            await asyncio.sleep(1)
+            latest_state = await self._load_automation_state()
+            if not latest_state.enabled or number not in latest_state.allowlist:
+                await self._deactivate_automation_runtime()
+                return False
+
+        latest_state = await self._load_automation_state()
+        if not latest_state.enabled or number not in latest_state.allowlist:
+            await self._deactivate_automation_runtime()
+            return False
+
+        return True
+
+    async def _load_automation_state(self) -> "WhatsAppAutomationState":
+        settings = await load_settings()
+        integration_config = settings.integration_configs.get("whatsapp") or IntegrationConfig()
+        if not integration_config.enabled:
+            return WhatsAppAutomationState(enabled=False, allowlist=set(), prompt="")
+
+        mcp_config = settings.mcp_configs.get("whatsapp")
+        if mcp_config is None or not mcp_config.enabled:
+            return WhatsAppAutomationState(enabled=False, allowlist=set(), prompt="")
+
+        allowlist = parse_allowlist(mcp_config.params.get("allowed_numbers_receive", ""))
+        prompt = str(mcp_config.params.get("automation_prompt", "")).strip()
+        auto_answer_enabled = _is_truthy_flag(mcp_config.params.get("auto_answer", ""))
+        if not auto_answer_enabled or not allowlist or not prompt:
+            return WhatsAppAutomationState(enabled=False, allowlist=set(), prompt="")
+
+        return WhatsAppAutomationState(enabled=True, allowlist=allowlist, prompt=prompt)
+
+    async def _deactivate_automation_runtime(self) -> None:
+        if not self._automation_runtime_active:
+            return
+        self._automation_runtime_active = False
+        with contextlib.suppress(Exception):
+            await set_allowlist(set())
+        with contextlib.suppress(Exception):
+            await poll_events()
+
+
+@dataclass(frozen=True)
+class WhatsAppAutomationState:
+    enabled: bool
+    allowlist: set[str]
+    prompt: str
+
+
+def _build_history_context(history_items: list[dict[str, object]], number: str) -> str:
+    if not history_items:
+        return ""
+
+    def _timestamp_key(item: dict[str, object]) -> int:
+        raw_value = item.get("timestamp")
+        if isinstance(raw_value, (int, float)):
+            return int(raw_value)
+        if isinstance(raw_value, str):
+            with contextlib.suppress(ValueError):
+                return int(raw_value)
+        return 0
+
+    ordered = sorted(
+        [item for item in history_items if isinstance(item, dict)],
+        key=_timestamp_key,
+    )
+    if len(ordered) > 10:
+        ordered = ordered[-10:]
+
+    history_lines: list[str] = []
+    for item in ordered:
+        sender = "System" if bool(item.get("from_me")) else f"User ({number})"
+        body = str(item.get("body", "")).strip()
+        if not body:
+            continue
+        history_lines.append(f"[{sender}]: {body}")
+
+    if not history_lines:
+        return ""
+
+    return "Recent context (last 10 WhatsApp messages):\n" + "\n".join(history_lines)
 
 
 def _build_automation_execution_prompt(*, number: str, inbound_text: str, automation_prompt: str, history_context: str = "") -> str:
