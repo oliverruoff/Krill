@@ -58,23 +58,28 @@ function toChatId(number) {
 
 function inferHasImage(message) {
   const messageType = String(message?.type || "").toLowerCase();
-  return Boolean(message?.hasMedia) && messageType === "image";
+  return Boolean(message?.hasMedia) && (messageType === "image" || messageType === "chat");
 }
 
 function normalizeMessageText(message) {
-  const bodyText = String(message?.body || "").trim();
+  let bodyText = "";
+  try {
+    bodyText = String(message?.body || "").trim();
+  } catch {
+    bodyText = "";
+  }
   if (bodyText) {
     return { text: bodyText, source: "body" };
   }
 
-  const captionText = String(message?.caption || "").trim();
+  let captionText = "";
+  try {
+    captionText = String(message?.caption || "").trim();
+  } catch {
+    captionText = "";
+  }
   if (captionText) {
     return { text: captionText, source: "caption" };
-  }
-
-  const nestedCaption = String(message?._data?.caption || "").trim();
-  if (nestedCaption) {
-    return { text: nestedCaption, source: "_data.caption" };
   }
 
   return { text: "", source: "" };
@@ -216,35 +221,39 @@ async function ensureClient() {
     status = "disconnected";
   });
   client.on("message", (msg) => {
-    if (msg.fromMe) {
-      return;
-    }
-    const from = String(msg.from || "").trim();
-    if (!from.endsWith("@c.us")) {
-      return;
-    }
-    const number = normalizeNumber(from.replace("@c.us", ""));
-    const normalizedText = normalizeMessageText(msg);
-    const text = normalizedText.text;
-    const hasImage = inferHasImage(msg);
-    const hasCaption = Boolean(text);
-    if (!text && !hasImage) {
-      return;
-    }
-    if (allowlist.size > 0 && !allowlist.has(number)) {
-      return;
-    }
-    events.push({
-      id: String(msg.id?._serialized || ""),
-      from_number: number,
-      text,
-      has_image: hasImage,
-      has_caption: hasCaption,
-      text_source: normalizedText.source,
-      timestamp_ms: Date.now(),
-    });
-    if (events.length > 300) {
-      events = events.slice(events.length - 300);
+    try {
+      if (msg.fromMe) {
+        return;
+      }
+      const from = String(msg.from || "").trim();
+      if (!from.endsWith("@c.us")) {
+        return;
+      }
+      const number = normalizeNumber(from.replace("@c.us", ""));
+      const normalizedText = normalizeMessageText(msg);
+      const text = normalizedText.text;
+      const hasImage = inferHasImage(msg);
+      const hasCaption = Boolean(text);
+      if (!text && !hasImage) {
+        return;
+      }
+      if (allowlist.size > 0 && !allowlist.has(number)) {
+        return;
+      }
+      events.push({
+        id: String(msg.id?._serialized || ""),
+        from_number: number,
+        text,
+        has_image: hasImage,
+        has_caption: hasCaption,
+        text_source: normalizedText.source,
+        timestamp_ms: Date.now(),
+      });
+      if (events.length > 300) {
+        events = events.slice(events.length - 300);
+      }
+    } catch {
+      // Keep sidecar event loop resilient.
     }
   });
 
