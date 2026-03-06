@@ -56,6 +56,81 @@ function toChatId(number) {
   return `${normalized}@c.us`;
 }
 
+function inferHasImage(message) {
+  const messageType = String(message?.type || "").toLowerCase();
+  return Boolean(message?.hasMedia) && messageType === "image";
+}
+
+function normalizeMessageText(message) {
+  return String(message?.body || "").trim();
+}
+
+async function getImageMediaForMessage(message) {
+  if (!inferHasImage(message)) {
+    return { ok: false, detail: "Message has no image media." };
+  }
+  if (!message || typeof message.downloadMedia !== "function") {
+    return { ok: false, detail: "Message media is unavailable." };
+  }
+
+  let media = null;
+  try {
+    media = await message.downloadMedia();
+  } catch {
+    return { ok: false, detail: "Failed to download message media." };
+  }
+
+  const mimeType = String(media?.mimetype || "").trim().toLowerCase();
+  const contentBase64 = String(media?.data || "").trim();
+  if (!mimeType.startsWith("image/") || !contentBase64) {
+    return { ok: false, detail: "Message media is not an image." };
+  }
+
+  const sizeBytes = Math.floor((contentBase64.length * 3) / 4);
+  if (sizeBytes <= 0) {
+    return { ok: false, detail: "Image payload is empty." };
+  }
+  if (sizeBytes > 10 * 1024 * 1024) {
+    return { ok: false, detail: "Image exceeds 10MB limit." };
+  }
+
+  return {
+    ok: true,
+    mime_type: mimeType,
+    content_base64: contentBase64,
+    size_bytes: sizeBytes,
+  };
+}
+
+async function getRecentMessages(chat, limit) {
+  const fetchLimit = Number.isFinite(limit) ? Math.max(1, Math.min(30, Math.floor(limit))) : 10;
+  const messages = await chat.fetchMessages({ limit: fetchLimit });
+  return messages
+    .filter((message) => {
+      const type = String(message?.type || "").toLowerCase();
+      return type === "chat" || type === "image";
+    })
+    .map((message) => ({
+      id: String(message?.id?._serialized || ""),
+      body: normalizeMessageText(message),
+      from_me: Boolean(message?.fromMe),
+      timestamp: Number.isFinite(Number(message?.timestamp)) ? Number(message.timestamp) : 0,
+      has_image: inferHasImage(message),
+      type: String(message?.type || "").toLowerCase(),
+    }));
+}
+
+async function getMessageById(chat, messageId, limit = 50) {
+  const messages = await chat.fetchMessages({ limit });
+  for (const message of messages) {
+    const currentId = String(message?.id?._serialized || "");
+    if (currentId && currentId === messageId) {
+      return message;
+    }
+  }
+  return null;
+}
+
 async function listContacts() {
   await ensureClient();
   if (!client || (status !== "ready" && status !== "authenticated")) {
@@ -134,8 +209,9 @@ async function ensureClient() {
       return;
     }
     const number = normalizeNumber(from.replace("@c.us", ""));
-    const text = String(msg.body || "").trim();
-    if (!text) {
+    const text = normalizeMessageText(msg);
+    const hasImage = inferHasImage(msg);
+    if (!text && !hasImage) {
       return;
     }
     if (allowlist.size > 0 && !allowlist.has(number)) {
@@ -145,6 +221,7 @@ async function ensureClient() {
       id: String(msg.id?._serialized || ""),
       from_number: number,
       text,
+      has_image: hasImage,
       timestamp_ms: Date.now(),
     });
     if (events.length > 300) {
@@ -212,16 +289,48 @@ const server = http.createServer(async (req, res) => {
       }
       const chatId = toChatId(number);
       const chat = await client.getChatById(chatId);
-      const messages = await chat.fetchMessages({ limit });
-      const history = messages
-        .filter((m) => m.type === "chat")
-        .map((m) => ({
-          id: m.id._serialized,
-          body: m.body,
-          from_me: m.fromMe,
-          timestamp: m.timestamp,
-        }));
+      const history = await getRecentMessages(chat, limit);
       json(res, 200, { ok: true, history });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/messages/media") {
+      await ensureClient();
+      if (status !== "ready") {
+        json(res, 422, { ok: false, detail: "WhatsApp is not ready." });
+        return;
+      }
+
+      const body = await readJsonBody(req);
+      const number = String(body.number || "").trim();
+      const messageId = String(body.message_id || "").trim();
+      if (!number || !messageId) {
+        json(res, 422, { ok: false, detail: "number and message_id are required" });
+        return;
+      }
+
+      const chatId = toChatId(number);
+      const chat = await client.getChatById(chatId);
+      const message = await getMessageById(chat, messageId, 50);
+      if (!message) {
+        json(res, 404, { ok: false, detail: "Message not found in recent history." });
+        return;
+      }
+
+      const media = await getImageMediaForMessage(message);
+      if (!media.ok) {
+        json(res, 422, { ok: false, detail: media.detail });
+        return;
+      }
+
+      json(res, 200, {
+        ok: true,
+        number: normalizeNumber(number),
+        message_id: messageId,
+        mime_type: media.mime_type,
+        content_base64: media.content_base64,
+        size_bytes: media.size_bytes,
+      });
       return;
     }
 

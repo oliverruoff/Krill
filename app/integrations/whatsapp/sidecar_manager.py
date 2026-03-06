@@ -13,6 +13,7 @@ import base64
 import io
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import Any
 from urllib import error, request
 
 from app.config import BASE_DIR
@@ -182,6 +183,19 @@ async def get_message_history(number: str, limit: int = 10) -> list[dict[str, An
     if not isinstance(history, list):
         return []
     return [item for item in history if isinstance(item, dict)]
+
+
+async def get_message_media(number: str, message_id: str) -> dict[str, object]:
+    await ensure_sidecar_running()
+    payload = await asyncio.to_thread(
+        _request_json,
+        "POST",
+        f"{_SIDECAR_BASE}/messages/media",
+        {"number": number, "message_id": message_id},
+    )
+    if not isinstance(payload, dict):
+        return {}
+    return payload
 
 
 

@@ -6,17 +6,20 @@ import asyncio
 import logging
 import random
 import contextlib
+import base64
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
-from app.config import ChatMessage, ChatSession, IntegrationConfig, load_settings, save_settings
+from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, load_settings, save_settings
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed
 from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
+from app.providers.vision import analyze_image
 from app.usage import add_daily_usage
 
 from .sidecar_manager import (
+    get_message_media,
     get_message_history,
     parse_allowlist,
     poll_events,
@@ -41,6 +44,7 @@ class WhatsAppBridgeWorker:
         self._seen_event_ids: set[str] = set()
         self._last_runtime_error: str = ""
         self._automation_runtime_active = False
+        self._image_analysis_cache: dict[str, str] = {}
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -98,7 +102,12 @@ class WhatsAppBridgeWorker:
 
             number = str(event.get("from_number", "")).strip()
             text = str(event.get("text", "")).strip()
-            if not number or number not in automation_state.allowlist or not text:
+            has_image = bool(event.get("has_image"))
+            if not number or number not in automation_state.allowlist:
+                continue
+            if not text and not has_image:
+                continue
+            if has_image and not text:
                 continue
 
             latest_state = await self._load_automation_state()
@@ -109,14 +118,44 @@ class WhatsAppBridgeWorker:
             if number not in latest_state.allowlist:
                 continue
 
-            await self._dispatch_inbound_message(number, text, latest_state.prompt)
+            await self._dispatch_inbound_message(
+                number,
+                text,
+                latest_state.prompt,
+                trigger_message_id=event_id,
+                trigger_has_image=has_image,
+            )
 
-    async def _dispatch_inbound_message(self, number: str, inbound_text: str, prompt: str) -> None:
+    async def _dispatch_inbound_message(
+        self,
+        number: str,
+        inbound_text: str,
+        prompt: str,
+        *,
+        trigger_message_id: str,
+        trigger_has_image: bool,
+    ) -> None:
         settings = await load_settings()
         now_iso = datetime.now(timezone.utc).isoformat()
 
         history_items = await get_message_history(number, limit=10)
-        history_context = _build_history_context(history_items, number)
+        history_context, history_image_tokens = await self._build_history_context(
+            settings=settings,
+            number=number,
+            history_items=history_items,
+        )
+        history_ids = {
+            str(item.get("id", "")).strip()
+            for item in history_items
+            if isinstance(item, dict) and str(item.get("id", "")).strip()
+        }
+        inbound_image_context, inbound_image_tokens = await self._build_inbound_image_context(
+            settings=settings,
+            number=number,
+            message_id=trigger_message_id,
+            has_image=trigger_has_image and trigger_message_id not in history_ids,
+            caption=inbound_text,
+        )
 
         chat = ChatSession(
             id=str(uuid4()),
@@ -132,6 +171,8 @@ class WhatsAppBridgeWorker:
         context_header = f"Inbound WhatsApp from {number}: {inbound_text}"
         if history_context:
             context_header = f"{history_context}\n\n{context_header}"
+        if inbound_image_context:
+            context_header = f"{context_header}\n\n{inbound_image_context}"
 
         chat.messages.append(
             ChatMessage(
@@ -187,6 +228,12 @@ class WhatsAppBridgeWorker:
         if isinstance(used_tokens, int) and used_tokens > 0:
             chat.total_tokens_used += used_tokens
             add_daily_usage(settings, used_tokens)
+        if history_image_tokens > 0:
+            chat.total_tokens_used += history_image_tokens
+            add_daily_usage(settings, history_image_tokens)
+        if inbound_image_tokens > 0:
+            chat.total_tokens_used += inbound_image_tokens
+            add_daily_usage(settings, inbound_image_tokens)
         await save_settings(settings)
 
         if final_text:
@@ -251,6 +298,135 @@ class WhatsAppBridgeWorker:
         with contextlib.suppress(Exception):
             await poll_events()
 
+    async def _build_history_context(
+        self,
+        *,
+        settings: Settings,
+        number: str,
+        history_items: list[dict[str, object]],
+    ) -> tuple[str, int]:
+        ordered = sorted(
+            [item for item in history_items if isinstance(item, dict)],
+            key=_timestamp_key,
+        )
+        if len(ordered) > 10:
+            ordered = ordered[-10:]
+
+        history_lines: list[str] = []
+        image_token_total = 0
+        for item in ordered:
+            sender = "System" if bool(item.get("from_me")) else f"User ({number})"
+            body = str(item.get("body", "")).strip()
+            has_image = bool(item.get("has_image"))
+            message_id = str(item.get("id", "")).strip()
+
+            if body:
+                history_lines.append(f"[{sender}]: {body}")
+
+            if not has_image or not message_id:
+                continue
+
+            image_analysis, image_tokens = await self._analyze_message_image(
+                settings=settings,
+                number=number,
+                message_id=message_id,
+                caption=body,
+            )
+            if image_analysis:
+                history_lines.append(f"[{sender}] Image analysis: {image_analysis}")
+            if image_tokens > 0:
+                image_token_total += image_tokens
+
+        if not history_lines:
+            return "", image_token_total
+
+        return "Recent context (last 10 WhatsApp messages):\n" + "\n".join(history_lines), image_token_total
+
+    async def _build_inbound_image_context(
+        self,
+        *,
+        settings: Settings,
+        number: str,
+        message_id: str,
+        has_image: bool,
+        caption: str,
+    ) -> tuple[str, int]:
+        if not has_image or not message_id:
+            return "", 0
+
+        image_analysis, image_tokens = await self._analyze_message_image(
+            settings=settings,
+            number=number,
+            message_id=message_id,
+            caption=caption,
+        )
+        if not image_analysis:
+            return "", image_tokens
+        return f"Inbound image analysis: {image_analysis}", image_tokens
+
+    async def _analyze_message_image(
+        self,
+        *,
+        settings: Settings,
+        number: str,
+        message_id: str,
+        caption: str,
+    ) -> tuple[str, int]:
+        cached = self._image_analysis_cache.get(message_id)
+        if isinstance(cached, str) and cached:
+            return cached, 0
+
+        provider_id = settings.active_provider_id.strip()
+        provider_config = settings.provider_configs.get(provider_id)
+        if provider_config is None:
+            return "Image present, but analysis unavailable (provider not configured).", 0
+
+        model_id = provider_config.model.strip()
+        api_key = provider_config.api_key
+        if not model_id or not api_key.strip():
+            return "Image present, but analysis unavailable (model or API key missing).", 0
+
+        try:
+            media_payload = await get_message_media(number, message_id)
+        except Exception:
+            return "Image present, but analysis unavailable (media download failed).", 0
+
+        mime_type = str(media_payload.get("mime_type", "")).strip().lower()
+        content_base64 = str(media_payload.get("content_base64", "")).strip()
+        if not mime_type.startswith("image/") or not content_base64:
+            return "Image present, but analysis unavailable (invalid image payload).", 0
+
+        try:
+            image_bytes = base64.b64decode(content_base64, validate=True)
+        except Exception:
+            return "Image present, but analysis unavailable (invalid base64 media).", 0
+
+        if not image_bytes:
+            return "Image present, but analysis unavailable (empty image).", 0
+
+        try:
+            analysis_text, image_tokens = await analyze_image(
+                provider_id=provider_id,
+                model=model_id,
+                api_key=api_key,
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                prompt=_image_analysis_prompt(caption),
+            )
+        except Exception as exc:
+            return f"Image present, but analysis unavailable ({exc}).", 0
+
+        analysis = analysis_text.strip()
+        if not analysis:
+            return "Image present, but analysis returned no details.", 0
+
+        self._image_analysis_cache[message_id] = analysis
+        if len(self._image_analysis_cache) > 600:
+            keys = list(self._image_analysis_cache.keys())
+            for key in keys[:300]:
+                self._image_analysis_cache.pop(key, None)
+        return analysis, image_tokens if isinstance(image_tokens, int) and image_tokens > 0 else 0
+
 
 @dataclass(frozen=True)
 class WhatsAppAutomationState:
@@ -259,38 +435,30 @@ class WhatsAppAutomationState:
     prompt: str
 
 
-def _build_history_context(history_items: list[dict[str, object]], number: str) -> str:
-    if not history_items:
-        return ""
-
-    def _timestamp_key(item: dict[str, object]) -> int:
-        raw_value = item.get("timestamp")
-        if isinstance(raw_value, (int, float)):
+def _timestamp_key(item: dict[str, object]) -> int:
+    raw_value = item.get("timestamp")
+    if isinstance(raw_value, (int, float)):
+        return int(raw_value)
+    if isinstance(raw_value, str):
+        with contextlib.suppress(ValueError):
             return int(raw_value)
-        if isinstance(raw_value, str):
-            with contextlib.suppress(ValueError):
-                return int(raw_value)
-        return 0
+    return 0
 
-    ordered = sorted(
-        [item for item in history_items if isinstance(item, dict)],
-        key=_timestamp_key,
+
+def _image_analysis_prompt(caption: str) -> str:
+    caption_text = caption.strip()
+    if caption_text:
+        return (
+            "Analyze this image for a WhatsApp auto-reply. "
+            "Provide concise factual details, visible text (OCR), and relevant context. "
+            "Do not invent details.\n\n"
+            f"Caption/context: {caption_text}"
+        )
+    return (
+        "Analyze this image for WhatsApp auto-reply context. "
+        "Provide concise factual details, visible text (OCR), and relevant context. "
+        "Do not invent details."
     )
-    if len(ordered) > 10:
-        ordered = ordered[-10:]
-
-    history_lines: list[str] = []
-    for item in ordered:
-        sender = "System" if bool(item.get("from_me")) else f"User ({number})"
-        body = str(item.get("body", "")).strip()
-        if not body:
-            continue
-        history_lines.append(f"[{sender}]: {body}")
-
-    if not history_lines:
-        return ""
-
-    return "Recent context (last 10 WhatsApp messages):\n" + "\n".join(history_lines)
 
 
 def _build_automation_execution_prompt(*, number: str, inbound_text: str, automation_prompt: str, history_context: str = "") -> str:
