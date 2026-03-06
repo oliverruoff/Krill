@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -23,6 +24,8 @@ from .sidecar_manager import (
 
 
 LOGGER = logging.getLogger(__name__)
+AUTO_REPLY_DELAY_MIN_SECONDS = 10
+AUTO_REPLY_DELAY_MAX_SECONDS = 60
 
 
 def _is_truthy_flag(value: object) -> bool:
@@ -198,6 +201,7 @@ class WhatsAppBridgeWorker:
 
         if final_text:
             try:
+                await asyncio.sleep(random.randint(AUTO_REPLY_DELAY_MIN_SECONDS, AUTO_REPLY_DELAY_MAX_SECONDS))
                 await send_message(number, final_text)
             except Exception:
                 LOGGER.exception("WhatsApp auto-reply send failed for %s", number)
@@ -228,4 +232,3 @@ def _build_automation_execution_prompt(*, number: str, inbound_text: str, automa
         "Automation instruction from the user:\n"
         f"{automation_prompt}"
     )
-
