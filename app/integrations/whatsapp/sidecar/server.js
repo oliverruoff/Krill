@@ -62,7 +62,22 @@ function inferHasImage(message) {
 }
 
 function normalizeMessageText(message) {
-  return String(message?.body || "").trim();
+  const bodyText = String(message?.body || "").trim();
+  if (bodyText) {
+    return { text: bodyText, source: "body" };
+  }
+
+  const captionText = String(message?.caption || "").trim();
+  if (captionText) {
+    return { text: captionText, source: "caption" };
+  }
+
+  const nestedCaption = String(message?._data?.caption || "").trim();
+  if (nestedCaption) {
+    return { text: nestedCaption, source: "_data.caption" };
+  }
+
+  return { text: "", source: "" };
 }
 
 async function getImageMediaForMessage(message) {
@@ -112,7 +127,7 @@ async function getRecentMessages(chat, limit) {
     })
     .map((message) => ({
       id: String(message?.id?._serialized || ""),
-      body: normalizeMessageText(message),
+      body: normalizeMessageText(message).text,
       from_me: Boolean(message?.fromMe),
       timestamp: Number.isFinite(Number(message?.timestamp)) ? Number(message.timestamp) : 0,
       has_image: inferHasImage(message),
@@ -209,8 +224,10 @@ async function ensureClient() {
       return;
     }
     const number = normalizeNumber(from.replace("@c.us", ""));
-    const text = normalizeMessageText(msg);
+    const normalizedText = normalizeMessageText(msg);
+    const text = normalizedText.text;
     const hasImage = inferHasImage(msg);
+    const hasCaption = Boolean(text);
     if (!text && !hasImage) {
       return;
     }
@@ -222,6 +239,8 @@ async function ensureClient() {
       from_number: number,
       text,
       has_image: hasImage,
+      has_caption: hasCaption,
+      text_source: normalizedText.source,
       timestamp_ms: Date.now(),
     });
     if (events.length > 300) {

@@ -108,6 +108,7 @@ class WhatsAppBridgeWorker:
             if not text and not has_image:
                 continue
             if has_image and not text:
+                LOGGER.info("WhatsApp auto-reply skipped image without caption from %s", number)
                 continue
 
             latest_state = await self._load_automation_state()
