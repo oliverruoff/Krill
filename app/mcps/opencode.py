@@ -21,22 +21,14 @@ class OpenCodeMCP(MCPPlugin):
     display_name = "OpenCode"
     description = "Runs the OpenCode coding agent via CLI for planning and implementation tasks."
     default_enabled = False
+    _ZEN_FREE_MODEL = "opencode/minimax-m2.5-free"
     config_fields: list[McpConfigField] = [
         McpConfigField(
-            id="provider_id",
-            label="Provider",
-            type="select",
-            required=False,
-            description="LLM provider used by OpenCode. Leave empty to use Krill active provider.",
-            options_source="providers",
-        ),
-        McpConfigField(
-            id="model",
-            label="Model",
-            type="select",
-            required=False,
-            description="Model used by OpenCode. Leave empty to use selected provider default model.",
-            options_source="provider_models",
+            id="zen_api_key",
+            label="OpenCode Zen API Key",
+            type="password",
+            required=True,
+            description="API key for OpenCode Zen. OpenCode MCP always uses the free model opencode/minimax-m2.5-free.",
         )
     ]
 
@@ -96,19 +88,11 @@ class OpenCodeMCP(MCPPlugin):
         except Exception as exc:
             return False, str(exc)
 
-        settings = await load_settings()
-        provider_id, model_id, _ = _resolve_selected_provider(settings, params)
-        if not provider_id:
-            return False, "Active provider is not configured."
-        provider_config = settings.provider_configs.get(provider_id)
-        if provider_config is None:
-            return False, f"Provider '{provider_id}' is not configured in Krill."
-        if not provider_config.api_key.strip():
-            return False, f"API key for provider '{provider_id}' is missing."
-        if not model_id.strip():
-            return False, f"Model for provider '{provider_id}' is missing."
+        api_key = _extract_zen_api_key(params)
+        if not api_key:
+            return False, "OpenCode Zen API key is required."
 
-        return True, "OpenCode MCP is ready."
+        return True, f"OpenCode MCP is ready with fixed free model {self._ZEN_FREE_MODEL}."
 
     async def call_tool(self, tool_id: str, arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
         if tool_id not in {"opencode_plan", "opencode_build"}:
@@ -126,9 +110,10 @@ class OpenCodeMCP(MCPPlugin):
 
         settings = await load_settings()
         await self._ensure_opencode_available(force=False)
-        provider_id, model_id, api_key = _resolve_selected_provider(settings, params)
-        opencode_model = _map_opencode_model(provider_id, model_id)
-        command = ["npx", "-y", "opencode-ai", "run", "--format", "json", "--model", opencode_model]
+        api_key = _extract_zen_api_key(params)
+        if not api_key:
+            raise RuntimeError("OpenCode Zen API key is missing in OpenCode MCP configuration.")
+        command = ["npx", "-y", "opencode-ai", "run", "--format", "json", "--model", self._ZEN_FREE_MODEL]
 
         session_key = (source_channel, source_chat_id)
         previous_session_id = _normalize_session_id(self._session_by_chat.get(session_key, ""))
@@ -141,21 +126,10 @@ class OpenCodeMCP(MCPPlugin):
         command.append(f"{mode_instruction}\n\nUser request:\n{prompt}")
 
         workdir, workdir_note = _resolve_workdir(repo_id=repo_id, workdir_arg=workdir_arg)
-        env = _build_opencode_env(provider_id=provider_id, api_key=api_key)
+        env = _build_opencode_env(zen_api_key=api_key)
         env = await _add_git_ssh_env(env=env, settings=settings)
 
-        fallback_used = False
-        fallback_reason = ""
-        try:
-            result = await _run_opencode(command=command, workdir=workdir, env=env, timeout_seconds=timeout_seconds)
-        except RuntimeError as exc:
-            error_text = str(exc)
-            if "ProviderModelNotFoundError" not in error_text:
-                raise
-            fallback_used = True
-            fallback_reason = "Selected model is unavailable in OpenCode; retried with provider default model."
-            fallback_command = _without_model_flag(command)
-            result = await _run_opencode(command=fallback_command, workdir=workdir, env=env, timeout_seconds=timeout_seconds)
+        result = await _run_opencode(command=command, workdir=workdir, env=env, timeout_seconds=timeout_seconds)
 
         parsed = _parse_opencode_output(result["stdout"])
 
@@ -170,15 +144,12 @@ class OpenCodeMCP(MCPPlugin):
             "text": parsed.get("text", ""),
             "question": parsed.get("question", ""),
             "session_id": session_id,
-            "provider_id": provider_id,
-            "model": opencode_model,
+            "provider_id": "opencode",
+            "model": self._ZEN_FREE_MODEL,
             "workdir": str(workdir),
         }
         if workdir_note:
             response["workdir_note"] = workdir_note
-        if fallback_used:
-            response["model_fallback_used"] = True
-            response["model_fallback_reason"] = fallback_reason
         stderr_text = str(result.get("stderr", "") or "").strip()
         if stderr_text:
             response["stderr"] = stderr_text
@@ -248,74 +219,13 @@ def _normalize_session_id(value: object) -> str:
     return session_id
 
 
-def _resolve_selected_provider(settings: Settings, params: dict[str, str]) -> tuple[str, str, str]:
-    selected_provider = str(params.get("provider_id", "") or "").strip()
-    selected_model = str(params.get("model", "") or "").strip()
-
-    provider_from_model = ""
-    model_from_model = ""
-    if "/" in selected_model:
-        provider_from_model, model_from_model = selected_model.split("/", 1)
-        provider_from_model = provider_from_model.strip().lower()
-        model_from_model = model_from_model.strip()
-
-    if selected_provider and provider_from_model and selected_provider.strip().lower() != provider_from_model:
-        raise RuntimeError("OpenCode provider/model mismatch in MCP config.")
-
-    provider_id = provider_from_model or selected_provider.strip().lower() or str(settings.active_provider_id or "").strip()
-    if not provider_id:
-        raise RuntimeError("Active provider is not configured.")
-
-    provider_config = settings.provider_configs.get(provider_id)
-    if provider_config is None:
-        raise RuntimeError(f"Provider '{provider_id}' is not configured in Krill.")
-
-    model_id = model_from_model or selected_model or str(provider_config.model or "").strip()
-    api_key = str(provider_config.api_key or "").strip()
-    if not model_id:
-        raise RuntimeError(f"Provider '{provider_id}' model is missing.")
-    if not api_key:
-        raise RuntimeError(f"Provider '{provider_id}' API key is missing.")
-    return provider_id, model_id, api_key
+def _extract_zen_api_key(params: dict[str, str]) -> str:
+    return str(params.get("zen_api_key", "") or "").strip()
 
 
-def _map_opencode_model(provider_id: str, model_id: str) -> str:
-    model = model_id.strip()
-    provider = provider_id.strip().lower()
-    if provider == "openrouter":
-        if model.lower() == "free":
-            return "openrouter/free"
-        if model.startswith("openrouter/"):
-            return model
-        return f"openrouter/{model}"
-    if provider == "openai":
-        if model.startswith("openai/"):
-            return model
-        return f"openai/{model}"
-    if provider == "gemini":
-        if model.startswith("gemini/"):
-            return model
-        return f"gemini/{model}"
-    raise RuntimeError(f"OpenCode MCP does not support provider '{provider_id}'.")
-
-
-def _build_opencode_env(*, provider_id: str, api_key: str) -> dict[str, str]:
+def _build_opencode_env(*, zen_api_key: str) -> dict[str, str]:
     env = dict(os.environ)
-    env["OPENAI_API_KEY"] = ""
-    env["OPENROUTER_API_KEY"] = ""
-    env["GEMINI_API_KEY"] = ""
-    env["GOOGLE_API_KEY"] = ""
-
-    provider = provider_id.strip().lower()
-    if provider == "openai":
-        env["OPENAI_API_KEY"] = api_key
-    elif provider == "openrouter":
-        env["OPENROUTER_API_KEY"] = api_key
-    elif provider == "gemini":
-        env["GEMINI_API_KEY"] = api_key
-        env["GOOGLE_API_KEY"] = api_key
-    else:
-        raise RuntimeError(f"Unsupported provider for OpenCode MCP: {provider_id}")
+    env["OPENCODE_API_KEY"] = zen_api_key
 
     return env
 
@@ -357,20 +267,6 @@ def _verify_opencode_cli() -> None:
     if completed.returncode != 0:
         detail = (completed.stderr or "").strip() or (completed.stdout or "").strip() or "unknown error"
         raise RuntimeError(detail)
-
-
-def _without_model_flag(command: list[str]) -> list[str]:
-    cleaned: list[str] = []
-    skip_next = False
-    for item in command:
-        if skip_next:
-            skip_next = False
-            continue
-        if item == "--model":
-            skip_next = True
-            continue
-        cleaned.append(item)
-    return cleaned
 
 
 async def _add_git_ssh_env(*, env: dict[str, str], settings: Settings) -> dict[str, str]:
