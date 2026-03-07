@@ -633,7 +633,7 @@ async def compact_memories(payload: MemoryCompactionRequest) -> MemoryCompaction
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Memory compaction failed: {exc}") from exc
 
-    compacted_memory = str(compacted_text).strip()
+    compacted_memory = _normalize_compacted_memory_output(str(compacted_text), required_timestamps)
     if not compacted_memory:
         raise HTTPException(status_code=422, detail="Memory compaction failed: Provider returned empty compacted memory.")
 
@@ -1546,8 +1546,54 @@ def _memory_compaction_system_prompt() -> str:
     return (
         "You are a lossless memory compactor. Compress memory text aggressively while preserving every concrete fact. "
         "Never invent information. Remove duplicates only when the factual meaning is identical. "
-        "Preserve timestamp provenance by retaining all timestamp markers exactly as provided."
+        "Preserve timestamp provenance by retaining all timestamps exactly as provided."
     )
+
+
+def _normalize_memory_compaction_text(value: str) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _normalize_memory_timestamp_precision(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "unknown"
+    if raw.lower() == "unknown":
+        return "unknown"
+
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return parsed.isoformat(timespec="seconds")
+    except ValueError:
+        pass
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            parsed = datetime.strptime(raw, fmt)
+            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+
+    return raw
+
+
+def _looks_like_memory_timestamp(value: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return False
+    if candidate.lower() == "unknown":
+        return True
+    try:
+        normalized = _normalize_memory_timestamp_precision(candidate)
+        datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        return True
+    except ValueError:
+        pass
+    try:
+        datetime.strptime(candidate, "%Y-%m-%d %H:%M:%S")
+        return True
+    except ValueError:
+        return False
 
 
 def _build_memory_compaction_source(memories: list[MemoryEntry]) -> tuple[list[str], list[str], dict[str, str]]:
@@ -1556,14 +1602,62 @@ def _build_memory_compaction_source(memories: list[MemoryEntry]) -> tuple[list[s
     by_marker: dict[str, str] = {}
 
     for entry in memories:
-        timestamp = entry.created_at.strip() or "unknown"
-        marker = f"[ts:{timestamp}]"
+        timestamp = _normalize_memory_timestamp_precision(entry.created_at)
+        normalized_content = _normalize_memory_compaction_text(entry.content)
+        if not normalized_content:
+            continue
+        marker = timestamp
         required_timestamps.append(marker)
-        source_line = f"{marker} {entry.content.strip()}"
+        source_line = f"{marker}: {normalized_content}"
         lines.append(source_line)
         by_marker[marker] = source_line
 
     return lines, required_timestamps, by_marker
+
+
+def _normalize_compacted_memory_output(raw_text: str, required_timestamps: list[str]) -> str:
+    allowed = {value.strip() for value in required_timestamps if value.strip()}
+    fallback_timestamp = required_timestamps[0].strip() if required_timestamps else "unknown"
+    normalized_lines: list[str] = []
+
+    for raw_line in str(raw_text or "").splitlines():
+        line = str(raw_line).strip()
+        if not line:
+            continue
+        line = line.lstrip("-•* ").strip()
+        if not line:
+            continue
+
+        timestamp = ""
+        memory_text = ""
+
+        if line.startswith("[ts:") and "]" in line:
+            end_idx = line.find("]")
+            timestamp = line[4:end_idx].strip()
+            memory_text = line[end_idx + 1 :].lstrip(" :").strip()
+        elif ":" in line:
+            candidate_ts, rest = line.split(":", 1)
+            timestamp = candidate_ts.strip()
+            memory_text = rest.strip()
+        else:
+            memory_text = line
+
+        timestamp = _normalize_memory_timestamp_precision(timestamp)
+        timestamp = timestamp if timestamp in allowed else timestamp.strip()
+        if not _looks_like_memory_timestamp(timestamp):
+            timestamp = fallback_timestamp
+        if not memory_text:
+            continue
+
+        normalized_lines.append(f"{timestamp}: {_normalize_memory_compaction_text(memory_text)}")
+
+    if normalized_lines:
+        return "\n".join(normalized_lines)
+
+    fallback_text = _normalize_memory_compaction_text(raw_text)
+    if not fallback_text:
+        return ""
+    return f"{fallback_timestamp}: {fallback_text}"
 
 
 def _build_memory_compaction_prompt(
@@ -1579,10 +1673,15 @@ def _build_memory_compaction_prompt(
         "- Keep every concrete fact.",
         "- Remove duplicate statements.",
         "- Minimize token usage as much as possible.",
-        "- Preserve timestamp provenance where possible by keeping timestamp markers in output.",
+        "- Preserve timestamp provenance in every output row.",
         "Output rules:",
         "- Return plain text only (no markdown code fences).",
-        "- Keep timestamp markers when possible, but prioritize a useful compacted memory.",
+        "- One memory per line in this exact format: <timestamp>: <memory>",
+        "- Timestamp must have second precision (no milliseconds or microseconds).",
+        "- Every non-empty line must include exactly one ':' separator between timestamp and memory text.",
+        "- Do not use bullets or numbering.",
+        "- Use only these timestamps (copy exactly):",
+        *[f"  - {timestamp}" for timestamp in required_timestamps],
         "- Keep wording compact and structured.",
         "Source memories:",
         *source_lines,

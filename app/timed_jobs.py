@@ -22,7 +22,7 @@ from app.config import (
 )
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed
 from app.integrations.registry import get_runtime_integrations
-from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
+from app.memory_extraction import register_completed_turn
 from app.usage import add_daily_usage
 
 
@@ -168,11 +168,6 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
                 ensure_runtime_context_seed(scratch_chat, settings)
                 model_history = build_model_history(scratch_chat)
 
-                await register_user_message_and_maybe_extract(
-                    source_channel="timed_job",
-                    source_chat_id=job.id,
-                )
-
                 result, _ = await generate_chat_response(
                     settings=settings,
                     message=prompt,
@@ -185,17 +180,19 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
                 used_tokens = result["used_tokens"]
                 used_tools = [
                     {
-                        "mcp_id": str(getattr(entry, "mcp_id", "") or ""),
-                        "mcp_label": str(getattr(entry, "mcp_label", "") or ""),
-                        "tool_id": str(getattr(entry, "tool_id", "") or ""),
-                        "tool_label": str(getattr(entry, "tool_label", "") or ""),
+                        "mcp_id": str(entry.get("mcp_id", "") if isinstance(entry, dict) else ""),
+                        "mcp_label": str(entry.get("mcp_label", "") if isinstance(entry, dict) else ""),
+                        "tool_id": str(entry.get("tool_id", "") if isinstance(entry, dict) else ""),
+                        "tool_label": str(entry.get("tool_label", "") if isinstance(entry, dict) else ""),
                     }
                     for entry in result["used_mcp_tools"]
                 ]
                 trace_messages = [
                     {
-                        "system_type": str(getattr(entry, "system_type", "orchestrator") or "orchestrator"),
-                        "content": str(getattr(entry, "content", "") or ""),
+                        "system_type": str(
+                            entry.get("system_type", "orchestrator") if isinstance(entry, dict) else "orchestrator"
+                        ),
+                        "content": str(entry.get("content", "") if isinstance(entry, dict) else ""),
                     }
                     for entry in result["system_trace_messages"]
                 ]

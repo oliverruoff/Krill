@@ -676,8 +676,6 @@ function setSpeechUiState() {
     return;
   }
 
-  micButton.textContent = state.speechListening ? "●" : "○";
-
   if (!state.speechSupported) {
     micButton.disabled = true;
     micButton.classList.remove("is-listening");

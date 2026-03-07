@@ -211,6 +211,9 @@ async def run_memory_extraction(*, trigger_count: int, interval: int, source_cha
 
             history: list[dict[str, str]] = []
             for turn in turns:
+                source = str(turn.get("source_channel", "")).strip().lower()
+                if source == "timed_job":
+                    continue
                 user_message = str(turn.get("user_message", "")).strip()
                 if user_message:
                     history.append({"role": "user", "content": user_message})
