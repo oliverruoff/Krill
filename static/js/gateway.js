@@ -180,6 +180,9 @@ const state = {
   integrationStatusSyncInFlight: false,
   shortTermMemorySyncTimerId: null,
   shortTermMemorySyncInFlight: false,
+  chatPersistInFlight: false,
+  chatPersistQueued: false,
+  chatPersistPromise: null,
   shortTermMemories: [],
   shortTermMemoryCount: 0,
   shortTermMemoryLastToastCount: 0,
@@ -2409,7 +2412,7 @@ async function registerCompletedTurnForMemory(sourceChannel, sourceChatId, userM
   }
 }
 
-async function persistChatsToSettings() {
+async function persistChatsToSettingsDirect() {
   if (!state.settings) {
     return;
   }
@@ -2428,6 +2431,45 @@ async function persistChatsToSettings() {
   state.dailyTokenUsage = normalizeDailyTokenUsage(persisted.daily_token_usage);
   refreshLocalChatStateSignature();
   updateDailyTokenUsageLabel();
+}
+
+async function persistChatsToSettings() {
+  if (!state.settings) {
+    return;
+  }
+
+  if (state.chatPersistInFlight) {
+    state.chatPersistQueued = true;
+    if (state.chatPersistPromise) {
+      await state.chatPersistPromise;
+    }
+    return;
+  }
+
+  state.chatPersistInFlight = true;
+  state.chatPersistPromise = (async () => {
+    let lastError = null;
+    do {
+      state.chatPersistQueued = false;
+      try {
+        await persistChatsToSettingsDirect();
+        lastError = null;
+      } catch (error) {
+        lastError = error;
+      }
+    } while (state.chatPersistQueued);
+
+    if (lastError) {
+      throw lastError;
+    }
+  })();
+
+  try {
+    await state.chatPersistPromise;
+  } finally {
+    state.chatPersistInFlight = false;
+    state.chatPersistPromise = null;
+  }
 }
 
 async function persistMemoriesToSettings() {
