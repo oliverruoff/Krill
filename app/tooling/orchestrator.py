@@ -34,6 +34,15 @@ class OrchestrationResult(TypedDict):
 ToolStepCallback = Callable[[SystemTraceEntry], Awaitable[None]]
 
 
+_MAX_PLANNER_INTERACTIONS = 8
+_MAX_FINAL_INTERACTIONS = 12
+_MAX_TOOL_RESULT_CHARS = 4000
+_MAX_RECURSIVE_VALUE_DEPTH = 5
+_MAX_RECURSIVE_LIST_ITEMS = 20
+_MAX_RECURSIVE_DICT_ITEMS = 40
+_MAX_RETRIES_PER_TOOL_SIGNATURE = 2
+
+
 async def generate_with_tools(
     provider: LLMProvider,
     settings: Settings,
@@ -101,7 +110,8 @@ async def generate_with_tools(
         }
 
     interaction_log: list[dict[str, object]] = []
-    executed_tool_call_signatures: set[str] = set()
+    successful_tool_call_signatures: set[str] = set()
+    tool_call_attempts_by_signature: dict[str, int] = {}
     normalized_recursion = max(1, min(20, int(max_tool_recursion)))
     timeout_seconds = max(5, min(300, int(tool_timeout_seconds)))
     current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
@@ -123,7 +133,7 @@ async def generate_with_tools(
         planner_prompt = _build_recursive_planner_prompt(
             prompt,
             enabled_tools,
-            interaction_log,
+            _planner_interaction_context(interaction_log),
             step_index,
             normalized_recursion,
             current_local_time,
@@ -393,14 +403,19 @@ async def generate_with_tools(
             continue
 
         tool_call_signature = _build_tool_call_signature(mcp_id, tool_id, tool_arguments)
-        if tool_call_signature in executed_tool_call_signatures:
+        signature_attempts = tool_call_attempts_by_signature.get(tool_call_signature, 0)
+        if tool_call_signature in successful_tool_call_signatures or signature_attempts >= _MAX_RETRIES_PER_TOOL_SIGNATURE:
             duplicate_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
                 "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "duplicate_tool_call_blocked",
-                "detail": "Blocked duplicate MCP tool call with identical arguments in this orchestration run.",
+                "detail": (
+                    "Blocked duplicate MCP tool call with identical arguments in this orchestration run."
+                    if tool_call_signature in successful_tool_call_signatures
+                    else f"Blocked after {signature_attempts} failed attempt(s) with identical arguments."
+                ),
             }
             await trace("tool_error", json.dumps(duplicate_payload, ensure_ascii=True))
             interaction_log.append(
@@ -415,8 +430,7 @@ async def generate_with_tools(
             )
             continue
 
-        executed_tool_call_signatures.add(tool_call_signature)
-        used_tools.append(tool_usage)
+        tool_call_attempts_by_signature[tool_call_signature] = signature_attempts + 1
 
         await trace("tool_call", json.dumps(tool_call_payload, ensure_ascii=True))
 
@@ -468,11 +482,16 @@ async def generate_with_tools(
             )
             continue
 
-        await trace("tool_result", json.dumps(_redact_sensitive_payload(tool_result), ensure_ascii=True))
+        successful_tool_call_signatures.add(tool_call_signature)
+        used_tools.append(tool_usage)
+
+        redacted_tool_result = _redact_sensitive_payload(tool_result)
+        compact_tool_result = _compact_payload_for_prompt(redacted_tool_result)
+        await trace("tool_result", json.dumps(compact_tool_result, ensure_ascii=True))
         interaction_log.append({
             "step": step_index,
             "tool_call": tool_call_payload,
-            "tool_result": tool_result,
+            "tool_result": compact_tool_result,
         })
 
     final_prompt = _build_final_prompt_with_interactions(prompt, interaction_log)
@@ -558,7 +577,7 @@ def _missing_required_params(config_fields: Sequence[McpConfigField], config: Mc
 def _build_recursive_planner_prompt(
     user_message: str,
     tools: list[dict[str, object]],
-    interaction_log: list[dict[str, object]],
+    interaction_context: dict[str, object],
     step_index: int,
     max_steps: int,
     current_local_time: str,
@@ -596,16 +615,19 @@ def _build_recursive_planner_prompt(
         "When user asks relative dates (today/tomorrow/day after tomorrow), convert using this datetime and keep the correct year.\n"
         f"User message: {user_message}\n"
         f"Available tools: {json.dumps(tool_payload)}\n"
-        f"Completed tool interactions so far: {json.dumps(interaction_log, ensure_ascii=True)}"
+        f"Completed tool interactions so far: {json.dumps(interaction_context, ensure_ascii=True)}"
     )
 
 
 def _build_final_prompt_with_interactions(user_message: str, interaction_log: list[dict[str, object]]) -> str:
+    summary = _interaction_summary(interaction_log)
+    recent_interactions = interaction_log[-_MAX_FINAL_INTERACTIONS:]
     return (
         "Use the tool results below to answer the user accurately. "
         "If URLs are present, include relevant links (as hyperlinks) in your answer. Use markdown for formatting properly!\n\n"
         f"User message:\n{user_message}\n\n"
-        f"Tool interactions:\n{json.dumps(interaction_log, ensure_ascii=True)}"
+        f"Tool interaction summary:\n{json.dumps(summary, ensure_ascii=True)}\n\n"
+        f"Recent tool interactions:\n{json.dumps(recent_interactions, ensure_ascii=True)}"
     )
 
 
@@ -842,3 +864,81 @@ def _redact_sensitive_payload(value: object) -> object:
 def _is_sensitive_field_name(field_name: str) -> bool:
     lowered = field_name.strip().lower()
     return any(keyword in lowered for keyword in _SENSITIVE_FIELD_KEYWORDS)
+
+
+def _planner_interaction_context(interaction_log: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "summary": _interaction_summary(interaction_log),
+        "recent_interactions": interaction_log[-_MAX_PLANNER_INTERACTIONS:],
+    }
+
+
+def _interaction_summary(interaction_log: list[dict[str, object]]) -> dict[str, int]:
+    tool_calls = 0
+    tool_results = 0
+    tool_errors = 0
+    planner_feedback = 0
+    for entry in interaction_log:
+        if "tool_call" in entry:
+            tool_calls += 1
+        if "tool_result" in entry:
+            tool_results += 1
+        if "tool_error" in entry:
+            tool_errors += 1
+        if "planner_feedback" in entry:
+            planner_feedback += 1
+
+    return {
+        "entries": len(interaction_log),
+        "tool_calls": tool_calls,
+        "tool_results": tool_results,
+        "tool_errors": tool_errors,
+        "planner_feedback": planner_feedback,
+    }
+
+
+def _compact_payload_for_prompt(value: object) -> object:
+    compacted = _limit_recursive_value(value, depth=0)
+    serialized = _safe_json_dumps(compacted)
+    if len(serialized) <= _MAX_TOOL_RESULT_CHARS:
+        return compacted
+
+    return {
+        "truncated": True,
+        "preview": serialized[:_MAX_TOOL_RESULT_CHARS],
+        "original_chars": len(serialized),
+    }
+
+
+def _limit_recursive_value(value: object, *, depth: int) -> object:
+    if depth >= _MAX_RECURSIVE_VALUE_DEPTH:
+        return "[TRUNCATED_DEPTH]"
+
+    if isinstance(value, dict):
+        items = list(value.items())
+        limited: dict[str, object] = {}
+        for key, item in items[:_MAX_RECURSIVE_DICT_ITEMS]:
+            limited[str(key)] = _limit_recursive_value(item, depth=depth + 1)
+        if len(items) > _MAX_RECURSIVE_DICT_ITEMS:
+            limited["_truncated_keys"] = len(items) - _MAX_RECURSIVE_DICT_ITEMS
+        return limited
+
+    if isinstance(value, list):
+        limited_items = [_limit_recursive_value(item, depth=depth + 1) for item in value[:_MAX_RECURSIVE_LIST_ITEMS]]
+        if len(value) > _MAX_RECURSIVE_LIST_ITEMS:
+            limited_items.append({"_truncated_items": len(value) - _MAX_RECURSIVE_LIST_ITEMS})
+        return limited_items
+
+    if isinstance(value, str):
+        if len(value) <= _MAX_TOOL_RESULT_CHARS:
+            return value
+        return value[:_MAX_TOOL_RESULT_CHARS] + "...[truncated]"
+
+    return value
+
+
+def _safe_json_dumps(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+    except TypeError:
+        return json.dumps(str(value), ensure_ascii=True)
