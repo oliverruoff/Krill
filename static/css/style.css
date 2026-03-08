@@ -600,11 +600,21 @@ button:disabled {
   right: 0.65rem;
   bottom: 0.35rem;
   margin: 0;
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   color: #8ea0b7;
   letter-spacing: 0.02em;
   z-index: 5;
   pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  .app-version {
+    left: 0.5rem;
+    right: auto;
+    bottom: 0.18rem;
+    font-size: 0.54rem;
+    opacity: 0.88;
+  }
 }
 
 @media (max-width: 640px) {
