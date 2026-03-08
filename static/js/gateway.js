@@ -47,6 +47,7 @@ const mobileLeftModelSelect = document.getElementById("mobile-left-model-select"
 const compactButton = document.getElementById("compact-btn");
 const currentChatTitleNode = document.getElementById("current-chat-title");
 const chatHistoryList = document.getElementById("chat-history-list");
+const chatHistorySearchInput = document.getElementById("chat-history-search");
 const newChatButton = document.getElementById("new-chat-btn");
 const mcpList = document.getElementById("mcp-list");
 const integrationList = document.getElementById("integration-list");
@@ -232,12 +233,17 @@ const state = {
   pendingImageAttachment: null,
   chatHistoryVisibleCount: CHAT_HISTORY_PAGE_SIZE,
   chatHistorySignature: "",
+  chatHistorySearchTerm: "",
   tokenUsageRangeMode: "7",
   tokenUsageCustomFrom: "",
   tokenUsageCustomTo: "",
   tokenUsageIncludeZeroDays: true,
   theme: normalizeThemeMode(document.documentElement.getAttribute("data-theme")),
 };
+
+if (chatHistorySearchInput instanceof HTMLInputElement) {
+  state.chatHistorySearchTerm = chatHistorySearchInput.value || "";
+}
 
 function normalizeThemeMode(value) {
   return String(value || "").trim().toLowerCase() === "dark" ? "dark" : "light";
@@ -1060,6 +1066,34 @@ function getFilteredMemories(memories, searchTerm) {
     });
 }
 
+function doesChatMatchSearch(chat, normalizedSearch) {
+  if (!normalizedSearch) {
+    return true;
+  }
+
+  const title = typeof chat?.title === "string" ? chat.title.toLowerCase() : "";
+  if (title.includes(normalizedSearch)) {
+    return true;
+  }
+
+  if (!Array.isArray(chat?.messages)) {
+    return false;
+  }
+
+  return chat.messages.some((message) => {
+    if (!message || (message.role !== "user" && message.role !== "assistant")) {
+      return false;
+    }
+    const content = typeof message.content === "string" ? message.content.toLowerCase() : "";
+    return content.includes(normalizedSearch);
+  });
+}
+
+function getFilteredChats(chats, searchTerm) {
+  const normalizedSearch = String(searchTerm || "").trim().toLowerCase();
+  return chats.filter((chat) => doesChatMatchSearch(chat, normalizedSearch));
+}
+
 function renderMemoryList(node, memories, searchTerm, type) {
   if (!(node instanceof HTMLElement)) {
     return;
@@ -1542,17 +1576,23 @@ function renderChatHistory(options = {}) {
   const previousScrollTop = preserveScroll ? chatHistoryList.scrollTop : 0;
   chatHistoryList.innerHTML = "";
   const sortedChats = sortChatsByLatestMessage(state.chats);
-  const signature = sortedChats.map((chat) => String(chat?.id || "")).join("|");
+  const filteredChats = getFilteredChats(sortedChats, state.chatHistorySearchTerm);
+  const normalizedSearch = String(state.chatHistorySearchTerm || "").trim().toLowerCase();
+  const signature = `${normalizedSearch}::${filteredChats.map((chat) => String(chat?.id || "")).join("|")}`;
+  const signatureChanged = state.chatHistorySignature !== signature;
   if (!state.chatHistorySignature) {
     state.chatHistoryVisibleCount = CHAT_HISTORY_PAGE_SIZE;
   }
   state.chatHistorySignature = signature;
+  if (signatureChanged) {
+    state.chatHistoryVisibleCount = CHAT_HISTORY_PAGE_SIZE;
+  }
 
-  if (sortedChats.length === 0) {
+  if (filteredChats.length === 0) {
     state.chatHistoryVisibleCount = CHAT_HISTORY_PAGE_SIZE;
     const emptyNode = document.createElement("p");
     emptyNode.className = "chat-history-empty";
-    emptyNode.textContent = "No chats yet.";
+    emptyNode.textContent = sortedChats.length === 0 ? "No chats yet." : "No matching chats.";
     chatHistoryList.appendChild(emptyNode);
     if (preserveScroll) {
       chatHistoryList.scrollTop = previousScrollTop;
@@ -1561,10 +1601,10 @@ function renderChatHistory(options = {}) {
   }
 
   let visibleCount = Math.max(CHAT_HISTORY_PAGE_SIZE, Math.floor(Number(state.chatHistoryVisibleCount) || CHAT_HISTORY_PAGE_SIZE));
-  visibleCount = Math.min(visibleCount, sortedChats.length);
+  visibleCount = Math.min(visibleCount, filteredChats.length);
   state.chatHistoryVisibleCount = visibleCount;
 
-  sortedChats.slice(0, visibleCount).forEach((chat) => {
+  filteredChats.slice(0, visibleCount).forEach((chat) => {
     const item = document.createElement("div");
     item.className = "chat-history-item";
     if (chat.id === state.activeChatId) {
@@ -1640,10 +1680,10 @@ function renderChatHistory(options = {}) {
     chatHistoryList.appendChild(item);
   });
 
-  if (visibleCount < sortedChats.length) {
+  if (visibleCount < filteredChats.length) {
     const moreNode = document.createElement("p");
     moreNode.className = "chat-history-more";
-    moreNode.textContent = `Showing ${visibleCount} of ${sortedChats.length}. Scroll for more...`;
+    moreNode.textContent = `Showing ${visibleCount} of ${filteredChats.length}. Scroll for more...`;
     chatHistoryList.appendChild(moreNode);
   }
 
@@ -1657,7 +1697,8 @@ function maybeLoadMoreChatHistory() {
     return;
   }
   const sortedChats = sortChatsByLatestMessage(state.chats);
-  if (sortedChats.length <= state.chatHistoryVisibleCount) {
+  const filteredChats = getFilteredChats(sortedChats, state.chatHistorySearchTerm);
+  if (filteredChats.length <= state.chatHistoryVisibleCount) {
     return;
   }
   if (chatHistoryList.scrollHeight <= chatHistoryList.clientHeight) {
@@ -1668,7 +1709,7 @@ function maybeLoadMoreChatHistory() {
     return;
   }
   state.chatHistoryVisibleCount = Math.min(
-    sortedChats.length,
+    filteredChats.length,
     state.chatHistoryVisibleCount + CHAT_HISTORY_PAGE_SIZE,
   );
   renderChatHistory({ preserveScroll: true });
@@ -6905,6 +6946,13 @@ if (compactButton instanceof HTMLButtonElement) {
 
 if (newChatButton instanceof HTMLButtonElement) {
   newChatButton.addEventListener("click", startNewChat);
+}
+
+if (chatHistorySearchInput instanceof HTMLInputElement) {
+  chatHistorySearchInput.addEventListener("input", () => {
+    state.chatHistorySearchTerm = chatHistorySearchInput.value || "";
+    renderChatHistory();
+  });
 }
 
 if (stopButton instanceof HTMLButtonElement) {
