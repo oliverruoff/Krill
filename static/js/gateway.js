@@ -697,6 +697,16 @@ function applySpeechTranscriptToInput() {
   syncChatInputHeight();
 }
 
+function pushUniqueSpeechChunk(chunks, transcript) {
+  if (!transcript) {
+    return;
+  }
+  if (chunks.length > 0 && chunks[chunks.length - 1] === transcript) {
+    return;
+  }
+  chunks.push(transcript);
+}
+
 function setSpeechUiState() {
   if (!(micButton instanceof HTMLButtonElement)) {
     return;
@@ -791,8 +801,9 @@ function initializeSpeechRecognition() {
   };
 
   recognition.onresult = (event) => {
-    let interimText = "";
-    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+    const finalChunks = [];
+    const interimChunks = [];
+    for (let index = 0; index < event.results.length; index += 1) {
       const result = event.results[index];
       if (!result || !result[0]) {
         continue;
@@ -802,12 +813,13 @@ function initializeSpeechRecognition() {
         continue;
       }
       if (result.isFinal) {
-        state.speechFinalText = `${state.speechFinalText} ${transcript}`.trim();
+        pushUniqueSpeechChunk(finalChunks, transcript);
       } else {
-        interimText = `${interimText} ${transcript}`.trim();
+        pushUniqueSpeechChunk(interimChunks, transcript);
       }
     }
-    state.speechInterimText = interimText;
+    state.speechFinalText = finalChunks.join(" ").trim();
+    state.speechInterimText = interimChunks.join(" ").trim();
     applySpeechTranscriptToInput();
   };
 
