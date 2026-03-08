@@ -348,6 +348,32 @@ function openMobileRightDrawer() {
   syncMobileDrawerUi();
 }
 
+function toggleMobileLeftDrawer() {
+  if (!isMobileDrawerMode()) {
+    return;
+  }
+
+  if (state.mobileLeftDrawerOpen) {
+    closeMobileDrawers();
+    return;
+  }
+
+  openMobileLeftDrawer();
+}
+
+function toggleMobileRightDrawer() {
+  if (!isMobileDrawerMode()) {
+    return;
+  }
+
+  if (state.mobileRightDrawerOpen) {
+    closeMobileDrawers();
+    return;
+  }
+
+  openMobileRightDrawer();
+}
+
 function toggleMobileSettingsMenu(forceOpen) {
   if (!(mobileSettingsPopover instanceof HTMLElement) || !(mobileSettingsMenuButton instanceof HTMLButtonElement)) {
     return;
@@ -1236,7 +1262,12 @@ function updateSystemTraceToggleLabel() {
 
   const activeChat = getActiveChat();
   const isCollapsed = Boolean(activeChat?.collapse_system_trace);
-  systemTraceToggleButton.textContent = isCollapsed ? "Show system trace" : "Hide system trace";
+  const mobileMode = isMobileDrawerMode();
+  if (mobileMode) {
+    systemTraceToggleButton.textContent = isCollapsed ? "Trace: Off" : "Trace: On";
+  } else {
+    systemTraceToggleButton.textContent = isCollapsed ? "Show system trace" : "Hide system trace";
+  }
   systemTraceToggleButton.disabled = !activeChat;
 }
 
@@ -6634,11 +6665,11 @@ chatInput.addEventListener("input", () => {
 });
 
 if (mobileLeftDrawerHandle instanceof HTMLButtonElement) {
-  mobileLeftDrawerHandle.addEventListener("click", openMobileLeftDrawer);
+  mobileLeftDrawerHandle.addEventListener("click", toggleMobileLeftDrawer);
 }
 
 if (mobileRightDrawerHandle instanceof HTMLButtonElement) {
-  mobileRightDrawerHandle.addEventListener("click", openMobileRightDrawer);
+  mobileRightDrawerHandle.addEventListener("click", toggleMobileRightDrawer);
 }
 
 if (mobileDrawerBackdrop instanceof HTMLElement) {
@@ -6726,6 +6757,7 @@ window.addEventListener("resize", () => {
   } else {
     syncMobileDrawerUi();
   }
+  updateSystemTraceToggleLabel();
 });
 
 menuButton.addEventListener("click", () => {
