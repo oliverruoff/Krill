@@ -9,6 +9,11 @@
   --accent: #FB9682;
   --accent-strong: #68D7FC;
   --accent-gradient: linear-gradient(120deg, #FB9682 0%, #68D7FC 100%);
+  --chat-user-tint: color-mix(in srgb, #2f6fd3 18%, #ffffff 82%);
+  --chat-user-border: color-mix(in srgb, #2a61b8 46%, #ffffff 54%);
+  --chat-assistant-tint: color-mix(in srgb, #d64545 18%, #ffffff 82%);
+  --chat-assistant-border: color-mix(in srgb, #bd3a3a 44%, #ffffff 56%);
+  --chat-assistant-text: color-mix(in srgb, #1f2f47 86%, #bd3a3a 14%);
   --bg-gradient: linear-gradient(150deg, #edf3fb 0%, #f8fafd 100%);
   --input-bg: #ffffff;
   --secondary-bg: #e7edf5;
@@ -32,6 +37,11 @@
   --accent: #ba6a5a;
   --accent-strong: #3e9dc0;
   --accent-gradient: linear-gradient(120deg, #a85a4d 0%, #377f9f 100%);
+  --chat-user-tint: color-mix(in srgb, #2f6fd3 32%, #161d29 68%);
+  --chat-user-border: color-mix(in srgb, #2a61b8 62%, #2b3649 38%);
+  --chat-assistant-tint: color-mix(in srgb, #d64545 28%, #161d29 72%);
+  --chat-assistant-border: color-mix(in srgb, #bd3a3a 58%, #2b3649 42%);
+  --chat-assistant-text: color-mix(in srgb, #dce7f8 86%, #d64545 14%);
   --bg-gradient: radial-gradient(circle at top, #1a2538 0%, #0e131b 55%, #0b1018 100%);
   --input-bg: #141c28;
   --secondary-bg: #253247;
@@ -2287,17 +2297,23 @@ button:disabled {
 
 .chat-message.system .chat-bubble {
   border-style: dashed;
-  border-color: #ccd6e4;
-  background: #f5f8fc;
-  color: #5a687c;
+  border-color: var(--border);
+  background: #fff;
+  color: var(--text);
   font-size: 0.86rem;
+}
+
+.chat-message.assistant .chat-bubble {
+  border-color: var(--chat-assistant-border);
+  background: var(--chat-assistant-tint);
+  color: var(--chat-assistant-text);
 }
 
 .chat-message.assistant.status-queued .chat-bubble,
 .chat-message.assistant.status-processing .chat-bubble {
-  background: #f7f9fc;
+  background: var(--chat-assistant-tint);
   border-style: dashed;
-  border-color: #cfd8e6;
+  border-color: var(--chat-assistant-border);
 }
 
 .tool-usage-note {
@@ -2357,8 +2373,8 @@ button:disabled {
 }
 
 .chat-message.user .chat-bubble {
-  border-color: color-mix(in srgb, var(--accent) 40%, #ffffff 60%);
-  background: color-mix(in srgb, var(--accent) 15%, #ffffff 85%);
+  border-color: var(--chat-user-border);
+  background: var(--chat-user-tint);
 }
 
 .chat-composer {
@@ -3019,15 +3035,26 @@ button:disabled {
 }
 
 :root[data-theme="dark"] .chat-message.system .chat-bubble {
-  border-color: #3a475d;
-  background: #182334;
-  color: #b7c5da;
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .chat-message.user .chat-bubble {
+  border-color: var(--chat-user-border);
+  background: var(--chat-user-tint);
+}
+
+:root[data-theme="dark"] .chat-message.assistant .chat-bubble {
+  border-color: var(--chat-assistant-border);
+  background: var(--chat-assistant-tint);
+  color: var(--chat-assistant-text);
 }
 
 :root[data-theme="dark"] .chat-message.assistant.status-queued .chat-bubble,
 :root[data-theme="dark"] .chat-message.assistant.status-processing .chat-bubble {
-  background: #172131;
-  border-color: #324156;
+  background: var(--chat-assistant-tint);
+  border-color: var(--chat-assistant-border);
 }
 
 :root[data-theme="dark"] .chat-composer .actions .composer-icon-btn {
