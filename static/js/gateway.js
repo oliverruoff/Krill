@@ -2499,7 +2499,17 @@ async function persistChatsToSettingsDirect() {
     return;
   }
 
-  const nextSettings = JSON.parse(JSON.stringify(state.settings));
+  let baseSettings = state.settings;
+  try {
+    const latestResponse = await fetch("/api/settings", { cache: "no-store" });
+    if (latestResponse.ok) {
+      baseSettings = await latestResponse.json();
+    }
+  } catch (error) {
+    // Best effort: fall back to local snapshot when refresh fails.
+  }
+
+  const nextSettings = JSON.parse(JSON.stringify(baseSettings));
   nextSettings.chats = state.chats;
   nextSettings.active_chat_id = state.activeChatId;
   nextSettings.mcp_configs = state.mcpConfigs;
@@ -2652,6 +2662,7 @@ function openMemoryManagementModal() {
   renderMemoryManagement();
   memoryModal.classList.remove("hidden");
   document.body.style.overflow = "hidden";
+  refreshMemoriesFromServer().catch(() => {});
 
   if (coreMemorySearchInput instanceof HTMLInputElement) {
     coreMemorySearchInput.focus();
