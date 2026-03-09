@@ -112,6 +112,13 @@ Current tools:
 - `timed_jobs` (manage timed jobs via tools: list/get/create/update/delete/trigger)
 - `youtube_summarizer` (enabled by default, fetches YouTube transcripts and summarizes videos)
 
+Memory Access MCP notes:
+
+- enabled by default
+- supports `lookup_memories` for memory-grounded recall questions
+- supports `save_memory` for explicit remember intents (for example: remember, don't forget, memorize)
+- `save_memory` accepts optional `memory_type` (`core` or `normal`); if omitted, it defaults to `normal` unless the content is high-confidence long-term identity/preference/constraint
+
 OpenCode MCP notes:
 
 - configure one OpenCode Zen API key directly in the tool card

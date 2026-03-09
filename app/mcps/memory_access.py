@@ -1,9 +1,10 @@
 """Memory Access MCP plugin for memory-grounded recall lookups."""
 
+from datetime import datetime, timezone
 import json
 from typing import Any
 
-from app.config import load_settings
+from app.config import MemoryEntry, Settings, load_settings, save_settings
 from app.providers import get_provider
 from app.providers.resilience import generate_with_retries
 
@@ -14,9 +15,9 @@ class MemoryAccessMCP(MCPPlugin):
     mcp_id = "memory_access"
     display_name = "Memory Access"
     description = (
-        "Use this for memory-grounded recall. It helps when a user asks about prior discussions, "
-        "what the assistant remembers, previously shared preferences/facts, or requests that require "
-        "retrieving stored memories before answering."
+        "Use this for memory-grounded recall and memory writes. It helps when a user asks about prior "
+        "discussions/what is remembered, or when the user says to remember/memorize/don't forget something "
+        "for future conversations."
     )
     default_enabled = True
     config_fields: list[McpConfigField] = []
@@ -37,6 +38,29 @@ class MemoryAccessMCP(MCPPlugin):
                     },
                     "required": ["question"],
                 },
+            ),
+            McpToolSpec(
+                id="save_memory",
+                label="Save Memory",
+                description=(
+                    "Stores a new memory for future conversations. Use this when the user asks to remember "
+                    "something (for example: remember, don't forget, memorize, keep this in mind)."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "memory_text": {"type": "string", "minLength": 1},
+                        "memory_type": {
+                            "type": "string",
+                            "enum": ["core", "normal"],
+                            "description": (
+                                "Optional memory type. If omitted, defaults to normal unless content is very "
+                                "clearly a stable long-term core memory."
+                            ),
+                        },
+                    },
+                    "required": ["memory_text"],
+                },
             )
         ]
 
@@ -44,79 +68,161 @@ class MemoryAccessMCP(MCPPlugin):
         return True, "Memory Access MCP is ready without setup."
 
     async def call_tool(self, tool_id: str, arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
-        if tool_id != "lookup_memories":
-            raise RuntimeError(f"Unsupported Memory Access tool: {tool_id}")
+        del params
+        if tool_id == "lookup_memories":
+            return await _lookup_memories(arguments)
+        if tool_id == "save_memory":
+            return await _save_memory(arguments)
+        raise RuntimeError(f"Unsupported Memory Access tool: {tool_id}")
 
-        question = arguments.get("question")
-        if not isinstance(question, str) or not question.strip():
-            raise RuntimeError("Memory Access tool requires a non-empty 'question'.")
-        question_text = question.strip()
-
-        settings = await load_settings()
-        provider_id = settings.active_provider_id.strip()
-        if not provider_id:
-            raise RuntimeError("Active provider is not configured.")
-
-        provider_config = settings.provider_configs.get(provider_id)
-        if provider_config is None:
-            raise RuntimeError("Active provider config is missing.")
-
-        model_id = provider_config.model.strip()
-        api_key = provider_config.api_key
-        if not model_id:
-            raise RuntimeError("Active provider model is missing.")
-        if not api_key.strip():
-            raise RuntimeError("Active provider API key is missing.")
-
-        provider = get_provider(provider_id)
-        if provider is None:
-            raise RuntimeError("Active provider is unavailable.")
-
-        core_memories = [m.content.strip() for m in settings.core_memories if isinstance(m.content, str) and m.content.strip()]
-        normal_memories = [m.content.strip() for m in settings.normal_memories if isinstance(m.content, str) and m.content.strip()]
-
-        memory_payload = {
-            "core_memories": core_memories,
-            "normal_memories": normal_memories,
-        }
-        prompt = _build_lookup_prompt(question_text, memory_payload)
-        system_prompt = (
-            "You are a memory-grounding verifier. "
-            "Only use the provided memories as evidence. "
-            "Return JSON only with no markdown."
+    def tool_call_system_reminder(self, tool_id: str, params: dict[str, str]) -> str:
+        del params
+        if tool_id != "save_memory":
+            return ""
+        return (
+            "When saving memory: default to memory_type='normal'. Use memory_type='core' only if highly "
+            "confident the fact is a stable long-term identity/preference/constraint."
         )
 
-        response_text, used_tokens = await generate_with_retries(
-            provider=provider,
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=model_id,
-            api_key=api_key,
-            history=[],
-        )
 
-        parsed = _parse_json_object(response_text)
-        can_answer = bool(parsed.get("can_answer"))
-        raw_answer = parsed.get("answer")
-        answer = raw_answer if isinstance(raw_answer, str) else ""
-        evidence = _normalize_string_list(parsed.get("evidence"))
+async def _lookup_memories(arguments: dict[str, object]) -> dict[str, object]:
+    question = arguments.get("question")
+    if not isinstance(question, str) or not question.strip():
+        raise RuntimeError("Memory Access tool requires a non-empty 'question'.")
+    question_text = question.strip()
 
-        if not can_answer:
-            answer = "I cannot answer this from stored memories."
-            evidence = []
+    settings = await load_settings()
+    provider_id = settings.active_provider_id.strip()
+    if not provider_id:
+        raise RuntimeError("Active provider is not configured.")
 
+    provider_config = settings.provider_configs.get(provider_id)
+    if provider_config is None:
+        raise RuntimeError("Active provider config is missing.")
+
+    model_id = provider_config.model.strip()
+    api_key = provider_config.api_key
+    if not model_id:
+        raise RuntimeError("Active provider model is missing.")
+    if not api_key.strip():
+        raise RuntimeError("Active provider API key is missing.")
+
+    provider = get_provider(provider_id)
+    if provider is None:
+        raise RuntimeError("Active provider is unavailable.")
+
+    core_memories = [m.content.strip() for m in settings.core_memories if isinstance(m.content, str) and m.content.strip()]
+    normal_memories = [m.content.strip() for m in settings.normal_memories if isinstance(m.content, str) and m.content.strip()]
+
+    memory_payload = {
+        "core_memories": core_memories,
+        "normal_memories": normal_memories,
+    }
+    prompt = _build_lookup_prompt(question_text, memory_payload)
+    system_prompt = (
+        "You are a memory-grounding verifier. "
+        "Only use the provided memories as evidence. "
+        "Return JSON only with no markdown."
+    )
+
+    response_text, used_tokens = await generate_with_retries(
+        provider=provider,
+        prompt=prompt,
+        system_prompt=system_prompt,
+        model=model_id,
+        api_key=api_key,
+        history=[],
+    )
+
+    parsed = _parse_json_object(response_text)
+    can_answer = bool(parsed.get("can_answer"))
+    raw_answer = parsed.get("answer")
+    answer = raw_answer if isinstance(raw_answer, str) else ""
+    evidence = _normalize_string_list(parsed.get("evidence"))
+
+    if not can_answer:
+        answer = "I cannot answer this from stored memories."
+        evidence = []
+
+    return {
+        "question": question_text,
+        "can_answer": can_answer,
+        "answer": _clean_text(answer),
+        "evidence": evidence,
+        "memory_counts": {
+            "core": len(core_memories),
+            "normal": len(normal_memories),
+            "total": len(core_memories) + len(normal_memories),
+        },
+        "used_tokens": used_tokens,
+    }
+
+
+async def _save_memory(arguments: dict[str, object]) -> dict[str, object]:
+    raw_memory_text = arguments.get("memory_text")
+    if not isinstance(raw_memory_text, str) or not raw_memory_text.strip():
+        raise RuntimeError("Save Memory requires a non-empty 'memory_text'.")
+
+    memory_text = _clean_text(raw_memory_text)
+    if not memory_text:
+        raise RuntimeError("Save Memory requires a non-empty 'memory_text'.")
+
+    explicit_type = _coerce_memory_type(arguments.get("memory_type"))
+    inferred_type = "normal"
+    inference_reason = "Defaulted to normal memory."
+    confidence = "default"
+    if explicit_type:
+        target_type = explicit_type
+        confidence = "explicit"
+        inference_reason = "Memory type provided explicitly by tool arguments."
+    else:
+        inferred_type, confidence, inference_reason = _infer_memory_type_from_text(memory_text)
+        target_type = inferred_type
+
+    settings = await load_settings()
+    existing_map = _existing_memory_lookup(settings)
+    key = memory_text.lower()
+    existing_type = existing_map.get(key)
+    if existing_type:
         return {
-            "question": question_text,
-            "can_answer": can_answer,
-            "answer": _clean_text(answer),
-            "evidence": evidence,
-            "memory_counts": {
-                "core": len(core_memories),
-                "normal": len(normal_memories),
-                "total": len(core_memories) + len(normal_memories),
+            "status": "duplicate_skipped",
+            "memory_text": memory_text,
+            "memory_type": existing_type,
+            "reason": "Memory already exists.",
+            "decision": {
+                "inferred_type": inferred_type,
+                "confidence": confidence,
+                "inference_reason": inference_reason,
             },
-            "used_tokens": used_tokens,
+            "memory_counts": {
+                "core": len(settings.core_memories),
+                "normal": len(settings.normal_memories),
+                "total": len(settings.core_memories) + len(settings.normal_memories),
+            },
         }
+
+    entry = MemoryEntry(content=memory_text, created_at=datetime.now(timezone.utc).isoformat())
+    if target_type == "core":
+        settings.core_memories.append(entry)
+    else:
+        settings.normal_memories.append(entry)
+
+    persisted = await save_settings(settings)
+    return {
+        "status": "saved",
+        "memory_text": memory_text,
+        "memory_type": target_type,
+        "decision": {
+            "inferred_type": inferred_type,
+            "confidence": confidence,
+            "inference_reason": inference_reason,
+        },
+        "memory_counts": {
+            "core": len(persisted.core_memories),
+            "normal": len(persisted.normal_memories),
+            "total": len(persisted.core_memories) + len(persisted.normal_memories),
+        },
+    }
 
 
 def _build_lookup_prompt(question: str, memories: dict[str, list[str]]) -> str:
@@ -174,3 +280,81 @@ def _clean_text(value: object) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.split()).strip()
+
+
+def _coerce_memory_type(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip().lower()
+    if normalized in {"core", "normal"}:
+        return normalized
+    return ""
+
+
+def _existing_memory_lookup(settings: Settings) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for item in getattr(settings, "core_memories", []):
+        content = _clean_text(getattr(item, "content", ""))
+        if content:
+            mapping[content.lower()] = "core"
+    for item in getattr(settings, "normal_memories", []):
+        content = _clean_text(getattr(item, "content", ""))
+        if content and content.lower() not in mapping:
+            mapping[content.lower()] = "normal"
+    return mapping
+
+
+def _infer_memory_type_from_text(text: str) -> tuple[str, str, str]:
+    lowered = text.lower()
+    core_score = 0.0
+
+    strong_identity_markers = [
+        "my name is",
+        "call me",
+        "i am ",
+        "i'm ",
+        "my pronouns",
+    ]
+    stable_preference_markers = [
+        "i prefer",
+        "i like ",
+        "i dislike",
+        "i hate ",
+        "always",
+        "never",
+        "usually",
+    ]
+    long_term_constraint_markers = [
+        "allergic",
+        "do not",
+        "don't",
+        "must not",
+        "cannot",
+        "can't",
+        "timezone",
+        "diet",
+        "vegetarian",
+        "vegan",
+    ]
+    temporary_markers = [
+        "today",
+        "tomorrow",
+        "this week",
+        "tonight",
+        "right now",
+        "currently",
+        "for now",
+    ]
+
+    if any(marker in lowered for marker in strong_identity_markers):
+        core_score += 1.4
+    if any(marker in lowered for marker in stable_preference_markers):
+        core_score += 0.9
+    if any(marker in lowered for marker in long_term_constraint_markers):
+        core_score += 0.9
+    if any(marker in lowered for marker in temporary_markers):
+        core_score -= 1.1
+
+    if core_score >= 2.1:
+        return "core", "high", "Detected strong long-term identity/preference/constraint markers."
+    return "normal", "default", "No high-confidence long-term markers; defaulted to normal memory."
