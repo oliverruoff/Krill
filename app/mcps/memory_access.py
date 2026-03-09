@@ -16,7 +16,7 @@ class MemoryAccessMCP(MCPPlugin):
     display_name = "Memory Access"
     description = (
         "Use this for memory-grounded recall and memory writes. It helps when a user asks about prior "
-        "discussions/what is remembered, or when the user says to remember/memorize/don't forget something "
+        "discussions/what is remembered, or when a user (in any language) asks to remember/memorize/don't forget something "
         "for future conversations."
     )
     default_enabled = True
@@ -44,7 +44,7 @@ class MemoryAccessMCP(MCPPlugin):
                 label="Save Memory",
                 description=(
                     "Stores a new memory for future conversations. Use this when the user asks to remember "
-                    "something (for example: remember, don't forget, memorize, keep this in mind)."
+                    "something (for example: remember, don't forget, memorize, keep this in mind), regardless of language."
                 ),
                 input_schema={
                     "type": "object",
@@ -80,6 +80,7 @@ class MemoryAccessMCP(MCPPlugin):
         if tool_id != "save_memory":
             return ""
         return (
+            "Memory-save intent is language-agnostic; trigger save_memory based on semantic intent, not specific keywords. "
             "When saving memory: default to memory_type='normal'. Use memory_type='core' only if highly "
             "confident the fact is a stable long-term identity/preference/constraint."
         )
@@ -161,9 +162,15 @@ async def _lookup_memories(arguments: dict[str, object]) -> dict[str, object]:
 async def _save_memory(arguments: dict[str, object]) -> dict[str, object]:
     raw_memory_text = arguments.get("memory_text")
     if not isinstance(raw_memory_text, str) or not raw_memory_text.strip():
+        raw_memory_text = arguments.get("text")
+    if not isinstance(raw_memory_text, str) or not raw_memory_text.strip():
+        raw_memory_text = arguments.get("content")
+    if not isinstance(raw_memory_text, str) or not raw_memory_text.strip():
+        raw_memory_text = arguments.get("memory")
+    if not isinstance(raw_memory_text, str) or not raw_memory_text.strip():
         raise RuntimeError("Save Memory requires a non-empty 'memory_text'.")
 
-    memory_text = _clean_text(raw_memory_text)
+    memory_text = _clean_text(_strip_memory_intent_prefix(raw_memory_text))
     if not memory_text:
         raise RuntimeError("Save Memory requires a non-empty 'memory_text'.")
 
@@ -358,3 +365,26 @@ def _infer_memory_type_from_text(text: str) -> tuple[str, str, str]:
     if core_score >= 2.1:
         return "core", "high", "Detected strong long-term identity/preference/constraint markers."
     return "normal", "default", "No high-confidence long-term markers; defaulted to normal memory."
+
+
+def _strip_memory_intent_prefix(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+
+    lowered = text.lower()
+    separators = [":", "-", "\n"]
+    remember_markers = [
+        "remember",
+        "don't forget",
+        "dont forget",
+        "memorize",
+        "keep this in mind"
+    ]
+    if any(marker in lowered for marker in remember_markers):
+        for separator in separators:
+            if separator in text:
+                tail = text.split(separator, 1)[1].strip()
+                if tail:
+                    return tail
+    return text
