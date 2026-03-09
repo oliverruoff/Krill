@@ -31,6 +31,7 @@ from .sidecar_manager import (
 LOGGER = logging.getLogger(__name__)
 AUTO_REPLY_DELAY_MIN_SECONDS = 10
 AUTO_REPLY_DELAY_MAX_SECONDS = 60
+AUTO_REPLY_DELAY_ABSOLUTE_MAX_SECONDS = 3600
 
 
 def _is_truthy_flag(value: object) -> bool:
@@ -255,7 +256,8 @@ class WhatsAppBridgeWorker:
         )
 
     async def _wait_for_send_window(self, number: str) -> bool:
-        delay_seconds = random.randint(AUTO_REPLY_DELAY_MIN_SECONDS, AUTO_REPLY_DELAY_MAX_SECONDS)
+        initial_state = await self._load_automation_state()
+        delay_seconds = random.randint(initial_state.min_delay_seconds, initial_state.max_delay_seconds)
         for _ in range(delay_seconds):
             if self._stop_event.is_set():
                 return False
@@ -285,10 +287,23 @@ class WhatsAppBridgeWorker:
         allowlist = parse_allowlist(mcp_config.params.get("allowed_numbers_receive", ""))
         prompt = str(mcp_config.params.get("automation_prompt", "")).strip()
         auto_answer_enabled = _is_truthy_flag(mcp_config.params.get("auto_answer", ""))
+        min_delay_seconds, max_delay_seconds = _resolve_auto_reply_delay_window(mcp_config.params)
         if not auto_answer_enabled or not allowlist or not prompt:
-            return WhatsAppAutomationState(enabled=False, allowlist=set(), prompt="")
+            return WhatsAppAutomationState(
+                enabled=False,
+                allowlist=set(),
+                prompt="",
+                min_delay_seconds=min_delay_seconds,
+                max_delay_seconds=max_delay_seconds,
+            )
 
-        return WhatsAppAutomationState(enabled=True, allowlist=allowlist, prompt=prompt)
+        return WhatsAppAutomationState(
+            enabled=True,
+            allowlist=allowlist,
+            prompt=prompt,
+            min_delay_seconds=min_delay_seconds,
+            max_delay_seconds=max_delay_seconds,
+        )
 
     async def _deactivate_automation_runtime(self) -> None:
         if not self._automation_runtime_active:
@@ -434,6 +449,8 @@ class WhatsAppAutomationState:
     enabled: bool
     allowlist: set[str]
     prompt: str
+    min_delay_seconds: int = AUTO_REPLY_DELAY_MIN_SECONDS
+    max_delay_seconds: int = AUTO_REPLY_DELAY_MAX_SECONDS
 
 
 def _timestamp_key(item: dict[str, object]) -> int:
@@ -444,6 +461,26 @@ def _timestamp_key(item: dict[str, object]) -> int:
         with contextlib.suppress(ValueError):
             return int(raw_value)
     return 0
+
+
+def _resolve_auto_reply_delay_window(params: dict[str, str]) -> tuple[int, int]:
+    raw_min = params.get("auto_reply_delay_min_seconds")
+    raw_max = params.get("auto_reply_delay_max_seconds")
+    min_delay = _coerce_delay_seconds(raw_min, default=AUTO_REPLY_DELAY_MIN_SECONDS)
+    max_delay = _coerce_delay_seconds(raw_max, default=AUTO_REPLY_DELAY_MAX_SECONDS)
+    if max_delay < min_delay:
+        max_delay = min_delay
+    return min_delay, max_delay
+
+
+def _coerce_delay_seconds(raw_value: object, *, default: int) -> int:
+    try:
+        parsed = int(str(raw_value or "").strip())
+    except Exception:
+        return default
+    if parsed < 0:
+        return 0
+    return min(parsed, AUTO_REPLY_DELAY_ABSOLUTE_MAX_SECONDS)
 
 
 def _image_analysis_prompt(caption: str) -> str:

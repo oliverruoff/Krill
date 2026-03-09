@@ -178,6 +178,9 @@ WhatsApp integration notes:
 - if unused, it can be ignored without affecting Gateway/Telegram/provider behavior
 - WhatsApp API endpoints are present, but runtime polling/auto-reply only runs when the WhatsApp integration and MCP are enabled
 - uses a local sidecar (`whatsapp-web.js`) with QR connect popup and allowlist filtering
+- `Allowed numbers (Send / Read)` controls who the model can message and whose recent chat history it can load
+- `Allowed numbers (Trigger)` controls who can trigger WhatsApp auto-answer when Auto answer is enabled
+- auto-answer delay window is configurable via `Auto-reply min delay (s)` and `Auto-reply max delay (s)`
 - session auth is persisted in `braindump.db` (`whatsapp_state.session_blob`) for restart recovery
 
 Telegram integration notes:

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import difflib
+
+from typing import Any
+
 from .base import MCPPlugin, McpConfigField, McpToolSpec
 from app.integrations.whatsapp.sidecar_manager import (
     connect,
+    get_message_history,
     list_contacts,
     normalize_phone_number,
     parse_allowlist,
@@ -24,7 +29,23 @@ class WhatsAppMCP(MCPPlugin):
             label="Auto answer",
             type="checkbox",
             required=False,
-            description="When enabled, allowlisted inbound WhatsApp messages trigger automatic replies using the automation prompt.",
+            description="When enabled, trigger-allowlisted inbound WhatsApp messages trigger automatic replies using the automation prompt. Does not affect manual send/read tools.",
+        ),
+        McpConfigField(
+            id="auto_reply_delay_min_seconds",
+            label="Auto-reply min delay (s)",
+            type="text",
+            required=False,
+            placeholder="10",
+            description="Minimum random delay before sending an auto-answer reply (trigger flow only, not manual send/read).",
+        ),
+        McpConfigField(
+            id="auto_reply_delay_max_seconds",
+            label="Auto-reply max delay (s)",
+            type="text",
+            required=False,
+            placeholder="60",
+            description="Maximum random delay before sending an auto-answer reply (trigger flow only, not manual send/read).",
         ),
         McpConfigField(
             id="automation_prompt",
@@ -35,15 +56,15 @@ class WhatsAppMCP(MCPPlugin):
         ),
         McpConfigField(
             id="allowed_numbers_send",
-            label="Allowed numbers (Send)",
+            label="Allowed numbers (Send / Read)",
             type="textarea",
             required=True,
             placeholder="00491234567;00491987654",
-            description="Contacts the system is allowed to proactively send messages to.",
+            description="Contacts the system is allowed to proactively send messages to and read recent history from.",
         ),
         McpConfigField(
             id="allowed_numbers_receive",
-            label="Allowed numbers (Receive)",
+            label="Allowed numbers (Trigger)",
             type="textarea",
             required=False,
             placeholder="00491234567;00491987654",
@@ -76,7 +97,27 @@ class WhatsAppMCP(MCPPlugin):
                     },
                     "required": ["text"],
                 },
-            )
+            ),
+            McpToolSpec(
+                id="whatsapp_read_recent_messages",
+                label="WhatsApp Read Recent Messages",
+                description="Reads the most recent messages for an allowlisted contact by best name/number match.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "contact_query": {
+                            "type": "string",
+                            "description": "Contact name or number to match against allowlisted send/read contacts.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 30,
+                            "description": "How many most recent messages to read (1-30, default 10).",
+                        },
+                    },
+                },
+            ),
         ]
 
     async def verify(self, params: dict[str, str]) -> tuple[bool, str]:
@@ -102,6 +143,9 @@ class WhatsAppMCP(MCPPlugin):
     async def call_tool(self, tool_id: str, arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
         if tool_id == "whatsapp_find_contact_number":
             return await _discover_allowlisted_numbers(arguments, params)
+
+        if tool_id == "whatsapp_read_recent_messages":
+            return await _read_recent_messages(arguments, params)
 
         if tool_id != "whatsapp_send_message":
             raise RuntimeError(f"Unsupported WhatsApp tool: {tool_id}")
@@ -157,6 +201,40 @@ async def _resolve_allowlisted_contact(target: str, allowlist: set[str]) -> str:
     return ""
 
 
+async def _read_recent_messages(arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
+    allowlist = parse_allowlist(params.get("allowed_numbers_send", ""))
+    if not allowlist:
+        raise RuntimeError("No send/read contacts are allowlisted. Configure Allowed numbers (Send / Read) first.")
+
+    contact_query = str(arguments.get("contact_query", "")).strip()
+    limit = _coerce_history_limit(arguments.get("limit"), default=10)
+
+    resolved_number, resolved_name, ambiguous_candidates = await _resolve_history_contact(contact_query, allowlist)
+    if ambiguous_candidates:
+        suggestions = ", ".join(f"{entry['name']} ({entry['number']})" for entry in ambiguous_candidates)
+        raise RuntimeError(
+            "Contact match is ambiguous. Please specify a clearer name or exact number. "
+            f"Candidates: {suggestions}"
+        )
+    if not resolved_number:
+        if contact_query:
+            raise RuntimeError("No allowlisted send/read contact matched that query.")
+        raise RuntimeError("contact_query is required when more than one send/read contact is allowlisted.")
+
+    history = await get_message_history(resolved_number, limit=limit)
+    messages = _normalize_history_entries(history)
+    return {
+        "status": "ok",
+        "contact": {
+            "name": resolved_name or resolved_number,
+            "number": resolved_number,
+        },
+        "limit": limit,
+        "count": len(messages),
+        "messages": messages,
+    }
+
+
 async def _discover_allowlisted_numbers(arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
     name_query = str(arguments.get("name_query", "")).strip()
 
@@ -171,53 +249,167 @@ async def _discover_allowlisted_numbers(arguments: dict[str, object], params: di
 
 
 async def _find_allowlisted_contacts(target: str, allowlist: set[str]) -> list[dict[str, str]]:
+    scored = await _score_allowlisted_contacts(target, allowlist)
+    return [{"name": item["name"], "number": item["number"]} for item in scored]
+
+
+async def _resolve_history_contact(target: str, allowlist: set[str]) -> tuple[str, str, list[dict[str, str]]]:
+    candidates = await _score_allowlisted_contacts(target, allowlist)
+    if not candidates:
+        return "", "", []
+
+    if not target.strip():
+        if len(candidates) == 1:
+            only = candidates[0]
+            return only["number"], only["name"], []
+        return "", "", [{"name": item["name"], "number": item["number"]} for item in candidates[:5]]
+
+    best = candidates[0]
+    if len(candidates) >= 2:
+        second = candidates[1]
+        if (best["score"] - second["score"]) < 0.18:
+            return "", "", [{"name": item["name"], "number": item["number"]} for item in candidates[:5]]
+
+    return best["number"], best["name"], []
+
+
+async def _score_allowlisted_contacts(target: str, allowlist: set[str]) -> list[dict[str, Any]]:
     if not allowlist:
         return []
 
     lowered_target = target.strip().lower()
+    digit_target = normalize_phone_number(target)
 
     try:
         contacts = await list_contacts()
     except Exception:
         contacts = []
 
-    known_contacts: list[dict[str, str]] = []
+    known_contacts: list[dict[str, Any]] = []
     for entry in contacts:
         number = normalize_phone_number(str(entry.get("number", "")))
         if not number or number not in allowlist:
             continue
         name_display = str(entry.get("name", "")).strip() or number
-        known_contacts.append({"name": name_display, "number": number})
+        known_contacts.append({"name": name_display, "number": number, "score": 0.0})
 
     known_numbers = {c["number"] for c in known_contacts}
     for num in allowlist:
         if num not in known_numbers:
-            known_contacts.append({"name": num, "number": num})
+            known_contacts.append({"name": num, "number": num, "score": 0.0})
 
     if not lowered_target:
-        known_contacts.sort(key=lambda item: item["name"].lower())
+        known_contacts.sort(key=lambda item: (item["name"].lower(), item["number"]))
         return known_contacts
 
-    exact_matches: list[dict[str, str]] = []
-    partial_matches: list[dict[str, str]] = []
+    tokens = _tokenize_contact_query(lowered_target)
     for entry in known_contacts:
-        name_display = entry["name"]
+        name_display = str(entry.get("name", ""))
         number = entry["number"]
         name = name_display.lower()
-        if name == lowered_target:
-            exact_matches.append(entry)
+        score = 0.0
+
+        if lowered_target == name:
+            score += 1.4
         elif lowered_target in name:
-            partial_matches.append(entry)
+            score += 1.0
 
-    ordered = exact_matches if exact_matches else partial_matches
-    ordered.sort(key=lambda item: item["name"].lower())
+        if digit_target and digit_target == number:
+            score += 1.8
+        elif digit_target and number.endswith(digit_target):
+            score += 1.2
+        elif digit_target and digit_target in number:
+            score += 0.7
 
-    deduped: list[dict[str, str]] = []
+        if tokens:
+            for token in tokens:
+                if token and token in name:
+                    score += 0.15
+
+        score += 0.6 * difflib.SequenceMatcher(None, lowered_target, name).ratio()
+        if digit_target:
+            score += 0.3 * difflib.SequenceMatcher(None, digit_target, number).ratio()
+
+        entry["score"] = round(score, 4)
+
+    known_contacts.sort(key=lambda item: (_score_value(item.get("score")), item["name"].lower(), item["number"]), reverse=True)
+
+    threshold = 0.45
+    filtered = [item for item in known_contacts if _score_value(item.get("score")) >= threshold]
+
+    deduped: list[dict[str, Any]] = []
     seen_numbers: set[str] = set()
-    for match in ordered:
+    for match in filtered:
         number = match.get("number", "")
         if not number or number in seen_numbers:
             continue
         seen_numbers.add(number)
         deduped.append(match)
     return deduped
+
+
+def _tokenize_contact_query(text: str) -> list[str]:
+    token_chars: list[str] = []
+    tokens: list[str] = []
+    for char in text.lower():
+        if char.isalnum():
+            token_chars.append(char)
+            continue
+        if token_chars:
+            tokens.append("".join(token_chars))
+            token_chars = []
+    if token_chars:
+        tokens.append("".join(token_chars))
+    return tokens
+
+
+def _score_value(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _coerce_history_limit(raw_limit: object, *, default: int) -> int:
+    if isinstance(raw_limit, bool):
+        return default
+    try:
+        parsed = int(str(raw_limit).strip())
+    except Exception:
+        return default
+    return max(1, min(parsed, 30))
+
+
+def _normalize_history_entries(history: list[dict[str, object]]) -> list[dict[str, object]]:
+    ordered = sorted(
+        [item for item in history if isinstance(item, dict)],
+        key=lambda item: _history_timestamp(item.get("timestamp")),
+    )
+    normalized: list[dict[str, object]] = []
+    for item in ordered:
+        normalized.append(
+            {
+                "id": str(item.get("id", "")).strip(),
+                "role": "assistant" if bool(item.get("from_me")) else "user",
+                "text": str(item.get("body", "")).strip(),
+                "timestamp": _history_timestamp(item.get("timestamp")),
+                "has_image": bool(item.get("has_image")),
+                "type": str(item.get("type", "")).strip(),
+            }
+        )
+    return normalized
+
+
+def _history_timestamp(raw_value: object) -> int:
+    if isinstance(raw_value, (int, float)):
+        return int(raw_value)
+    if isinstance(raw_value, str):
+        try:
+            return int(raw_value)
+        except ValueError:
+            return 0
+    return 0
