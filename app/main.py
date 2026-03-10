@@ -90,6 +90,7 @@ from .routers.openai_oauth import router as openai_oauth_router
 from .usage import add_daily_usage
 from .version import APP_VERSION
 from .timed_jobs import get_timed_job_channel_options, start_timed_jobs_worker, stop_timed_jobs_worker
+from .timed_jobs import get_timed_job_auth_alert_provider_ids
 from .timed_jobs import trigger_timed_job_now
 
 
@@ -314,6 +315,12 @@ class TimedJobWriteRequest(BaseModel):
 class TimedJobsResponse(BaseModel):
     jobs: list[TimedJob]
     channels: list[dict[str, object]]
+
+
+class TimedJobAuthAlertStatusResponse(BaseModel):
+    active: bool
+    provider_ids: list[str] = Field(default_factory=list)
+    detail: str = ""
 
 
 _gateway_chat_lock = asyncio.Lock()
@@ -795,6 +802,23 @@ async def get_timed_jobs() -> TimedJobsResponse:
     jobs = await list_timed_jobs()
     channels = get_timed_job_channel_options(settings)
     return TimedJobsResponse(jobs=jobs, channels=channels)
+
+
+@app.get("/api/timed-jobs/auth-alert-status", response_model=TimedJobAuthAlertStatusResponse)
+async def get_timed_job_auth_alert_status() -> TimedJobAuthAlertStatusResponse:
+    provider_ids = get_timed_job_auth_alert_provider_ids()
+    detail = ""
+    if provider_ids:
+        joined = ", ".join(provider_ids)
+        detail = (
+            "Timed jobs detected expired provider authentication and suppressed repeated alerts "
+            f"for: {joined}. Reconnect the provider in Setup."
+        )
+    return TimedJobAuthAlertStatusResponse(
+        active=bool(provider_ids),
+        provider_ids=provider_ids,
+        detail=detail,
+    )
 
 
 @app.post("/api/timed-jobs", response_model=TimedJob)

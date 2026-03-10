@@ -582,6 +582,23 @@ button:disabled {
   color: var(--error);
 }
 
+.auth-alert-banner {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid color-mix(in srgb, #c05e1e 55%, var(--border) 45%);
+  border-radius: 10px;
+  background: color-mix(in srgb, #fff1de 78%, var(--surface) 22%);
+  color: #7a3a0f;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.gateway-shell .auth-alert-banner {
+  width: min(100%, var(--gateway-max-width));
+  margin: 0 auto;
+}
+
 .toast {
   position: fixed;
   right: 1rem;
@@ -3097,6 +3114,12 @@ button:disabled {
 :root[data-theme="dark"] .outline-btn:hover,
 :root[data-theme="dark"] .memory-compact-btn:hover {
   background: var(--secondary-hover);
+}
+
+:root[data-theme="dark"] .auth-alert-banner {
+  background: color-mix(in srgb, #7a3a0f 30%, var(--surface) 70%);
+  border-color: color-mix(in srgb, #c05e1e 48%, var(--border) 52%);
+  color: #ffd9be;
 }
 
 :root[data-theme="dark"] .memory-add-btn {

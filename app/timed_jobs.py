@@ -31,6 +31,7 @@ TIMED_JOB_POLL_INTERVAL_SECONDS = 15
 _WORKER_TASK: asyncio.Task[None] | None = None
 _STOP_EVENT = asyncio.Event()
 _RUNNING_JOB_IDS: set[str] = set()
+_AUTH_ALERT_SENT_BY_PROVIDER: set[str] = set()
 LOGGER = logging.getLogger(__name__)
 
 
@@ -146,9 +147,11 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
     used_tokens: int | None = None
     used_tools: list[dict[str, str]] = []
     trace_messages: list[dict[str, str]] = []
+    provider_id = ""
 
     try:
         settings = await load_settings()
+        provider_id = settings.active_provider_id.strip()
         if not _is_setup_ready(settings):
             output_text = "Timed job skipped: setup is not complete."
         else:
@@ -197,6 +200,9 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
                     for entry in result["system_trace_messages"]
                 ]
 
+                if provider_id:
+                    _AUTH_ALERT_SENT_BY_PROVIDER.discard(provider_id)
+
         safe_output = output_text.strip() or "(No response text returned.)"
         await _dispatch_all(
             job=job,
@@ -216,7 +222,14 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
         if mark_as_executed:
             await mark_timed_job_executed(job.id, executed_at_utc=executed_at)
     except Exception as exc:
-        if _is_transient_provider_error(exc):
+        is_auth_failure = _is_auth_provider_error(exc)
+        if is_auth_failure:
+            LOGGER.warning(
+                "Timed job provider auth failure: %s",
+                str(exc),
+                extra={"timed_job_id": job.id, "provider_id": provider_id},
+            )
+        elif _is_transient_provider_error(exc):
             LOGGER.warning(
                 "Timed job transient failure: %s",
                 str(exc),
@@ -224,22 +237,44 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
             )
         else:
             LOGGER.exception("Timed job execution failed", extra={"timed_job_id": job.id})
+        notify_failure = True
         error_text = f"Timed job error: {exc}"
-        with contextlib.suppress(Exception):
-            await _dispatch_all(
-                job=job,
-                safe_output=error_text,
-                used_tokens=None,
-                used_tools=[],
-                trace_messages=[],
-                executed_at=executed_at,
+        if is_auth_failure:
+            provider_label = provider_id or "current provider"
+            if provider_id and provider_id in _AUTH_ALERT_SENT_BY_PROVIDER:
+                notify_failure = False
+                LOGGER.warning(
+                    "Timed job auth failure notification suppressed; reconnect required",
+                    extra={"timed_job_id": job.id, "provider_id": provider_id},
+                )
+            else:
+                if provider_id:
+                    _AUTH_ALERT_SENT_BY_PROVIDER.add(provider_id)
+                error_text = (
+                    f"Timed job paused: provider authentication expired for '{provider_label}'. "
+                    "Reconnect this provider in Setup, then timed jobs will continue normally."
+                )
+
+        if notify_failure:
+            with contextlib.suppress(Exception):
+                await _dispatch_all(
+                    job=job,
+                    safe_output=error_text,
+                    used_tokens=None,
+                    used_tools=[],
+                    trace_messages=[],
+                    executed_at=executed_at,
+                )
+            await register_completed_turn(
+                source_channel="timed_job",
+                source_chat_id=job.id,
+                user_message=job.prompt,
+                assistant_message=error_text,
             )
-        await register_completed_turn(
-            source_channel="timed_job",
-            source_chat_id=job.id,
-            user_message=job.prompt,
-            assistant_message=error_text,
-        )
+
+        if mark_as_executed:
+            with contextlib.suppress(Exception):
+                await mark_timed_job_executed(job.id, executed_at_utc=executed_at)
 
 
 async def _dispatch_all(
@@ -354,3 +389,33 @@ def _is_transient_provider_error(exc: Exception) -> bool:
             "unexpected error while contacting",
         )
     )
+
+
+def _is_auth_provider_error(exc: Exception) -> bool:
+    message = str(exc).strip().lower()
+    if not message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "reconnect your openai account",
+            "reconnect gemini oauth",
+            "oauth token was rejected",
+            "oauth refresh token was rejected",
+            "credentials are invalid",
+            "authentication",
+            "unauthorized",
+            "forbidden",
+            "(401)",
+            "(403)",
+            " 401",
+            " 403",
+            "invalid api key",
+            "api key is required",
+        )
+    )
+
+
+def get_timed_job_auth_alert_provider_ids() -> list[str]:
+    """Return provider ids currently in auth-expired suppression state."""
+    return sorted(provider_id for provider_id in _AUTH_ALERT_SENT_BY_PROVIDER if provider_id)

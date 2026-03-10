@@ -28,6 +28,7 @@ const systemTraceToggleButton = document.getElementById("system-trace-toggle");
 const tokenCounterNode = document.getElementById("token-counter");
 const tokenCounterTotalNode = document.getElementById("token-counter-total");
 const statusNode = document.getElementById("status");
+const timedJobAuthAlertNode = document.getElementById("timed-job-auth-alert");
 const menuButton = document.getElementById("menu-btn");
 const menuPopover = document.getElementById("menu-popover");
 const assistantTitleNode = document.getElementById("assistant-title");
@@ -179,6 +180,8 @@ const state = {
   chatSyncInFlight: false,
   integrationStatusSyncTimerId: null,
   integrationStatusSyncInFlight: false,
+  timedJobAuthAlertSyncTimerId: null,
+  timedJobAuthAlertSyncInFlight: false,
   shortTermMemorySyncTimerId: null,
   shortTermMemorySyncInFlight: false,
   chatPersistInFlight: false,
@@ -2216,6 +2219,45 @@ function applyIntegrationStatusPayload(payload) {
   state.telegramOwnerUserId = typeof telegramStatus.owner_user_id === "string" ? telegramStatus.owner_user_id : "";
   state.telegramOwnerChatId = typeof telegramStatus.owner_chat_id === "string" ? telegramStatus.owner_chat_id : "";
   updateTelegramStatusLabel();
+}
+
+function renderTimedJobAuthAlert(payload) {
+  if (!(timedJobAuthAlertNode instanceof HTMLElement)) {
+    return;
+  }
+  const active = Boolean(payload?.active);
+  if (!active) {
+    timedJobAuthAlertNode.textContent = "";
+    timedJobAuthAlertNode.classList.add("hidden");
+    return;
+  }
+  const providerIds = Array.isArray(payload?.provider_ids)
+    ? payload.provider_ids.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  const providerLabel = providerIds.length > 0 ? providerIds.join(", ") : "current provider";
+  const detail = typeof payload?.detail === "string" ? payload.detail.trim() : "";
+  timedJobAuthAlertNode.textContent = detail
+    || `Timed jobs are suppressing repeated auth-expired alerts for ${providerLabel}. Reconnect the provider in Setup.`;
+  timedJobAuthAlertNode.classList.remove("hidden");
+}
+
+async function syncTimedJobAuthAlertStatus() {
+  if (state.timedJobAuthAlertSyncInFlight) {
+    return;
+  }
+  state.timedJobAuthAlertSyncInFlight = true;
+  try {
+    const response = await fetch("/api/timed-jobs/auth-alert-status", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    renderTimedJobAuthAlert(payload);
+  } catch (error) {
+    // Keep sync best-effort and silent.
+  } finally {
+    state.timedJobAuthAlertSyncInFlight = false;
+  }
 }
 
 async function syncIntegrationStatus() {
@@ -5364,10 +5406,12 @@ async function loadGatewayMeta() {
     refreshLocalChatStateSignature();
     startChatStateSync();
     startIntegrationStatusSync();
+    startTimedJobAuthAlertSync();
     startShortTermMemorySync();
     loadShortTermMemory(false);
     loadTimedJobs(false);
     syncIntegrationStatus();
+    syncTimedJobAuthAlertStatus();
     updateComposerState();
     setStatus("");
   } catch (error) {
@@ -5388,9 +5432,11 @@ async function loadGatewayMeta() {
     updateShortTermMemoryBadge();
     startChatStateSync();
     startIntegrationStatusSync();
+    startTimedJobAuthAlertSync();
     startShortTermMemorySync();
     loadShortTermMemory(false);
     loadTimedJobs(false);
+    renderTimedJobAuthAlert({ active: false });
     updateComposerState();
     setStatus(error.message, true);
   }
@@ -5472,6 +5518,16 @@ function startIntegrationStatusSync() {
     window.clearInterval(state.integrationStatusSyncTimerId);
   }
   state.integrationStatusSyncTimerId = window.setInterval(syncIntegrationStatus, INTEGRATION_STATUS_SYNC_INTERVAL_MS);
+}
+
+function startTimedJobAuthAlertSync() {
+  if (state.timedJobAuthAlertSyncTimerId) {
+    window.clearInterval(state.timedJobAuthAlertSyncTimerId);
+  }
+  state.timedJobAuthAlertSyncTimerId = window.setInterval(
+    syncTimedJobAuthAlertStatus,
+    INTEGRATION_STATUS_SYNC_INTERVAL_MS,
+  );
 }
 
 function startShortTermMemorySync() {
@@ -7091,6 +7147,10 @@ window.addEventListener("beforeunload", () => {
   if (state.integrationStatusSyncTimerId) {
     window.clearInterval(state.integrationStatusSyncTimerId);
     state.integrationStatusSyncTimerId = null;
+  }
+  if (state.timedJobAuthAlertSyncTimerId) {
+    window.clearInterval(state.timedJobAuthAlertSyncTimerId);
+    state.timedJobAuthAlertSyncTimerId = null;
   }
   if (state.shortTermMemorySyncTimerId) {
     window.clearInterval(state.shortTermMemorySyncTimerId);

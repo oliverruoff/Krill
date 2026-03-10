@@ -7,6 +7,7 @@ const form = document.getElementById("setup-form");
 const landingView = document.getElementById("setup-landing");
 const statusNode = document.getElementById("status");
 const toastNode = document.getElementById("toast");
+const timedJobAuthAlertNode = document.getElementById("timed-job-auth-alert");
 
 const fields = {
   startScratchButton: document.getElementById("start-scratch-btn"),
@@ -80,7 +81,11 @@ const state = {
   oauthStatusByProvider: {},
   oauthBundleByProvider: {},
   oauthUnsupportedByProvider: {},
+  timedJobAuthAlertSyncTimerId: null,
+  timedJobAuthAlertSyncInFlight: false,
 };
+
+const TIMED_JOB_ALERT_SYNC_INTERVAL_MS = 8000;
 
 const OAUTH_PROVIDER_CONFIG = {
   openai_codex_oauth: {
@@ -162,6 +167,55 @@ function showToast(message) {
     toastNode.classList.add("hidden");
     state.toastTimerId = null;
   }, 1600);
+}
+
+function renderTimedJobAuthAlert(payload) {
+  if (!(timedJobAuthAlertNode instanceof HTMLElement)) {
+    return;
+  }
+  const active = Boolean(payload?.active);
+  if (!active) {
+    timedJobAuthAlertNode.textContent = "";
+    timedJobAuthAlertNode.classList.add("hidden");
+    return;
+  }
+  const providerIds = Array.isArray(payload?.provider_ids)
+    ? payload.provider_ids.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  const providerLabel = providerIds.length > 0 ? providerIds.join(", ") : "current provider";
+  const detail = typeof payload?.detail === "string" ? payload.detail.trim() : "";
+  timedJobAuthAlertNode.textContent = detail
+    || `Timed jobs are suppressing repeated auth-expired alerts for ${providerLabel}. Reconnect the provider now.`;
+  timedJobAuthAlertNode.classList.remove("hidden");
+}
+
+async function syncTimedJobAuthAlertStatus() {
+  if (state.timedJobAuthAlertSyncInFlight) {
+    return;
+  }
+  state.timedJobAuthAlertSyncInFlight = true;
+  try {
+    const response = await fetch("/api/timed-jobs/auth-alert-status", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    renderTimedJobAuthAlert(payload);
+  } catch (error) {
+    // Keep sync best-effort and silent.
+  } finally {
+    state.timedJobAuthAlertSyncInFlight = false;
+  }
+}
+
+function startTimedJobAuthAlertSync() {
+  if (state.timedJobAuthAlertSyncTimerId) {
+    window.clearInterval(state.timedJobAuthAlertSyncTimerId);
+  }
+  state.timedJobAuthAlertSyncTimerId = window.setInterval(
+    syncTimedJobAuthAlertStatus,
+    TIMED_JOB_ALERT_SYNC_INTERVAL_MS,
+  );
 }
 
 function showLandingView() {
@@ -942,6 +996,8 @@ async function loadPage() {
     renderConfiguredProviders();
     renderCoreMemories();
     setModeFromSettings();
+    startTimedJobAuthAlertSync();
+    await syncTimedJobAuthAlertStatus();
     state.initialSetupSnapshot = createSetupSnapshot();
     setStatus("Setup data loaded.");
 
@@ -951,6 +1007,7 @@ async function loadPage() {
       openBrainModal();
     }
   } catch (error) {
+    renderTimedJobAuthAlert({ active: false });
     setStatus(error.message, true);
   }
 }
@@ -1443,4 +1500,10 @@ fields.activeProviderSelect.addEventListener("change", () => {
 
 form.addEventListener("submit", saveSetup);
 document.addEventListener("keydown", handleEscapeToGateway);
+window.addEventListener("beforeunload", () => {
+  if (state.timedJobAuthAlertSyncTimerId) {
+    window.clearInterval(state.timedJobAuthAlertSyncTimerId);
+    state.timedJobAuthAlertSyncTimerId = null;
+  }
+});
 window.addEventListener("load", loadPage);
