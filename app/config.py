@@ -1235,6 +1235,7 @@ def _upsert_timed_job_sync(payload: dict[str, object], timed_job_id: str) -> Tim
     try:
         existing_id = timed_job_id.strip() or str(payload.get("id", "")).strip()
         existing_row = None
+        rearm_existing_once_job = False
         if existing_id:
             existing_row = conn.execute("SELECT * FROM timed_jobs WHERE id = ?", (existing_id,)).fetchone()
 
@@ -1248,9 +1249,15 @@ def _upsert_timed_job_sync(payload: dict[str, object], timed_job_id: str) -> Tim
             requested_interval = _normalize_interval(merged_payload.get("interval", existing_row["interval_type"]))
             requested_enabled = bool(merged_payload.get("enabled", bool(existing_row["enabled"])))
             if requested_interval == "once" and requested_enabled:
+                rearm_existing_once_job = True
                 merged_payload["last_run_at"] = ""
 
         job = _sanitize_timed_job_payload(merged_payload, existing_id=existing_id)
+        if rearm_existing_once_job and job.enabled:
+            next_run_dt = _parse_utc_iso(job.next_run_at)
+            min_rearm_run_at = (datetime.now(timezone.utc) + timedelta(minutes=1)).replace(second=0, microsecond=0)
+            if next_run_dt is None or next_run_dt < min_rearm_run_at:
+                job = job.model_copy(update={"next_run_at": min_rearm_run_at.isoformat()})
 
         conn.execute(
             """
