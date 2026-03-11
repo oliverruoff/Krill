@@ -164,6 +164,7 @@ There is no pytest configuration. Do not introduce pytest unless requested.
 - Read relevant modules before editing.
 - Keep diffs minimal and scoped to the user's request; do not reformat unrelated code.
 - Do not revert unrelated local changes.
+- After any code or behavior change: bump `app/version.py::APP_VERSION`.
 - After any Python edit: `python -m compileall app`.
 - After any JS edit: `node --check static/js/<file>.js`.
 - After adding a persisted field: update both the Pydantic model and SQL helpers in `app/config.py`.

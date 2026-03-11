@@ -222,7 +222,7 @@ async def _read_recent_messages(arguments: dict[str, object], params: dict[str, 
         raise RuntimeError("contact_query is required when more than one send/read contact is allowlisted.")
 
     history = await get_message_history(resolved_number, limit=limit)
-    messages = _normalize_history_entries(history)
+    messages = _normalize_history_entries(history, contact_name=resolved_name or resolved_number)
     return {
         "status": "ok",
         "contact": {
@@ -384,24 +384,41 @@ def _coerce_history_limit(raw_limit: object, *, default: int) -> int:
     return max(1, min(parsed, 30))
 
 
-def _normalize_history_entries(history: list[dict[str, object]]) -> list[dict[str, object]]:
+def _normalize_history_entries(history: list[dict[str, object]], *, contact_name: str) -> list[dict[str, object]]:
     ordered = sorted(
         [item for item in history if isinstance(item, dict)],
         key=lambda item: _history_timestamp(item.get("timestamp")),
     )
     normalized: list[dict[str, object]] = []
     for item in ordered:
+        author = _history_author_label(bool(item.get("from_me")), contact_name)
+        body = str(item.get("body", "")).strip()
+        has_image = bool(item.get("has_image"))
+        if body:
+            prefixed_text = f"{author}: {body}"
+        elif has_image:
+            prefixed_text = f"{author}: [image]"
+        else:
+            prefixed_text = f"{author}:"
         normalized.append(
             {
                 "id": str(item.get("id", "")).strip(),
                 "role": "assistant" if bool(item.get("from_me")) else "user",
-                "text": str(item.get("body", "")).strip(),
+                "author": author,
+                "text": prefixed_text,
                 "timestamp": _history_timestamp(item.get("timestamp")),
-                "has_image": bool(item.get("has_image")),
+                "has_image": has_image,
                 "type": str(item.get("type", "")).strip(),
             }
         )
     return normalized
+
+
+def _history_author_label(from_me: bool, contact_name: str) -> str:
+    if from_me:
+        return "user"
+    cleaned_contact_name = str(contact_name).strip()
+    return cleaned_contact_name or "contact"
 
 
 def _history_timestamp(raw_value: object) -> int:
