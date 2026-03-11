@@ -1245,6 +1245,11 @@ def _upsert_timed_job_sync(payload: dict[str, object], timed_job_id: str) -> Tim
             merged_payload.setdefault("output_decision_enabled", bool(existing_row["output_decision_enabled"]))
             merged_payload["id"] = str(existing_row["id"])
 
+            requested_interval = _normalize_interval(merged_payload.get("interval", existing_row["interval_type"]))
+            requested_enabled = bool(merged_payload.get("enabled", bool(existing_row["enabled"])))
+            if requested_interval == "once" and requested_enabled:
+                merged_payload["last_run_at"] = ""
+
         job = _sanitize_timed_job_payload(merged_payload, existing_id=existing_id)
 
         conn.execute(
