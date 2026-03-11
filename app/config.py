@@ -108,6 +108,7 @@ class TimedJob(BaseModel):
     timezone: str = Field(default="UTC")
     timezone_offset_minutes: int = Field(default=0, ge=-840, le=840)
     enabled: bool = False
+    output_decision_enabled: bool = False
     channels: list[str] = Field(default_factory=list)
     next_run_at: str = ""
     last_run_at: str = ""
@@ -340,6 +341,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           timezone TEXT NOT NULL DEFAULT 'UTC',
           timezone_offset_minutes INTEGER NOT NULL DEFAULT 0,
           enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+          output_decision_enabled INTEGER NOT NULL DEFAULT 0 CHECK (output_decision_enabled IN (0,1)),
           channels_json TEXT NOT NULL DEFAULT '[]',
           next_run_at TEXT NOT NULL DEFAULT '',
           last_run_at TEXT NOT NULL DEFAULT '',
@@ -357,6 +359,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
     _ensure_timed_jobs_column(conn, "timezone_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_timed_jobs_column(conn, "output_decision_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK (output_decision_enabled IN (0,1))")
     _ensure_timed_jobs_interval_constraint(conn)
     conn.commit()
 
@@ -428,6 +431,7 @@ def _ensure_timed_jobs_interval_constraint(conn: sqlite3.Connection) -> None:
           timezone TEXT NOT NULL DEFAULT 'UTC',
           timezone_offset_minutes INTEGER NOT NULL DEFAULT 0,
           enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+          output_decision_enabled INTEGER NOT NULL DEFAULT 0 CHECK (output_decision_enabled IN (0,1)),
           channels_json TEXT NOT NULL DEFAULT '[]',
           next_run_at TEXT NOT NULL DEFAULT '',
           last_run_at TEXT NOT NULL DEFAULT '',
@@ -440,11 +444,11 @@ def _ensure_timed_jobs_interval_constraint(conn: sqlite3.Connection) -> None:
         """
         INSERT INTO timed_jobs (
           id, title, prompt, interval_type, start_date, time_of_day, timezone,
-          timezone_offset_minutes, enabled, channels_json, next_run_at, last_run_at, created_at, updated_at
+          timezone_offset_minutes, enabled, output_decision_enabled, channels_json, next_run_at, last_run_at, created_at, updated_at
         )
         SELECT
           id, title, prompt, interval_type, start_date, time_of_day, timezone,
-          timezone_offset_minutes, enabled, channels_json, next_run_at, last_run_at, created_at, updated_at
+          timezone_offset_minutes, enabled, 0, channels_json, next_run_at, last_run_at, created_at, updated_at
         FROM timed_jobs_legacy
         """
     )
@@ -981,6 +985,7 @@ def _row_to_timed_job(row: sqlite3.Row) -> TimedJob:
         timezone=timezone_name,
         timezone_offset_minutes=max(-840, min(840, timezone_offset_minutes)),
         enabled=bool(row["enabled"]),
+        output_decision_enabled=bool(row["output_decision_enabled"]),
         channels=_decode_channels_json(row["channels_json"]),
         next_run_at=str(row["next_run_at"]),
         last_run_at=str(row["last_run_at"]),
@@ -1038,6 +1043,7 @@ def _sanitize_timed_job_payload(payload: dict[str, object], existing_id: str = "
     start_date_value = _parse_start_date(payload.get("start_date", ""))
     time_value = _parse_time_of_day(payload.get("time_of_day", ""))
     enabled = bool(payload.get("enabled", False))
+    output_decision_enabled = bool(payload.get("output_decision_enabled", False))
     channels = _normalize_channels(payload.get("channels", ["gateway"]))
     prompt = str(payload.get("prompt", "")).strip()
     title = " ".join(str(payload.get("title", "")).split()).strip()
@@ -1074,6 +1080,7 @@ def _sanitize_timed_job_payload(payload: dict[str, object], existing_id: str = "
         timezone=timezone_name,
         timezone_offset_minutes=timezone_offset_minutes,
         enabled=enabled,
+        output_decision_enabled=output_decision_enabled,
         channels=channels,
         next_run_at=next_run_at,
         last_run_at=last_run_at,
@@ -1100,6 +1107,7 @@ def _upsert_timed_job_sync(payload: dict[str, object], timed_job_id: str) -> Tim
         if existing_row is not None:
             merged_payload.setdefault("created_at", str(existing_row["created_at"]))
             merged_payload.setdefault("last_run_at", str(existing_row["last_run_at"]))
+            merged_payload.setdefault("output_decision_enabled", bool(existing_row["output_decision_enabled"]))
             merged_payload["id"] = str(existing_row["id"])
 
         job = _sanitize_timed_job_payload(merged_payload, existing_id=existing_id)
@@ -1108,8 +1116,8 @@ def _upsert_timed_job_sync(payload: dict[str, object], timed_job_id: str) -> Tim
             """
             INSERT INTO timed_jobs (
               id, title, prompt, interval_type, start_date, time_of_day, timezone,
-              timezone_offset_minutes, enabled, channels_json, next_run_at, last_run_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              timezone_offset_minutes, enabled, output_decision_enabled, channels_json, next_run_at, last_run_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               title = excluded.title,
               prompt = excluded.prompt,
@@ -1119,6 +1127,7 @@ def _upsert_timed_job_sync(payload: dict[str, object], timed_job_id: str) -> Tim
               timezone = excluded.timezone,
               timezone_offset_minutes = excluded.timezone_offset_minutes,
               enabled = excluded.enabled,
+              output_decision_enabled = excluded.output_decision_enabled,
               channels_json = excluded.channels_json,
               next_run_at = excluded.next_run_at,
               last_run_at = excluded.last_run_at,
@@ -1135,6 +1144,7 @@ def _upsert_timed_job_sync(payload: dict[str, object], timed_job_id: str) -> Tim
                 job.timezone,
                 job.timezone_offset_minutes,
                 int(job.enabled),
+                int(job.output_decision_enabled),
                 json.dumps(job.channels),
                 job.next_run_at,
                 job.last_run_at,

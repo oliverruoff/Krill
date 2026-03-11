@@ -99,6 +99,10 @@
             <label class="chat-history-search" for="chat-history-search">
               <input id="chat-history-search" type="search" maxlength="300" placeholder="Search chats..." aria-label="Search chats" autocomplete="off" />
             </label>
+            <label class="chat-history-toggle" for="show-hidden-timed-job-chats">
+              <input id="show-hidden-timed-job-chats" type="checkbox" />
+              <span>Show hidden timed-job debug chats</span>
+            </label>
             <div id="chat-history-list" class="chat-history-list" aria-label="Chat history"></div>
           </div>
         </aside>
@@ -322,6 +326,10 @@
               <label class="timed-job-check" for="timed-job-enabled">
                 <input id="timed-job-enabled" type="checkbox" checked />
                 <span>Enabled</span>
+              </label>
+              <label class="timed-job-check" for="timed-job-output-decision-enabled">
+                <input id="timed-job-output-decision-enabled" type="checkbox" />
+                <span>Output decision (AI decides notify/no notify)</span>
               </label>
             </div>
             <div class="timed-job-field">

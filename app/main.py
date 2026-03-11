@@ -309,6 +309,7 @@ class TimedJobWriteRequest(BaseModel):
     start_date: str = ""
     time_of_day: str = "00:00"
     enabled: bool = False
+    output_decision_enabled: bool = False
     channels: list[str] = Field(default_factory=lambda: ["gateway"])
 
 

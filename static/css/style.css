@@ -1728,6 +1728,19 @@ button:disabled {
   font-size: 0.74rem;
 }
 
+.chat-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  font-size: 0.7rem;
+  color: #60728a;
+}
+
+.chat-history-toggle input {
+  margin: 0;
+}
+
 .new-chat-btn {
   margin: 0;
   padding: 0.06rem 0.12rem;

@@ -30,6 +30,7 @@ _UPDATABLE_FIELDS = {
     "start_date",
     "time_of_day",
     "enabled",
+    "output_decision_enabled",
     "channels",
 }
 
@@ -66,6 +67,7 @@ class TimedJobsMCP(MCPPlugin):
             "start_date": {"type": "string", "description": "YYYY-MM-DD"},
             "time_of_day": {"type": "string", "description": "HH:MM"},
             "enabled": {"type": "boolean"},
+            "output_decision_enabled": {"type": "boolean"},
             "channels": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -310,6 +312,7 @@ async def _tool_create(arguments: dict[str, object]) -> dict[str, object]:
     payload["timezone"] = timezone_name
     payload["timezone_offset_minutes"] = timezone_offset_minutes
     payload["enabled"] = bool(arguments.get("enabled", True))
+    payload["output_decision_enabled"] = False
     payload["channels"] = normalized_channels
 
     created = await upsert_timed_job(payload)
@@ -345,6 +348,7 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
         "start_date": selected.start_date,
         "time_of_day": selected.time_of_day,
         "enabled": selected.enabled,
+        "output_decision_enabled": selected.output_decision_enabled,
         "channels": list(selected.channels),
         "created_at": selected.created_at,
         "last_run_at": selected.last_run_at,
@@ -359,7 +363,7 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
             invalid_fields=[
                 {
                     "field": "payload",
-                    "reason": "Provide one or more of title, prompt, interval, start_date, time_of_day, enabled, channels.",
+                    "reason": "Provide one or more of title, prompt, interval, start_date, time_of_day, enabled, output_decision_enabled, channels.",
                 }
             ],
         )
@@ -399,6 +403,8 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
             update_payload["time_of_day"] = _normalize_time_hh_mm(next_time)
     if "enabled" in arguments:
         update_payload["enabled"] = bool(arguments.get("enabled", False))
+    if "output_decision_enabled" in arguments:
+        update_payload["output_decision_enabled"] = bool(arguments.get("output_decision_enabled", False))
 
     timezone_name, timezone_offset_minutes = _server_timezone_defaults()
     update_payload["timezone"] = timezone_name

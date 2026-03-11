@@ -12,6 +12,7 @@ const MEMORY_MAX_LENGTH = 1000000;
 const CHAT_HISTORY_PAGE_SIZE = 15;
 const CHAT_HISTORY_SCROLL_LOAD_THRESHOLD_PX = 120;
 const WHATSAPP_CONTACTS_CACHE_PARAM = "contacts_cache_json";
+const TIMED_JOB_HIDDEN_CHAT_SYSTEM_TYPE = "timed_job_hidden_debug";
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -49,6 +50,7 @@ const compactButton = document.getElementById("compact-btn");
 const currentChatTitleNode = document.getElementById("current-chat-title");
 const chatHistoryList = document.getElementById("chat-history-list");
 const chatHistorySearchInput = document.getElementById("chat-history-search");
+const showHiddenTimedJobChatsInput = document.getElementById("show-hidden-timed-job-chats");
 const newChatButton = document.getElementById("new-chat-btn");
 const mcpList = document.getElementById("mcp-list");
 const integrationList = document.getElementById("integration-list");
@@ -105,6 +107,7 @@ const timedJobIntervalSelect = document.getElementById("timed-job-interval");
 const timedJobStartDateInput = document.getElementById("timed-job-start-date");
 const timedJobTimeInput = document.getElementById("timed-job-time");
 const timedJobEnabledInput = document.getElementById("timed-job-enabled");
+const timedJobOutputDecisionEnabledInput = document.getElementById("timed-job-output-decision-enabled");
 const timedJobChannelsNode = document.getElementById("timed-job-channels");
 const timedJobSaveButton = document.getElementById("timed-job-save");
 const timedJobResetButton = document.getElementById("timed-job-reset");
@@ -237,6 +240,7 @@ const state = {
   chatHistoryVisibleCount: CHAT_HISTORY_PAGE_SIZE,
   chatHistorySignature: "",
   chatHistorySearchTerm: "",
+  showHiddenTimedJobChats: false,
   tokenUsageRangeMode: "7",
   tokenUsageCustomFrom: "",
   tokenUsageCustomTo: "",
@@ -246,6 +250,10 @@ const state = {
 
 if (chatHistorySearchInput instanceof HTMLInputElement) {
   state.chatHistorySearchTerm = chatHistorySearchInput.value || "";
+}
+
+if (showHiddenTimedJobChatsInput instanceof HTMLInputElement) {
+  state.showHiddenTimedJobChats = showHiddenTimedJobChatsInput.checked;
 }
 
 function normalizeThemeMode(value) {
@@ -1092,9 +1100,23 @@ function doesChatMatchSearch(chat, normalizedSearch) {
   });
 }
 
+function isHiddenTimedJobDebugChat(chat) {
+  if (!chat || !Array.isArray(chat.messages)) {
+    return false;
+  }
+  return chat.messages.some(
+    (message) => message && message.role === "system" && message.system_type === TIMED_JOB_HIDDEN_CHAT_SYSTEM_TYPE,
+  );
+}
+
 function getFilteredChats(chats, searchTerm) {
   const normalizedSearch = String(searchTerm || "").trim().toLowerCase();
-  return chats.filter((chat) => doesChatMatchSearch(chat, normalizedSearch));
+  return chats.filter((chat) => {
+    if (!state.showHiddenTimedJobChats && isHiddenTimedJobDebugChat(chat)) {
+      return false;
+    }
+    return doesChatMatchSearch(chat, normalizedSearch);
+  });
 }
 
 function renderMemoryList(node, memories, searchTerm, type) {
@@ -3460,6 +3482,7 @@ function normalizeIncomingTimedJobs(rawJobs) {
       start_date: typeof entry.start_date === "string" ? entry.start_date : todayDateInputValue(),
       time_of_day: typeof entry.time_of_day === "string" ? entry.time_of_day.slice(0, 5) : "09:00",
       enabled: Boolean(entry.enabled),
+      output_decision_enabled: Boolean(entry.output_decision_enabled),
       channels: Array.isArray(entry.channels) ? entry.channels.map((channel) => String(channel)) : ["gateway"],
       next_run_at: typeof entry.next_run_at === "string" ? entry.next_run_at : "",
       last_run_at: typeof entry.last_run_at === "string" ? entry.last_run_at : "",
@@ -3507,6 +3530,9 @@ function resetTimedJobEditor() {
 
   if (timedJobEnabledInput instanceof HTMLInputElement) {
     timedJobEnabledInput.checked = true;
+  }
+  if (timedJobOutputDecisionEnabledInput instanceof HTMLInputElement) {
+    timedJobOutputDecisionEnabledInput.checked = false;
   }
   renderTimedJobChannelOptions(["gateway"]);
 }
@@ -3571,6 +3597,9 @@ function populateTimedJobEditor(job) {
   if (timedJobEnabledInput instanceof HTMLInputElement) {
     timedJobEnabledInput.checked = Boolean(job.enabled);
   }
+  if (timedJobOutputDecisionEnabledInput instanceof HTMLInputElement) {
+    timedJobOutputDecisionEnabledInput.checked = Boolean(job.output_decision_enabled);
+  }
   renderTimedJobChannelOptions(Array.isArray(job.channels) ? job.channels : ["gateway"]);
 }
 
@@ -3583,7 +3612,8 @@ function formatTimedJobMeta(job) {
     ? job.channels.join(", ")
     : "gateway";
   const status = job.enabled ? "enabled" : "disabled";
-  return `${interval} | ${status} | next: ${nextRun} | channels: ${channels}`;
+  const outputMode = job.output_decision_enabled ? "output: AI decision" : "output: always";
+  return `${interval} | ${status} | next: ${nextRun} | channels: ${channels} | ${outputMode}`;
 }
 
 function renderTimedJobsList() {
@@ -3673,6 +3703,8 @@ function collectTimedJobPayload() {
   const startDate = timedJobStartDateInput instanceof HTMLInputElement ? timedJobStartDateInput.value : "";
   const timeOfDay = timedJobTimeInput instanceof HTMLInputElement ? timedJobTimeInput.value : "";
   const enabled = timedJobEnabledInput instanceof HTMLInputElement ? timedJobEnabledInput.checked : false;
+  const outputDecisionEnabled =
+    timedJobOutputDecisionEnabledInput instanceof HTMLInputElement ? timedJobOutputDecisionEnabledInput.checked : false;
 
   const channels = [];
   if (timedJobChannelsNode instanceof HTMLElement) {
@@ -3694,6 +3726,7 @@ function collectTimedJobPayload() {
     start_date: startDate,
     time_of_day: timeOfDay,
     enabled,
+    output_decision_enabled: outputDecisionEnabled,
     channels,
   };
 }
@@ -5331,6 +5364,19 @@ function normalizeIncomingChats(rawChats) {
   return normalized;
 }
 
+function ensureVisibleActiveChat() {
+  if (state.showHiddenTimedJobChats) {
+    return;
+  }
+  const activeChat = state.chats.find((chat) => chat.id === state.activeChatId);
+  if (activeChat && !isHiddenTimedJobDebugChat(activeChat)) {
+    return;
+  }
+  const sortedChats = sortChatsByLatestMessage(state.chats);
+  const nextVisibleChat = sortedChats.find((chat) => !isHiddenTimedJobDebugChat(chat));
+  state.activeChatId = nextVisibleChat?.id ?? "";
+}
+
 async function loadGatewayMeta() {
   try {
     loadAppVersion();
@@ -5391,6 +5437,7 @@ async function loadGatewayMeta() {
     state.activeChatId = state.chats.some((chat) => chat.id === persistedActiveChatId)
       ? persistedActiveChatId
       : (sortedChats[0]?.id ?? "");
+    ensureVisibleActiveChat();
 
     syncSwitcherControls();
     updateMetaIndicators();
@@ -5472,6 +5519,7 @@ function applyRemoteChatState(payload) {
     const sorted = sortChatsByLatestMessage(state.chats);
     state.activeChatId = sorted[0]?.id ?? "";
   }
+  ensureVisibleActiveChat();
 
   renderChatHistory();
   renderActiveChat();
@@ -7019,6 +7067,15 @@ if (chatHistorySearchInput instanceof HTMLInputElement) {
   chatHistorySearchInput.addEventListener("input", () => {
     state.chatHistorySearchTerm = chatHistorySearchInput.value || "";
     renderChatHistory();
+  });
+}
+
+if (showHiddenTimedJobChatsInput instanceof HTMLInputElement) {
+  showHiddenTimedJobChatsInput.addEventListener("change", () => {
+    state.showHiddenTimedJobChats = showHiddenTimedJobChatsInput.checked;
+    ensureVisibleActiveChat();
+    renderChatHistory();
+    renderActiveChat();
   });
 }
 

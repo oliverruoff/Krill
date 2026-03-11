@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -23,10 +24,14 @@ from app.config import (
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed
 from app.integrations.registry import get_runtime_integrations
 from app.memory_extraction import register_completed_turn
+from app.providers import get_provider
+from app.providers.resilience import generate_with_retries
 from app.usage import add_daily_usage
 
 
 TIMED_JOB_POLL_INTERVAL_SECONDS = 15
+TIMED_JOB_HIDDEN_CHAT_SYSTEM_TYPE = "timed_job_hidden_debug"
+TIMED_JOB_OUTPUT_DECISION_TRACE_TYPE = "timed_job_output_decision"
 
 _WORKER_TASK: asyncio.Task[None] | None = None
 _STOP_EVENT = asyncio.Event()
@@ -148,6 +153,7 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
     used_tools: list[dict[str, str]] = []
     trace_messages: list[dict[str, str]] = []
     provider_id = ""
+    generated_assistant_output = False
 
     try:
         settings = await load_settings()
@@ -181,6 +187,7 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
                 )
                 output_text = result["text"]
                 used_tokens = result["used_tokens"]
+                generated_assistant_output = True
                 used_tools = [
                     {
                         "mcp_id": str(entry.get("mcp_id", "") if isinstance(entry, dict) else ""),
@@ -204,14 +211,35 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
                     _AUTH_ALERT_SENT_BY_PROVIDER.discard(provider_id)
 
         safe_output = output_text.strip() or "(No response text returned.)"
-        await _dispatch_all(
-            job=job,
-            safe_output=safe_output,
-            used_tokens=used_tokens,
-            used_tools=used_tools,
-            trace_messages=trace_messages,
-            executed_at=executed_at,
-        )
+        should_dispatch = True
+        if job.output_decision_enabled and generated_assistant_output:
+            should_dispatch, decision_trace = await _should_dispatch_timed_job_output(
+                settings=settings,
+                job=job,
+                assistant_output=safe_output,
+            )
+            trace_messages.append(decision_trace)
+
+        if should_dispatch:
+            await _dispatch_all(
+                job=job,
+                safe_output=safe_output,
+                used_tokens=used_tokens,
+                used_tools=used_tools,
+                trace_messages=trace_messages,
+                executed_at=executed_at,
+            )
+        else:
+            await _dispatch_gateway(
+                job=job,
+                assistant_text=safe_output,
+                used_tokens=used_tokens,
+                used_tools=used_tools,
+                trace_messages=trace_messages,
+                executed_at=executed_at,
+                settings=settings,
+                hidden_from_history=True,
+            )
 
         await register_completed_turn(
             source_channel="timed_job",
@@ -315,11 +343,15 @@ async def _dispatch_gateway(
     trace_messages: list[dict[str, str]],
     executed_at: datetime,
     settings: Settings,
+    hidden_from_history: bool = False,
 ) -> None:
     timestamp = executed_at.isoformat()
+    chat_title = _derive_chat_title(job)
+    if hidden_from_history:
+        chat_title = f"[Hidden] {chat_title}"[:120]
     chat = ChatSession(
         id=str(uuid4()),
-        title=_derive_chat_title(job),
+        title=chat_title,
         type="normal",
         messages=[],
         memory_block="",
@@ -327,6 +359,22 @@ async def _dispatch_gateway(
         collapse_system_trace=True,
     )
     ensure_runtime_context_seed(chat, settings)
+
+    if hidden_from_history:
+        chat.messages.append(
+            ChatMessage(
+                role="system",
+                content=(
+                    "Timed job output was suppressed by output decision mode. "
+                    "This debug chat is hidden from history unless enabled in chat history settings."
+                ),
+                timestamp=timestamp,
+                system_type=TIMED_JOB_HIDDEN_CHAT_SYSTEM_TYPE,
+                tool_usage=[],
+                request_id="",
+                status="",
+            )
+        )
 
     for trace in trace_messages:
         content = str(trace.get("content", "")).strip()
@@ -419,3 +467,88 @@ def _is_auth_provider_error(exc: Exception) -> bool:
 def get_timed_job_auth_alert_provider_ids() -> list[str]:
     """Return provider ids currently in auth-expired suppression state."""
     return sorted(provider_id for provider_id in _AUTH_ALERT_SENT_BY_PROVIDER if provider_id)
+
+
+async def _should_dispatch_timed_job_output(
+    *,
+    settings: Settings,
+    job: TimedJob,
+    assistant_output: str,
+) -> tuple[bool, dict[str, str]]:
+    provider_id = settings.active_provider_id.strip()
+    provider_config = settings.provider_configs.get(provider_id)
+    if not provider_id or provider_config is None:
+        return True, {
+            "system_type": TIMED_JOB_OUTPUT_DECISION_TRACE_TYPE,
+            "content": "Output decision fallback: active provider unavailable; dispatching output.",
+        }
+
+    provider = get_provider(provider_id)
+    if provider is None:
+        return True, {
+            "system_type": TIMED_JOB_OUTPUT_DECISION_TRACE_TYPE,
+            "content": "Output decision fallback: provider implementation unavailable; dispatching output.",
+        }
+
+    try:
+        decision_text, _ = await generate_with_retries(
+            provider=provider,
+            prompt=_build_output_decision_prompt(job.prompt, assistant_output),
+            system_prompt=(
+                "You are a strict JSON classifier for timed-job notification policy. "
+                "Return only JSON."
+            ),
+            model=provider_config.model,
+            api_key=provider_config.api_key,
+            history=[],
+            max_attempts=2,
+        )
+        should_output, reason, confidence = _parse_output_decision(decision_text)
+        decision_label = "dispatching" if should_output else "suppressing"
+        return should_output, {
+            "system_type": TIMED_JOB_OUTPUT_DECISION_TRACE_TYPE,
+            "content": (
+                f"Output decision: {decision_label} output "
+                f"(confidence: {confidence}; reason: {reason})."
+            ),
+        }
+    except Exception as exc:
+        return True, {
+            "system_type": TIMED_JOB_OUTPUT_DECISION_TRACE_TYPE,
+            "content": f"Output decision fallback after error ({exc}); dispatching output.",
+        }
+
+
+def _build_output_decision_prompt(user_prompt: str, assistant_output: str) -> str:
+    return (
+        "Decide whether a timed-job run should notify the user now.\n\n"
+        "User timed-job prompt:\n"
+        f"{user_prompt.strip()}\n\n"
+        "Generated result:\n"
+        f"{assistant_output.strip()}\n\n"
+        "Rules:\n"
+        "1) If the prompt implies only notable/critical/changed conditions should notify, "
+        "set should_output=false when result is routine, empty, or no-action.\n"
+        "2) If in doubt, set should_output=true.\n"
+        "3) If result indicates failure, auth issues, or operational risk, set should_output=true.\n\n"
+        "Return JSON only with this shape:\n"
+        "{\"should_output\": true|false, \"reason\": \"...\", \"confidence\": \"low|medium|high\"}"
+    )
+
+
+def _parse_output_decision(raw_text: str) -> tuple[bool, str, str]:
+    text = str(raw_text or "").strip()
+    if text.startswith("```"):
+        lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Output decision response was not a JSON object.")
+
+    should_output = bool(parsed.get("should_output", True))
+    reason = str(parsed.get("reason", "No reason provided.")).strip() or "No reason provided."
+    confidence = str(parsed.get("confidence", "medium")).strip().lower()
+    if confidence not in {"low", "medium", "high"}:
+        confidence = "medium"
+    return should_output, reason[:300], confidence
