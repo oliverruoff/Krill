@@ -127,6 +127,7 @@ class WhatsAppBridgeWorker:
                 latest_state.prompt,
                 trigger_message_id=event_id,
                 trigger_has_image=has_image,
+                quote_latest_reply_message=latest_state.quote_latest_reply_message,
             )
 
     async def _dispatch_inbound_message(
@@ -137,6 +138,7 @@ class WhatsAppBridgeWorker:
         *,
         trigger_message_id: str,
         trigger_has_image: bool,
+        quote_latest_reply_message: bool,
     ) -> None:
         settings = await load_settings()
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -248,7 +250,8 @@ class WhatsAppBridgeWorker:
                 if not send_allowed:
                     LOGGER.info("WhatsApp auto-reply aborted before send for %s", number)
                 else:
-                    await send_message(number, final_text)
+                    quoted_message_id = trigger_message_id if quote_latest_reply_message else ""
+                    await send_message(number, final_text, quoted_message_id=quoted_message_id)
             except Exception:
                 LOGGER.exception("WhatsApp auto-reply send failed for %s", number)
 
@@ -291,12 +294,14 @@ class WhatsAppBridgeWorker:
         allowlist = parse_allowlist(mcp_config.params.get("allowed_numbers_receive", ""))
         prompt = str(mcp_config.params.get("automation_prompt", "")).strip()
         auto_answer_enabled = _is_truthy_flag(mcp_config.params.get("auto_answer", ""))
+        quote_latest_reply_message = _is_truthy_flag(mcp_config.params.get("quote_latest_reply_message", ""))
         min_delay_seconds, max_delay_seconds = _resolve_auto_reply_delay_window(mcp_config.params)
         if not auto_answer_enabled or not allowlist or not prompt:
             return WhatsAppAutomationState(
                 enabled=False,
                 allowlist=set(),
                 prompt="",
+                quote_latest_reply_message=False,
                 min_delay_seconds=min_delay_seconds,
                 max_delay_seconds=max_delay_seconds,
             )
@@ -305,6 +310,7 @@ class WhatsAppBridgeWorker:
             enabled=True,
             allowlist=allowlist,
             prompt=prompt,
+            quote_latest_reply_message=quote_latest_reply_message,
             min_delay_seconds=min_delay_seconds,
             max_delay_seconds=max_delay_seconds,
         )
@@ -472,6 +478,7 @@ class WhatsAppAutomationState:
     enabled: bool
     allowlist: set[str]
     prompt: str
+    quote_latest_reply_message: bool = False
     min_delay_seconds: int = AUTO_REPLY_DELAY_MIN_SECONDS
     max_delay_seconds: int = AUTO_REPLY_DELAY_MAX_SECONDS
 

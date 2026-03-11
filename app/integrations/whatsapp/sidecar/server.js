@@ -299,13 +299,24 @@ const server = http.createServer(async (req, res) => {
       const body = await readJsonBody(req);
       const to = String(body.to_number || "");
       const text = String(body.text || "").trim();
+      const quotedMessageId = String(body.quoted_message_id || "").trim();
       if (!text) {
         json(res, 422, { ok: false, detail: "text is required" });
         return;
       }
       const chatId = toChatId(to);
-      await client.sendMessage(chatId, text);
-      json(res, 200, { ok: true, to_number: normalizeNumber(to), text });
+      let quoted = false;
+      if (quotedMessageId) {
+        try {
+          await client.sendMessage(chatId, text, { quotedMessageId });
+          quoted = true;
+        } catch {
+          await client.sendMessage(chatId, text);
+        }
+      } else {
+        await client.sendMessage(chatId, text);
+      }
+      json(res, 200, { ok: true, to_number: normalizeNumber(to), text, quoted });
       return;
     }
 

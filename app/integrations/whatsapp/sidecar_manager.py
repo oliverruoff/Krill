@@ -128,13 +128,17 @@ async def status() -> dict[str, object]:
     return payload
 
 
-async def send_message(to_number: str, text: str) -> dict[str, object]:
+async def send_message(to_number: str, text: str, *, quoted_message_id: str = "") -> dict[str, object]:
     await ensure_sidecar_running()
     return await asyncio.to_thread(
         _request_json,
         "POST",
         f"{_SIDECAR_BASE}/send",
-        {"to_number": to_number, "text": text},
+        {
+            "to_number": to_number,
+            "text": text,
+            "quoted_message_id": str(quoted_message_id).strip(),
+        },
     )
 
 

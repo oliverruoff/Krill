@@ -32,6 +32,13 @@ class WhatsAppMCP(MCPPlugin):
             description="When enabled, trigger-allowlisted inbound WhatsApp messages trigger automatic replies using the automation prompt. Does not affect manual send/read tools.",
         ),
         McpConfigField(
+            id="quote_latest_reply_message",
+            label="Quote latest inbound message",
+            type="checkbox",
+            required=False,
+            description="When enabled, WhatsApp auto-answer replies quote the latest inbound WhatsApp message they are answering to.",
+        ),
+        McpConfigField(
             id="auto_reply_delay_min_seconds",
             label="Auto-reply min delay (s)",
             type="text",
