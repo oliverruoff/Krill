@@ -79,6 +79,12 @@ class DailyTokenUsage(BaseModel):
     tokens: int = Field(default=0, ge=0)
 
 
+class ChatStateSnapshot(BaseModel):
+    chats: list[ChatSession] = Field(default_factory=list)
+    active_chat_id: str = ""
+    daily_token_usage: list[DailyTokenUsage] = Field(default_factory=list)
+
+
 class TelegramState(BaseModel):
     owner_user_id: str = ""
     owner_chat_id: str = ""
@@ -480,6 +486,12 @@ async def load_settings() -> Settings:
         return await asyncio.to_thread(_load_settings_sync)
 
 
+async def load_chat_state() -> ChatStateSnapshot:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_load_chat_state_sync)
+
+
 def _load_settings_sync() -> Settings:
     conn = _get_conn(BRAINDUMP_PATH)
     try:
@@ -586,11 +598,45 @@ def _load_settings_sync() -> Settings:
         conn.close()
 
 
+def _load_chat_state_sync() -> ChatStateSnapshot:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        core = conn.execute("SELECT active_chat_id FROM settings_core WHERE id = 1").fetchone()
+        chats = _load_chats_from_conn(conn)
+        usage = [DailyTokenUsage(date=row["date"], tokens=row["tokens"]) for row in conn.execute("SELECT * FROM daily_token_usage ORDER BY date ASC")]
+        active_chat_id = core["active_chat_id"] if core is not None else ""
+        return ChatStateSnapshot(
+            chats=chats,
+            active_chat_id=_normalize_active_chat_id(active_chat_id, chats),
+            daily_token_usage=usage,
+        )
+    finally:
+        conn.close()
+
+
 async def save_settings(settings: Settings) -> Settings:
     await ensure_settings_file()
     async with _DB_LOCK:
         normalized = _sync_active_selection(settings)
         await asyncio.to_thread(_save_settings_sync, normalized)
+        await asyncio.to_thread(_check_backup)
+        return normalized
+
+
+async def save_chat_state(
+    chats: list[ChatSession],
+    active_chat_id: str,
+    daily_token_usage: list[DailyTokenUsage],
+) -> ChatStateSnapshot:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        normalized_active_chat_id = _normalize_active_chat_id(active_chat_id, chats)
+        normalized = ChatStateSnapshot(
+            chats=chats,
+            active_chat_id=normalized_active_chat_id,
+            daily_token_usage=daily_token_usage,
+        )
+        await asyncio.to_thread(_save_chat_state_sync, normalized)
         await asyncio.to_thread(_check_backup)
         return normalized
 
@@ -679,6 +725,95 @@ def _save_settings_sync(settings: Settings) -> None:
         raise
     finally:
         conn.close()
+
+
+def _save_chat_state_sync(snapshot: ChatStateSnapshot) -> None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute(
+            "UPDATE settings_core SET active_chat_id = ? WHERE id = 1",
+            (snapshot.active_chat_id,),
+        )
+        _rewrite_chat_tables(conn, snapshot.chats)
+        conn.execute("DELETE FROM daily_token_usage")
+        for item in snapshot.daily_token_usage:
+            conn.execute("INSERT INTO daily_token_usage (date, tokens) VALUES (?, ?)", (item.date, item.tokens))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _load_chats_from_conn(conn: sqlite3.Connection) -> list[ChatSession]:
+    chats: list[ChatSession] = []
+    for chat_row in conn.execute("SELECT * FROM chats"):
+        messages = []
+        msg_cursor = conn.execute("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY seq ASC", (chat_row["id"],))
+        for msg_row in msg_cursor:
+            tools = []
+            tool_cursor = conn.execute("SELECT * FROM message_tool_usage WHERE message_id = ? ORDER BY seq ASC", (msg_row["id"],))
+            for tool_row in tool_cursor:
+                tools.append({
+                    "mcp_id": tool_row["mcp_id"],
+                    "mcp_label": tool_row["mcp_label"],
+                    "tool_id": tool_row["tool_id"],
+                    "tool_label": tool_row["tool_label"],
+                })
+            messages.append(ChatMessage(
+                role=msg_row["role"],
+                content=msg_row["content"],
+                timestamp=msg_row["timestamp"],
+                system_type=msg_row["system_type"],
+                tool_usage=tools,
+                request_id=msg_row["request_id"],
+                status=msg_row["status"],
+            ))
+
+        chats.append(ChatSession(
+            id=chat_row["id"],
+            title=chat_row["title"],
+            type=chat_row["type"],
+            messages=messages,
+            memory_block=chat_row["memory_block"],
+            total_tokens_used=chat_row["total_tokens_used"],
+            collapse_system_trace=bool(chat_row["collapse_system_trace"]),
+        ))
+    return chats
+
+
+def _rewrite_chat_tables(conn: sqlite3.Connection, chats: list[ChatSession]) -> None:
+    conn.execute("DELETE FROM message_tool_usage")
+    conn.execute("DELETE FROM chat_messages")
+    conn.execute("DELETE FROM chats")
+    for chat in chats:
+        conn.execute(
+            "INSERT INTO chats (id, title, type, memory_block, total_tokens_used, collapse_system_trace) VALUES (?, ?, ?, ?, ?, ?)",
+            (chat.id, chat.title, chat.type, chat.memory_block, chat.total_tokens_used, int(chat.collapse_system_trace)),
+        )
+        for i, msg in enumerate(chat.messages):
+            cursor = conn.execute(
+                "INSERT INTO chat_messages (chat_id, seq, role, content, timestamp, system_type, request_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (chat.id, i, msg.role, msg.content, msg.timestamp, msg.system_type, msg.request_id, msg.status),
+            )
+            msg_id = cursor.lastrowid
+            for j, tool in enumerate(msg.tool_usage):
+                conn.execute(
+                    "INSERT INTO message_tool_usage (message_id, seq, mcp_id, mcp_label, tool_id, tool_label) VALUES (?, ?, ?, ?, ?, ?)",
+                    (msg_id, j, tool["mcp_id"], tool.get("mcp_label", ""), tool["tool_id"], tool.get("tool_label", "")),
+                )
+
+
+def _normalize_active_chat_id(active_chat_id: str, chats: list[ChatSession]) -> str:
+    normalized_active_chat_id = active_chat_id.strip() if isinstance(active_chat_id, str) else ""
+    chat_ids = {chat.id for chat in chats if isinstance(chat.id, str) and chat.id.strip()}
+    if normalized_active_chat_id and normalized_active_chat_id in chat_ids:
+        return normalized_active_chat_id
+    if chats:
+        return chats[0].id
+    return ""
 
 
 def _check_backup() -> None:

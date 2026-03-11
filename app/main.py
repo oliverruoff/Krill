@@ -20,6 +20,8 @@ from pydantic import BaseModel, Field
 
 from .chat_engine import generate_chat_response
 from .config import (
+    ChatSession,
+    DailyTokenUsage,
     IntegrationConfig,
     MemoryEntry,
     McpConfig,
@@ -31,8 +33,10 @@ from .config import (
     import_braindump_db,
     list_short_term_memories,
     list_timed_jobs,
+    load_chat_state,
     load_settings,
     resolve_short_term_memories,
+    save_chat_state,
     save_settings,
     upsert_timed_job,
     view_braindump,
@@ -187,6 +191,11 @@ class VerifyIntegrationResponse(BaseModel):
     detail: str
 
 
+class ActiveProviderModelRequest(BaseModel):
+    provider_id: str
+    model_id: str
+
+
 class IntegrationStatusResponse(BaseModel):
     statuses: dict[str, dict[str, object]]
 
@@ -255,6 +264,12 @@ class ChatStateResponse(BaseModel):
     chats: list[dict[str, object]]
     active_chat_id: str
     daily_token_usage: list[dict[str, object]]
+
+
+class ChatStateWriteRequest(BaseModel):
+    chats: list[ChatSession] = Field(default_factory=list)
+    active_chat_id: str = ""
+    daily_token_usage: list[DailyTokenUsage] = Field(default_factory=list)
 
 
 class MemoryUserMessageRequest(BaseModel):
@@ -456,11 +471,21 @@ async def get_version() -> dict[str, object]:
 
 @app.get("/api/chat/state", response_model=ChatStateResponse)
 async def get_chat_state() -> ChatStateResponse:
-    settings = await load_settings()
+    settings = await load_chat_state()
     return ChatStateResponse(
         chats=[chat.model_dump() for chat in settings.chats],
         active_chat_id=settings.active_chat_id,
         daily_token_usage=[entry.model_dump() for entry in settings.daily_token_usage],
+    )
+
+
+@app.post("/api/chat/state", response_model=ChatStateResponse)
+async def update_chat_state(payload: ChatStateWriteRequest) -> ChatStateResponse:
+    persisted = await save_chat_state(payload.chats, payload.active_chat_id, payload.daily_token_usage)
+    return ChatStateResponse(
+        chats=[chat.model_dump() for chat in persisted.chats],
+        active_chat_id=persisted.active_chat_id,
+        daily_token_usage=[entry.model_dump() for entry in persisted.daily_token_usage],
     )
 
 
@@ -495,7 +520,7 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
         ChatMessage(role="assistant", content="", timestamp=now_iso, request_id=request_id, status="queued")
     )
     settings.active_chat_id = chat_id
-    await save_settings(settings)
+    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
 
     try:
         await register_user_message_and_maybe_extract(source_channel="gateway", source_chat_id=chat_id)
@@ -566,6 +591,33 @@ async def update_settings(settings: Settings) -> Settings:
     _merge_git_managed_ssh_params(existing, settings)
     _validate_settings_payload(settings)
     return await save_settings(settings)
+
+
+@app.post("/api/settings/active-provider-model", response_model=Settings)
+async def update_active_provider_model(payload: ActiveProviderModelRequest) -> Settings:
+    provider_id = payload.provider_id.strip()
+    model_id = payload.model_id.strip()
+    if not provider_id:
+        raise HTTPException(status_code=422, detail="Provider is required.")
+    if not model_id:
+        raise HTTPException(status_code=422, detail="Model is required.")
+
+    settings = await load_settings()
+    provider_config = settings.provider_configs.get(provider_id)
+    if provider_config is None:
+        raise HTTPException(status_code=422, detail="Selected provider is not configured.")
+
+    updated_provider_configs = dict(settings.provider_configs)
+    updated_provider_configs[provider_id] = provider_config.model_copy(update={"model": model_id})
+    updated_settings = settings.model_copy(
+        update={
+            "active_provider_id": provider_id,
+            "active_model_id": model_id,
+            "provider_configs": updated_provider_configs,
+        }
+    )
+    _validate_settings_payload(updated_settings)
+    return await save_settings(updated_settings)
 
 
 @app.post("/api/memory/user-message")
@@ -1098,7 +1150,7 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
 
     assistant.status = "processing"
     assistant.timestamp = datetime.now(timezone.utc).isoformat()
-    await save_settings(settings)
+    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
 
     resolved_provider_id = str(job.get("provider_id", "")).strip() or settings.active_provider_id
     resolved_provider_config = settings.provider_configs.get(resolved_provider_id)
@@ -1139,7 +1191,11 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
             status="done",
         )
         chat_with_analysis.messages.append(analysis_message)
-        await save_settings(settings_with_analysis)
+        await save_chat_state(
+            settings_with_analysis.chats,
+            settings_with_analysis.active_chat_id,
+            settings_with_analysis.daily_token_usage,
+        )
 
         settings = settings_with_analysis
         chat = chat_with_analysis
@@ -1228,7 +1284,7 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
         chat.total_tokens_used = max(0, chat.total_tokens_used) + used_tokens
         add_daily_usage(settings, used_tokens)
 
-    await save_settings(settings)
+    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
 
     try:
         await register_completed_turn(
@@ -1276,7 +1332,7 @@ async def _mark_gateway_request_error(chat_id: str, request_id: str, detail: str
     message.timestamp = datetime.now(timezone.utc).isoformat()
     existing = message.content.strip()
     message.content = f"{existing}\n\n{detail}".strip() if existing else detail
-    await save_settings(settings)
+    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
 
 
 async def _mark_gateway_requests_interrupted(chat_id: str, request_ids: list[str], detail: str) -> int:
@@ -1302,7 +1358,7 @@ async def _mark_gateway_requests_interrupted(chat_id: str, request_ids: list[str
         changed += 1
 
     if changed > 0:
-        await save_settings(settings)
+        await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
     return changed
 
 

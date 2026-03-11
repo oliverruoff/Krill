@@ -190,6 +190,8 @@ const state = {
   chatPersistInFlight: false,
   chatPersistQueued: false,
   chatPersistPromise: null,
+  chatStateDirty: false,
+  chatStateMutationVersion: 0,
   shortTermMemories: [],
   shortTermMemoryCount: 0,
   shortTermMemoryLastToastCount: 0,
@@ -2542,6 +2544,51 @@ async function persistSettings(nextSettings) {
   return response.json();
 }
 
+async function persistActiveProviderModel(providerId, modelId) {
+  const response = await fetch("/api/settings/active-provider-model", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider_id: providerId,
+      model_id: modelId,
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = "Failed to save active provider/model.";
+    try {
+      const payload = await response.json();
+      if (typeof payload.detail === "string" && payload.detail) {
+        detail = payload.detail;
+      }
+    } catch (error) {
+      detail = "Failed to save active provider/model.";
+    }
+    throw new Error(detail);
+  }
+
+  return response.json();
+}
+
+async function persistChatState(chats, activeChatId, dailyTokenUsage) {
+  const response = await fetch("/api/chat/state", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chats,
+      active_chat_id: activeChatId,
+      daily_token_usage: dailyTokenUsage,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await buildHttpErrorDetail(response, "Failed to save chat state.");
+    throw new Error(detail);
+  }
+
+  return response.json();
+}
+
 async function registerCompletedTurnForMemory(sourceChannel, sourceChatId, userMessage, assistantMessage) {
   const response = await fetch("/api/memory/turn-complete", {
     method: "POST",
@@ -2563,28 +2610,17 @@ async function persistChatsToSettingsDirect() {
     return;
   }
 
-  let baseSettings = state.settings;
-  try {
-    const latestResponse = await fetch("/api/settings", { cache: "no-store" });
-    if (latestResponse.ok) {
-      baseSettings = await latestResponse.json();
-    }
-  } catch (error) {
-    // Best effort: fall back to local snapshot when refresh fails.
-  }
-
-  const nextSettings = JSON.parse(JSON.stringify(baseSettings));
-  nextSettings.chats = state.chats;
-  nextSettings.active_chat_id = state.activeChatId;
-  nextSettings.mcp_configs = state.mcpConfigs;
-  nextSettings.integration_configs = state.integrationConfigs;
-  nextSettings.daily_token_usage = state.dailyTokenUsage;
-  const persisted = await persistSettings(nextSettings);
-  state.settings = persisted;
+  const persisted = await persistChatState(state.chats, state.activeChatId, state.dailyTokenUsage);
+  state.chats = normalizeIncomingChats(persisted.chats);
   if (typeof persisted.active_chat_id === "string") {
     state.activeChatId = persisted.active_chat_id;
   }
   state.dailyTokenUsage = normalizeDailyTokenUsage(persisted.daily_token_usage);
+  if (state.settings && typeof state.settings === "object") {
+    state.settings.chats = state.chats;
+    state.settings.active_chat_id = state.activeChatId;
+    state.settings.daily_token_usage = state.dailyTokenUsage;
+  }
   refreshLocalChatStateSignature();
   updateDailyTokenUsageLabel();
 }
@@ -2593,6 +2629,8 @@ async function persistChatsToSettings() {
   if (!state.settings) {
     return;
   }
+
+  markLocalChatStatePending();
 
   if (state.chatPersistInFlight) {
     state.chatPersistQueued = true;
@@ -2625,6 +2663,7 @@ async function persistChatsToSettings() {
   } finally {
     state.chatPersistInFlight = false;
     state.chatPersistPromise = null;
+    state.chatStateDirty = false;
   }
 }
 
@@ -5268,22 +5307,13 @@ async function switchActiveProviderModel(nextProviderId, nextModelId) {
       }
     }
 
-    const nextSettings = JSON.parse(JSON.stringify(state.settings));
-    const nextProviderConfig = nextSettings.provider_configs?.[nextProviderId];
+    const nextProviderConfig = state.settings.provider_configs?.[nextProviderId];
     if (!nextProviderConfig) {
       throw new Error("Selected provider is not configured.");
     }
 
     await verifyProviderModel(nextProviderId, nextModelId, nextProviderConfig.api_key || "");
-
-    nextProviderConfig.model = nextModelId;
-    nextSettings.active_provider_id = nextProviderId;
-    nextSettings.chats = state.chats;
-    nextSettings.active_chat_id = state.activeChatId;
-    nextSettings.mcp_configs = state.mcpConfigs;
-    nextSettings.integration_configs = state.integrationConfigs;
-    nextSettings.daily_token_usage = state.dailyTokenUsage;
-    const persisted = await persistSettings(nextSettings);
+    const persisted = await persistActiveProviderModel(nextProviderId, nextModelId);
 
     state.settings = persisted;
     state.dailyTokenUsage = normalizeDailyTokenUsage(persisted.daily_token_usage);
@@ -5504,6 +5534,12 @@ function refreshLocalChatStateSignature() {
   });
 }
 
+function markLocalChatStatePending() {
+  state.chatStateDirty = true;
+  state.chatStateMutationVersion += 1;
+  refreshLocalChatStateSignature();
+}
+
 function applyRemoteChatState(payload) {
   const incomingChats = normalizeIncomingChats(payload?.chats);
   const incomingActiveChatId = typeof payload?.active_chat_id === "string" ? payload.active_chat_id : "";
@@ -5528,10 +5564,11 @@ function applyRemoteChatState(payload) {
 }
 
 async function syncRemoteChatState() {
-  if (state.chatSyncInFlight || state.isCompacting || state.isSwitching) {
+  if (state.chatSyncInFlight || state.isCompacting || state.isSwitching || state.chatPersistInFlight || state.chatStateDirty) {
     return;
   }
 
+  const startedAtMutationVersion = state.chatStateMutationVersion;
   state.chatSyncInFlight = true;
   try {
     const response = await fetch("/api/chat/state", { cache: "no-store" });
@@ -5539,6 +5576,10 @@ async function syncRemoteChatState() {
       return;
     }
     const payload = await response.json();
+
+    if (startedAtMutationVersion !== state.chatStateMutationVersion || state.chatPersistInFlight || state.chatStateDirty) {
+      return;
+    }
 
     const signature = buildChatStateSignature(payload);
     if (signature === state.lastChatStateSignature) {
