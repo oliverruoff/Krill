@@ -18,6 +18,7 @@ OPENAI_CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OPENAI_CODEX_DEFAULT_BASE_URL = "https://chatgpt.com/backend-api"
 OPENAI_CODEX_JWT_CLAIM_PATH = "https://api.openai.com/auth"
 OPENAI_CODEX_MODEL_CANDIDATES: list[dict[str, object]] = [
+    {"id": "gpt-5.4", "label": "GPT-5.4", "token_limit": 1050000, "supports_images": False},
     {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex", "token_limit": 400000, "supports_images": False},
     {
         "id": "gpt-5.3-codex-spark",

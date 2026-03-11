@@ -14,6 +14,7 @@ class OpenAIProvider(LLMProvider):
     available_models = [
         {"id": "gpt-5-nano", "label": "GPT-5 Nano", "token_limit": 400000, "supports_images": True},
         {"id": "gpt-5-mini", "label": "GPT-5 Mini", "token_limit": 400000, "supports_images": True},
+        {"id": "gpt-5.4", "label": "GPT-5.4", "token_limit": 1050000, "supports_images": True},
         {"id": "gpt-5.2", "label": "GPT-5.2", "token_limit": 400000, "supports_images": True},
     ]
 
