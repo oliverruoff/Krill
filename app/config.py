@@ -97,6 +97,7 @@ TimedJobInterval = Literal[
     "monthly",
     "once",
     "hourly",
+    "every_2_hours",
     "every_30_min",
     "every_15_min",
     "every_10_min",
@@ -341,7 +342,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           id TEXT PRIMARY KEY,
           title TEXT NOT NULL DEFAULT '',
           prompt TEXT NOT NULL DEFAULT '',
-          interval_type TEXT NOT NULL DEFAULT 'daily' CHECK (interval_type IN ('daily', 'weekly', 'monthly', 'once', 'hourly', 'every_30_min', 'every_15_min', 'every_10_min', 'every_5_min')),
+          interval_type TEXT NOT NULL DEFAULT 'daily' CHECK (interval_type IN ('daily', 'weekly', 'monthly', 'once', 'hourly', 'every_2_hours', 'every_30_min', 'every_15_min', 'every_10_min', 'every_5_min')),
           start_date TEXT NOT NULL DEFAULT '',
           time_of_day TEXT NOT NULL DEFAULT '00:00',
           timezone TEXT NOT NULL DEFAULT 'UTC',
@@ -404,6 +405,7 @@ def _ensure_timed_jobs_interval_constraint(conn: sqlite3.Connection) -> None:
     table_sql = str(row["sql"] or "").lower()
     required_values = (
         "hourly",
+        "every_2_hours",
         "every_30_min",
         "every_15_min",
         "every_10_min",
@@ -426,6 +428,7 @@ def _ensure_timed_jobs_interval_constraint(conn: sqlite3.Connection) -> None:
               'monthly',
               'once',
               'hourly',
+              'every_2_hours',
               'every_30_min',
               'every_15_min',
               'every_10_min',
@@ -956,6 +959,8 @@ def _normalize_interval(raw_interval: object) -> TimedJobInterval:
     value = str(raw_interval).strip().lower()
     if value == "hourly":
         return "hourly"
+    if value == "every_2_hours":
+        return "every_2_hours"
     if value == "every_30_min":
         return "every_30_min"
     if value == "every_15_min":
@@ -1061,9 +1066,10 @@ def _calculate_next_run_at(
             candidate = candidate.replace(second=0, microsecond=0) + timedelta(days=1)
         return candidate.astimezone(timezone.utc).isoformat()
 
-    if interval in {"hourly", "every_30_min", "every_15_min", "every_10_min", "every_5_min"}:
+    if interval in {"hourly", "every_2_hours", "every_30_min", "every_15_min", "every_10_min", "every_5_min"}:
         cadence_minutes = {
             "hourly": 60,
+            "every_2_hours": 120,
             "every_30_min": 30,
             "every_15_min": 15,
             "every_10_min": 10,

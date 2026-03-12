@@ -316,6 +316,7 @@ class TimedJobWriteRequest(BaseModel):
         "monthly",
         "once",
         "hourly",
+        "every_2_hours",
         "every_30_min",
         "every_15_min",
         "every_10_min",

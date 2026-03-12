@@ -18,6 +18,7 @@ _INTERVAL_VALUES = {
     "monthly",
     "once",
     "hourly",
+    "every_2_hours",
     "every_30_min",
     "every_15_min",
     "every_10_min",
@@ -58,6 +59,7 @@ class TimedJobsMCP(MCPPlugin):
                     "monthly",
                     "once",
                     "hourly",
+                    "every_2_hours",
                     "every_30_min",
                     "every_15_min",
                     "every_10_min",
@@ -192,6 +194,7 @@ async def _tool_list_options() -> dict[str, object]:
             "monthly",
             "once",
             "hourly",
+            "every_2_hours",
             "every_30_min",
             "every_15_min",
             "every_10_min",
@@ -264,7 +267,7 @@ async def _tool_create(arguments: dict[str, object]) -> dict[str, object]:
         invalid_fields.append(
             {
                 "field": "interval",
-                "reason": "Must be one of: daily, weekly, monthly, once, hourly, every_30_min, every_15_min, every_10_min, every_5_min.",
+                "reason": "Must be one of: daily, weekly, monthly, once, hourly, every_2_hours, every_30_min, every_15_min, every_10_min, every_5_min.",
             }
         )
 
@@ -384,7 +387,7 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
             invalid_fields.append(
                 {
                     "field": "interval",
-                    "reason": "Must be one of: daily, weekly, monthly, once, hourly, every_30_min, every_15_min, every_10_min, every_5_min.",
+                    "reason": "Must be one of: daily, weekly, monthly, once, hourly, every_2_hours, every_30_min, every_15_min, every_10_min, every_5_min.",
                 }
             )
         else:
