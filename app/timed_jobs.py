@@ -51,6 +51,39 @@ def _derive_chat_title(job: TimedJob) -> str:
     return "Timed job"
 
 
+def _is_empty_provider_response_error(exc: Exception) -> bool:
+    message = str(exc).strip().lower()
+    if not message:
+        return False
+    return "empty response" in message
+
+
+async def _dispatch_hidden_empty_output_debug(
+    *,
+    job: TimedJob,
+    settings: Settings,
+    executed_at: datetime,
+) -> None:
+    if "gateway" not in job.channels:
+        return
+
+    await _dispatch_gateway(
+        job=job,
+        assistant_text="(No response text returned.)",
+        used_tokens=None,
+        used_tools=[],
+        trace_messages=[
+            {
+                "system_type": TIMED_JOB_OUTPUT_DECISION_TRACE_TYPE,
+                "content": "Output suppressed: provider returned an empty response; no integration messages were sent.",
+            }
+        ],
+        executed_at=executed_at,
+        settings=settings,
+        hidden_from_history=True,
+    )
+
+
 def _is_setup_ready(settings: Settings) -> bool:
     if not settings.setup_completed:
         return False
@@ -250,6 +283,22 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
         if mark_as_executed:
             await mark_timed_job_executed(job.id, executed_at_utc=executed_at)
     except Exception as exc:
+        if job.output_decision_enabled and _is_empty_provider_response_error(exc):
+            LOGGER.info(
+                "Timed job produced no output; suppressing all channel dispatch",
+                extra={"timed_job_id": job.id, "provider_id": provider_id},
+            )
+            with contextlib.suppress(Exception):
+                await _dispatch_hidden_empty_output_debug(
+                    job=job,
+                    settings=settings,
+                    executed_at=executed_at,
+                )
+            if mark_as_executed:
+                with contextlib.suppress(Exception):
+                    await mark_timed_job_executed(job.id, executed_at_utc=executed_at)
+            return
+
         is_auth_failure = _is_auth_provider_error(exc)
         if is_auth_failure:
             LOGGER.warning(
