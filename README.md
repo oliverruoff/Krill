@@ -27,6 +27,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
   - Telegram (bot token based Telegram chat ingress)
   - WhatsApp Web (allowlisted inbound messages bridged into Gateway automation chats)
 - Schedule timed jobs (daily/weekly/monthly/one-time/hourly/every 2h/every 30m/15m/10m/5m) with hidden prompts, channel fan-out (Gateway, Telegram), and optional AI output-decision mode
+- Browse timed jobs in collapsed cards by default, then expand a job on demand to inspect its full prompt and details
 - Timed-job auth failures are de-noised: Krill sends one reconnect warning, suppresses repeated auth-expired spam, and advances the schedule instead of tight-loop retries
 - Gateway and Setup show a visible warning banner while timed-job auth-expiry suppression is active
 - Let Krill orchestrate multi-step tool flows automatically (sequential recursive tool calls)

@@ -1364,14 +1364,34 @@ button:disabled {
 
 .timed-job-item-title {
   margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
   font-size: 0.86rem;
   font-weight: 700;
+}
+
+.timed-job-item-title:hover {
+  color: #314862;
+}
+
+.timed-job-item-title:focus-visible {
+  outline: 2px solid #7ea6d8;
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .timed-job-item-meta {
   margin: 0;
   font-size: 0.74rem;
   color: #6f7e93;
+}
+
+.timed-job-item-details {
+  display: grid;
+  gap: 0.35rem;
 }
 
 .memory-modal.hidden {

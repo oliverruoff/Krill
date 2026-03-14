@@ -292,11 +292,11 @@
             <h3 id="timed-jobs-editor-title">Job Editor</h3>
             <div class="timed-job-field">
               <label for="timed-job-title">Title</label>
-              <input id="timed-job-title" type="text" maxlength="120" placeholder="Morning digest" />
+              <input id="timed-job-title" type="text" maxlength="120" placeholder="Morning digest" autocomplete="off" data-form-type="other" />
             </div>
             <div class="timed-job-field">
               <label for="timed-job-prompt">Prompt</label>
-              <textarea id="timed-job-prompt" rows="6" maxlength="5000" placeholder="Summarize top tasks and blockers for today."></textarea>
+              <textarea id="timed-job-prompt" rows="6" maxlength="5000" placeholder="Summarize top tasks and blockers for today." autocomplete="off" data-form-type="other"></textarea>
             </div>
             <div class="timed-job-grid">
               <div class="timed-job-field">
@@ -316,11 +316,11 @@
               </div>
               <div class="timed-job-field">
                 <label for="timed-job-start-date">Start date</label>
-                <input id="timed-job-start-date" type="date" />
+                <input id="timed-job-start-date" type="date" autocomplete="off" data-form-type="other" />
               </div>
               <div class="timed-job-field">
                 <label for="timed-job-time">Time</label>
-                <input id="timed-job-time" type="time" step="60" />
+                <input id="timed-job-time" type="time" step="60" autocomplete="off" data-form-type="other" />
               </div>
             </div>
             <div class="timed-job-toggle-row">
@@ -403,21 +403,21 @@
           </div>
           <button type="button" id="change-password-close" class="brain-modal-close" aria-label="Close change password">&times;</button>
         </header>
-        <form id="change-password-form" class="change-password-form" novalidate>
+        <form id="change-password-form" class="change-password-form" novalidate autocomplete="off" data-form-type="other">
           <label class="token-usage-field" for="change-password-old">
             <span>Old password</span>
-            <input id="change-password-old" type="password" autocomplete="current-password" required maxlength="200" />
+            <input id="change-password-old" type="password" autocomplete="current-password" required maxlength="200" disabled />
           </label>
           <label class="token-usage-field" for="change-password-new">
             <span>New password</span>
-            <input id="change-password-new" type="password" autocomplete="new-password" required maxlength="200" />
+            <input id="change-password-new" type="password" autocomplete="new-password" required maxlength="200" disabled />
           </label>
           <label class="token-usage-field" for="change-password-confirm">
             <span>Confirm new password</span>
-            <input id="change-password-confirm" type="password" autocomplete="new-password" required maxlength="200" />
+            <input id="change-password-confirm" type="password" autocomplete="new-password" required maxlength="200" disabled />
           </label>
           <div class="change-password-actions">
-            <button type="submit" id="change-password-submit" class="secondary">Update password</button>
+            <button type="submit" id="change-password-submit" class="secondary" disabled>Update password</button>
           </div>
         </form>
       </section>

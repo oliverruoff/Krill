@@ -199,6 +199,7 @@ const state = {
   timedJobs: [],
   timedJobChannels: [],
   timedJobEditingId: "",
+  expandedTimedJobIds: {},
   timedJobsClockTimerId: null,
   serverTimezoneName: "UTC",
   serverTimezoneOffset: 0,
@@ -3348,11 +3349,28 @@ function setChangePasswordSubmitting(submitting) {
   }
 }
 
+function setChangePasswordFormEnabled(enabled) {
+  const allowInput = Boolean(enabled);
+  if (changePasswordOldInput instanceof HTMLInputElement) {
+    changePasswordOldInput.disabled = !allowInput;
+  }
+  if (changePasswordNewInput instanceof HTMLInputElement) {
+    changePasswordNewInput.disabled = !allowInput;
+  }
+  if (changePasswordConfirmInput instanceof HTMLInputElement) {
+    changePasswordConfirmInput.disabled = !allowInput;
+  }
+  if (changePasswordSubmitButton instanceof HTMLButtonElement) {
+    changePasswordSubmitButton.disabled = !allowInput;
+  }
+}
+
 function openChangePasswordModal() {
   if (!(changePasswordModal instanceof HTMLElement)) {
     return;
   }
   resetChangePasswordForm();
+  setChangePasswordFormEnabled(true);
   setChangePasswordSubmitting(false);
   changePasswordModal.classList.remove("hidden");
   document.body.style.overflow = "hidden";
@@ -3368,6 +3386,7 @@ function closeChangePasswordModal() {
   changePasswordModal.classList.add("hidden");
   setChangePasswordSubmitting(false);
   resetChangePasswordForm();
+  setChangePasswordFormEnabled(false);
   if (
     (!(memoryModal instanceof HTMLElement) || memoryModal.classList.contains("hidden"))
     && (!(brainModal instanceof HTMLElement) || brainModal.classList.contains("hidden"))
@@ -3651,6 +3670,9 @@ function populateTimedJobEditor(job) {
     return;
   }
   state.timedJobEditingId = typeof job.id === "string" ? job.id : "";
+  if (state.timedJobEditingId) {
+    state.expandedTimedJobIds[state.timedJobEditingId] = true;
+  }
   if (timedJobTitleInput instanceof HTMLInputElement) {
     timedJobTitleInput.value = typeof job.title === "string" ? job.title : "";
   }
@@ -3688,6 +3710,31 @@ function formatTimedJobMeta(job) {
   return `${interval} | ${status} | next: ${nextRun} | channels: ${channels} | ${outputMode}`;
 }
 
+function formatTimedJobDetails(job) {
+  const startDate = typeof job.start_date === "string" && job.start_date ? job.start_date : "-";
+  const timeOfDay = typeof job.time_of_day === "string" && job.time_of_day ? job.time_of_day : "-";
+  const lastRun = typeof job.last_run_at === "string" && job.last_run_at
+    ? formatMessageTimestamp(job.last_run_at)
+    : "-";
+  return `Start: ${startDate} | Time: ${timeOfDay} | Last run: ${lastRun}`;
+}
+
+function isTimedJobExpanded(jobId) {
+  return Boolean(state.expandedTimedJobIds[String(jobId || "")]);
+}
+
+function setTimedJobExpanded(jobId, expanded) {
+  const normalizedJobId = String(jobId || "").trim();
+  if (!normalizedJobId) {
+    return;
+  }
+  if (expanded) {
+    state.expandedTimedJobIds[normalizedJobId] = true;
+    return;
+  }
+  delete state.expandedTimedJobIds[normalizedJobId];
+}
+
 function renderTimedJobsList() {
   if (!(timedJobsListNode instanceof HTMLElement)) {
     return;
@@ -3702,16 +3749,22 @@ function renderTimedJobsList() {
   }
 
   state.timedJobs.forEach((job) => {
+    const isExpanded = isTimedJobExpanded(job.id);
     const card = document.createElement("article");
     card.className = "timed-job-item";
     card.dataset.timedJobId = job.id;
+    card.classList.toggle("is-expanded", isExpanded);
 
     const titleRow = document.createElement("div");
     titleRow.className = "timed-job-item-row";
 
-    const titleNode = document.createElement("p");
+    const titleNode = document.createElement("button");
+    titleNode.type = "button";
     titleNode.className = "timed-job-item-title";
     titleNode.textContent = job.title || "Untitled timed job";
+    titleNode.dataset.timedJobAction = "toggle-expand";
+    titleNode.dataset.timedJobId = job.id;
+    titleNode.setAttribute("aria-expanded", isExpanded ? "true" : "false");
 
     const actions = document.createElement("div");
     actions.className = "short-term-item-actions";
@@ -3753,9 +3806,20 @@ function renderTimedJobsList() {
     promptNode.className = "short-term-item-content";
     promptNode.textContent = job.prompt || "(No prompt)";
 
+    const detailsNode = document.createElement("div");
+    detailsNode.className = "timed-job-item-details";
+    detailsNode.classList.toggle("hidden", !isExpanded);
+
+    const detailsMetaNode = document.createElement("p");
+    detailsMetaNode.className = "timed-job-item-meta";
+    detailsMetaNode.textContent = formatTimedJobDetails(job);
+
+    detailsNode.appendChild(detailsMetaNode);
+    detailsNode.appendChild(promptNode);
+
     card.appendChild(titleRow);
     card.appendChild(metaNode);
-    card.appendChild(promptNode);
+    card.appendChild(detailsNode);
     timedJobsListNode.appendChild(card);
   });
 }
@@ -3893,8 +3957,8 @@ async function openTimedJobsModal() {
   document.body.style.overflow = "hidden";
   startTimedJobsClock();
   await loadTimedJobs(true);
-  if (timedJobTitleInput instanceof HTMLInputElement) {
-    timedJobTitleInput.focus();
+  if (timedJobsCloseButton instanceof HTMLButtonElement) {
+    timedJobsCloseButton.focus({ preventScroll: true });
   }
 }
 
@@ -3938,7 +4002,14 @@ async function handleTimedJobsListAction(event) {
 
   if (action === "edit") {
     populateTimedJobEditor(job);
+    renderTimedJobsList();
     setStatus("Editing timed job.");
+    return;
+  }
+
+  if (action === "toggle-expand") {
+    setTimedJobExpanded(jobId, !isTimedJobExpanded(jobId));
+    renderTimedJobsList();
     return;
   }
 
@@ -7262,6 +7333,7 @@ chatHistoryList.addEventListener("scroll", () => {
 });
 
 chatForm.addEventListener("submit", sendMessage);
+setChangePasswordFormEnabled(false);
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin) {
     return;
