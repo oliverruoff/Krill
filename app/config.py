@@ -630,6 +630,8 @@ async def save_chat_state(
     chats: list[ChatSession],
     active_chat_id: str,
     daily_token_usage: list[DailyTokenUsage],
+    *,
+    preserve_active_chat_id: bool = False,
 ) -> ChatStateSnapshot:
     await ensure_settings_file()
     async with _DB_LOCK:
@@ -639,7 +641,7 @@ async def save_chat_state(
             active_chat_id=normalized_active_chat_id,
             daily_token_usage=daily_token_usage,
         )
-        await asyncio.to_thread(_save_chat_state_sync, normalized)
+        await asyncio.to_thread(_save_chat_state_sync, normalized, preserve_active_chat_id)
         await asyncio.to_thread(_check_backup)
         return normalized
 
@@ -730,13 +732,18 @@ def _save_settings_sync(settings: Settings) -> None:
         conn.close()
 
 
-def _save_chat_state_sync(snapshot: ChatStateSnapshot) -> None:
+def _save_chat_state_sync(snapshot: ChatStateSnapshot, preserve_active_chat_id: bool = False) -> None:
     conn = _get_conn(BRAINDUMP_PATH)
     try:
         conn.execute("BEGIN TRANSACTION")
+        active_chat_id = snapshot.active_chat_id
+        if preserve_active_chat_id:
+            row = conn.execute("SELECT active_chat_id FROM settings_core WHERE id = 1").fetchone()
+            persisted_active_chat_id = str(row["active_chat_id"]) if row is not None else ""
+            active_chat_id = _normalize_active_chat_id(persisted_active_chat_id, snapshot.chats)
         conn.execute(
             "UPDATE settings_core SET active_chat_id = ? WHERE id = 1",
-            (snapshot.active_chat_id,),
+            (active_chat_id,),
         )
         _rewrite_chat_tables(conn, snapshot.chats)
         conn.execute("DELETE FROM daily_token_usage")

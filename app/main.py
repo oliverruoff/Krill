@@ -236,6 +236,7 @@ class ChatRequest(BaseModel):
 class ChatEnqueueRequest(BaseModel):
     chat_id: str = Field(min_length=1)
     message: str = Field(default="", max_length=5000)
+    client_enqueue_id: str = Field(default="", max_length=120)
     provider_id: str = ""
     model: str = ""
     api_key: str = ""
@@ -344,6 +345,21 @@ _gateway_chat_lock = asyncio.Lock()
 _gateway_chat_queues: dict[str, list[dict[str, Any]]] = {}
 _gateway_chat_tasks: dict[str, asyncio.Task[None]] = {}
 _gateway_chat_active_request_ids: dict[str, str] = {}
+_gateway_chat_client_enqueue_ids: dict[str, dict[str, tuple[str, float]]] = {}
+_GATEWAY_CHAT_CLIENT_ENQUEUE_TTL_SECONDS = 600.0
+
+
+def _prune_gateway_client_enqueue_ids(chat_id: str) -> None:
+    entries = _gateway_chat_client_enqueue_ids.get(chat_id)
+    if not entries:
+        _gateway_chat_client_enqueue_ids.pop(chat_id, None)
+        return
+    cutoff = time.time() - _GATEWAY_CHAT_CLIENT_ENQUEUE_TTL_SECONDS
+    stale_keys = [client_id for client_id, (_, created_at) in entries.items() if created_at < cutoff]
+    for client_id in stale_keys:
+        entries.pop(client_id, None)
+    if not entries:
+        _gateway_chat_client_enqueue_ids.pop(chat_id, None)
 
 
 @app.on_event("startup")
@@ -363,6 +379,7 @@ async def shutdown_event() -> None:
         _gateway_chat_tasks.clear()
         _gateway_chat_queues.clear()
         _gateway_chat_active_request_ids.clear()
+        _gateway_chat_client_enqueue_ids.clear()
     for task in tasks:
         task.cancel()
     for task in tasks:
@@ -513,15 +530,41 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
         else:
             user_content = "[Image attached]"
 
+    client_enqueue_id = payload.client_enqueue_id.strip()
+    if client_enqueue_id:
+        async with _gateway_chat_lock:
+            _prune_gateway_client_enqueue_ids(chat_id)
+            existing = _gateway_chat_client_enqueue_ids.get(chat_id, {}).get(client_enqueue_id)
+            if existing is not None:
+                return {"ok": True, "request_id": existing[0], "duplicate": True}
+
     request_id = str(uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
+    if client_enqueue_id:
+        async with _gateway_chat_lock:
+            _prune_gateway_client_enqueue_ids(chat_id)
+            chat_entries = _gateway_chat_client_enqueue_ids.setdefault(chat_id, {})
+            existing = chat_entries.get(client_enqueue_id)
+            if existing is not None:
+                return {"ok": True, "request_id": existing[0], "duplicate": True}
+            chat_entries[client_enqueue_id] = (request_id, time.time())
     ensure_runtime_context_seed(target_chat, settings)
     target_chat.messages.append(ChatMessage(role="user", content=user_content, timestamp=now_iso))
     target_chat.messages.append(
         ChatMessage(role="assistant", content="", timestamp=now_iso, request_id=request_id, status="queued")
     )
-    settings.active_chat_id = chat_id
-    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
+
+    try:
+        await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage, preserve_active_chat_id=True)
+    except Exception:
+        if client_enqueue_id:
+            async with _gateway_chat_lock:
+                entries = _gateway_chat_client_enqueue_ids.get(chat_id)
+                if entries is not None and entries.get(client_enqueue_id, ("", 0.0))[0] == request_id:
+                    entries.pop(client_enqueue_id, None)
+                    if not entries:
+                        _gateway_chat_client_enqueue_ids.pop(chat_id, None)
+        raise
 
     try:
         await register_user_message_and_maybe_extract(source_channel="gateway", source_chat_id=chat_id)
@@ -1151,7 +1194,7 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
 
     assistant.status = "processing"
     assistant.timestamp = datetime.now(timezone.utc).isoformat()
-    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
+    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage, preserve_active_chat_id=True)
 
     resolved_provider_id = str(job.get("provider_id", "")).strip() or settings.active_provider_id
     resolved_provider_config = settings.provider_configs.get(resolved_provider_id)
@@ -1196,6 +1239,7 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
             settings_with_analysis.chats,
             settings_with_analysis.active_chat_id,
             settings_with_analysis.daily_token_usage,
+            preserve_active_chat_id=True,
         )
 
         settings = settings_with_analysis
@@ -1285,7 +1329,7 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
         chat.total_tokens_used = max(0, chat.total_tokens_used) + used_tokens
         add_daily_usage(settings, used_tokens)
 
-    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
+    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage, preserve_active_chat_id=True)
 
     try:
         await register_completed_turn(
@@ -1333,7 +1377,7 @@ async def _mark_gateway_request_error(chat_id: str, request_id: str, detail: str
     message.timestamp = datetime.now(timezone.utc).isoformat()
     existing = message.content.strip()
     message.content = f"{existing}\n\n{detail}".strip() if existing else detail
-    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
+    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage, preserve_active_chat_id=True)
 
 
 async def _mark_gateway_requests_interrupted(chat_id: str, request_ids: list[str], detail: str) -> int:
@@ -1359,7 +1403,7 @@ async def _mark_gateway_requests_interrupted(chat_id: str, request_ids: list[str
         changed += 1
 
     if changed > 0:
-        await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage)
+        await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage, preserve_active_chat_id=True)
     return changed
 
 

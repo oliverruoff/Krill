@@ -239,6 +239,7 @@ const state = {
   speechFinalText: "",
   speechInterimText: "",
   pendingImageAttachment: null,
+  pendingEnqueueByChat: {},
   chatHistoryVisibleCount: CHAT_HISTORY_PAGE_SIZE,
   chatHistorySignature: "",
   chatHistorySearchTerm: "",
@@ -601,6 +602,18 @@ function clearPendingImageAttachment() {
     imageUploadInput.value = "";
   }
   renderPendingImageAttachment();
+}
+
+function clonePendingImageAttachment(pendingImage) {
+  if (!pendingImage || typeof pendingImage !== "object") {
+    return null;
+  }
+  return {
+    fileName: typeof pendingImage.fileName === "string" ? pendingImage.fileName : "image",
+    mimeType: typeof pendingImage.mimeType === "string" ? pendingImage.mimeType : "image/jpeg",
+    contentBase64: typeof pendingImage.contentBase64 === "string" ? pendingImage.contentBase64 : "",
+    previewUrl: typeof pendingImage.previewUrl === "string" ? pendingImage.previewUrl : "",
+  };
 }
 
 function renderPendingImageAttachment() {
@@ -1287,6 +1300,25 @@ function createLocalRequestId() {
   return `local-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function createClientEnqueueId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `enqueue-${crypto.randomUUID()}`;
+  }
+
+  return `enqueue-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function buildEnqueueDraftKey(message, pendingImage) {
+  const textPart = typeof message === "string" ? message.trim() : "";
+  if (!pendingImage || typeof pendingImage !== "object") {
+    return textPart;
+  }
+  const fileName = typeof pendingImage.fileName === "string" ? pendingImage.fileName : "image";
+  const mimeType = typeof pendingImage.mimeType === "string" ? pendingImage.mimeType : "image/jpeg";
+  const contentBase64 = typeof pendingImage.contentBase64 === "string" ? pendingImage.contentBase64 : "";
+  return `${textPart}::${fileName}::${mimeType}::${contentBase64}`;
+}
+
 function getLatestChatMessage(chat) {
   if (!chat || !Array.isArray(chat.messages) || chat.messages.length === 0) {
     return null;
@@ -1749,6 +1781,7 @@ async function deleteChat(chatId) {
   }
 
   removeChatRuntime(chatId);
+  delete state.pendingEnqueueByChat[chatId];
 
   state.chats.splice(index, 1);
 
@@ -5544,12 +5577,15 @@ function applyRemoteChatState(payload) {
   const incomingChats = normalizeIncomingChats(payload?.chats);
   const incomingActiveChatId = typeof payload?.active_chat_id === "string" ? payload.active_chat_id : "";
   const incomingDailyUsage = normalizeDailyTokenUsage(payload?.daily_token_usage);
+  const currentActiveChatId = state.activeChatId;
 
   state.chats = incomingChats;
   state.dailyTokenUsage = incomingDailyUsage;
   updateDailyTokenUsageLabel();
 
-  if (state.chats.some((chat) => chat.id === incomingActiveChatId)) {
+  if (currentActiveChatId && state.chats.some((chat) => chat.id === currentActiveChatId)) {
+    state.activeChatId = currentActiveChatId;
+  } else if (state.chats.some((chat) => chat.id === incomingActiveChatId)) {
     state.activeChatId = incomingActiveChatId;
   } else {
     const sorted = sortChatsByLatestMessage(state.chats);
@@ -6076,7 +6112,7 @@ async function sendMessage(event) {
   }
 
   const message = chatInput.value.trim();
-  const pendingImage = state.pendingImageAttachment;
+  const pendingImage = clonePendingImageAttachment(state.pendingImageAttachment);
   if (!message && !pendingImage) {
     setStatus("Please enter a message or attach an image.", true);
     return;
@@ -6108,6 +6144,14 @@ async function sendMessage(event) {
   const userContent = pendingImage
     ? (message ? `${message}\n\n[Image attached]` : "[Image attached]")
     : message;
+  const draftKey = buildEnqueueDraftKey(message, pendingImage);
+  if (state.pendingEnqueueByChat[chat.id] === draftKey) {
+    setStatus("This message is already being queued.", true);
+    return;
+  }
+
+  const clientEnqueueId = createClientEnqueueId();
+  state.pendingEnqueueByChat[chat.id] = draftKey;
   const localRequestId = createLocalRequestId();
   const queuedTimestamp = createTimestamp();
   const optimisticUserMessage = {
@@ -6136,6 +6180,9 @@ async function sendMessage(event) {
     renderActiveChat();
   }
   renderChatHistory();
+  chatInput.value = "";
+  clearPendingImageAttachment();
+  syncChatInputHeight();
   updateComposerState();
 
   try {
@@ -6146,6 +6193,7 @@ async function sendMessage(event) {
       body: JSON.stringify({
         chat_id: chat.id,
         message,
+        client_enqueue_id: clientEnqueueId,
         image: pendingImage
           ? {
             file_name: String(pendingImage.fileName || "image"),
@@ -6170,9 +6218,6 @@ async function sendMessage(event) {
       optimisticAssistantMessage.request_id = serverRequestId;
       optimisticUserMessage.request_id = "";
     }
-    chatInput.value = "";
-    clearPendingImageAttachment();
-    syncChatInputHeight();
     setStatus("Queued.");
     void syncRemoteChatState();
   } catch (error) {
@@ -6183,11 +6228,19 @@ async function sendMessage(event) {
       renderActiveChat();
     }
     renderChatHistory();
+    if (state.activeChatId === chat.id && !chatInput.value && !state.pendingImageAttachment) {
+      chatInput.value = message;
+      state.pendingImageAttachment = pendingImage;
+      renderPendingImageAttachment();
+      syncChatInputHeight();
+    }
     updateComposerState();
     setStatus(normalizeErrorMessage(error, "Failed to queue message."), true);
+    delete state.pendingEnqueueByChat[chat.id];
     return;
   }
 
+  delete state.pendingEnqueueByChat[chat.id];
   chatInput.focus();
 }
 

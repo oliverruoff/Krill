@@ -16,6 +16,8 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 ## What You Can Do With Krill
 
 - Chat with your configured LLM provider and keep persistent multi-chat history
+- Keep your current chat selection stable while other chats receive queued or completed messages
+- Queue messages with immediate composer clearing to reduce accidental duplicate sends
 - Switch provider/model from the gateway header while preserving chat context
 - Use built-in tools ("MCPs") for real actions:
   - Brave Search (web search)
