@@ -19,6 +19,7 @@ from ..providers.gemini_oauth import (
     probe_supported_models,
     serialize_gemini_oauth_bundle,
 )
+from ..timed_jobs import clear_timed_job_auth_alert_provider_id
 
 
 router = APIRouter()
@@ -224,6 +225,7 @@ async def _persist_gemini_oauth_credentials(credentials: GeminiOAuthCredentials)
             update={"api_key": serialize_gemini_oauth_bundle(credentials), "model": model}
         )
     await save_settings(settings)
+    await clear_timed_job_auth_alert_provider_id(GEMINI_OAUTH_PROVIDER_ID)
 
 
 def _gemini_oauth_start_html() -> str:

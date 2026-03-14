@@ -143,6 +143,7 @@ class Settings(BaseModel):
     user_message_count: int = Field(default=0, ge=0)
     daily_token_usage: list[DailyTokenUsage] = Field(default_factory=list)
     active_chat_id: str = ""
+    timed_job_auth_alert_provider_ids: list[str] = Field(default_factory=list)
     telegram_state: TelegramState = Field(default_factory=TelegramState)
     theme: Literal["light", "dark"] = "light"
 
@@ -182,6 +183,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           tool_timeout_seconds INTEGER NOT NULL DEFAULT 90,
           memory_extraction_interval INTEGER NOT NULL DEFAULT 10,
           user_message_count INTEGER NOT NULL DEFAULT 0,
+          timed_job_auth_alert_provider_ids TEXT NOT NULL DEFAULT '[]',
           theme TEXT NOT NULL DEFAULT 'light'
         );
 
@@ -362,6 +364,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_settings_core_column(conn, "user_message_count", "INTEGER NOT NULL DEFAULT 0")
     _ensure_settings_core_column(conn, "user_full_name", "TEXT NOT NULL DEFAULT ''")
     _ensure_settings_core_column(conn, "user_call_name", "TEXT NOT NULL DEFAULT ''")
+    _ensure_settings_core_column(conn, "timed_job_auth_alert_provider_ids", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_settings_core_column(conn, "theme", "TEXT NOT NULL DEFAULT 'light'")
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
@@ -594,6 +597,7 @@ def _load_settings_sync() -> Settings:
             mcp_configs=mcp_configs,
             integration_configs=integration_configs,
             daily_token_usage=usage,
+            timed_job_auth_alert_provider_ids=_deserialize_provider_id_list(core["timed_job_auth_alert_provider_ids"]),
             telegram_state=telegram_state,
             theme=_normalize_theme_mode(core["theme"]),
         )
@@ -624,6 +628,30 @@ async def save_settings(settings: Settings) -> Settings:
         await asyncio.to_thread(_save_settings_sync, normalized)
         await asyncio.to_thread(_check_backup)
         return normalized
+
+
+async def get_timed_job_auth_alert_provider_ids() -> list[str]:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_get_timed_job_auth_alert_provider_ids_sync)
+
+
+async def add_timed_job_auth_alert_provider_id(provider_id: str) -> list[str]:
+    normalized_provider_id = str(provider_id or "").strip()
+    if not normalized_provider_id:
+        return await get_timed_job_auth_alert_provider_ids()
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_update_timed_job_auth_alert_provider_ids_sync, normalized_provider_id, True)
+
+
+async def clear_timed_job_auth_alert_provider_id(provider_id: str) -> list[str]:
+    normalized_provider_id = str(provider_id or "").strip()
+    if not normalized_provider_id:
+        return await get_timed_job_auth_alert_provider_ids()
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_update_timed_job_auth_alert_provider_ids_sync, normalized_provider_id, False)
 
 
 async def save_chat_state(
@@ -657,13 +685,15 @@ def _save_settings_sync(settings: Settings) -> None:
                 bot_name = ?, system_prompt = ?, user_full_name = ?, user_call_name = ?, setup_completed = ?, 
                 active_provider_id = ?, active_model_id = ?, active_chat_id = ?,
                 tool_max_recursion = ?, tool_timeout_seconds = ?,
-                memory_extraction_interval = ?, theme = ?
+                memory_extraction_interval = ?, timed_job_auth_alert_provider_ids = ?, theme = ?
             WHERE id = 1
         """, (
             settings.bot_name, settings.system_prompt, settings.user_full_name, settings.user_call_name, int(settings.setup_completed),
             settings.active_provider_id, settings.active_model_id, settings.active_chat_id,
             settings.tool_max_recursion, settings.tool_timeout_seconds,
-            settings.memory_extraction_interval, _normalize_theme_mode(settings.theme)
+            settings.memory_extraction_interval,
+            _serialize_provider_id_list(settings.timed_job_auth_alert_provider_ids),
+            _normalize_theme_mode(settings.theme)
         ))
         
         # 2. Providers
@@ -750,6 +780,43 @@ def _save_chat_state_sync(snapshot: ChatStateSnapshot, preserve_active_chat_id: 
         for item in snapshot.daily_token_usage:
             conn.execute("INSERT INTO daily_token_usage (date, tokens) VALUES (?, ?)", (item.date, item.tokens))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _get_timed_job_auth_alert_provider_ids_sync() -> list[str]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute("SELECT timed_job_auth_alert_provider_ids FROM settings_core WHERE id = 1").fetchone()
+        if row is None:
+            return []
+        return _deserialize_provider_id_list(row["timed_job_auth_alert_provider_ids"])
+    finally:
+        conn.close()
+
+
+def _update_timed_job_auth_alert_provider_ids_sync(provider_id: str, add_provider: bool) -> list[str]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute("INSERT OR IGNORE INTO settings_core (id) VALUES (1)")
+        row = conn.execute("SELECT timed_job_auth_alert_provider_ids FROM settings_core WHERE id = 1").fetchone()
+        provider_ids = _deserialize_provider_id_list(row["timed_job_auth_alert_provider_ids"] if row is not None else "[]")
+        provider_set = {entry for entry in provider_ids if entry}
+        if add_provider:
+            provider_set.add(provider_id)
+        else:
+            provider_set.discard(provider_id)
+        normalized = sorted(provider_set)
+        conn.execute(
+            "UPDATE settings_core SET timed_job_auth_alert_provider_ids = ? WHERE id = 1",
+            (_serialize_provider_id_list(normalized),),
+        )
+        conn.commit()
+        return normalized
     except Exception:
         conn.rollback()
         raise
@@ -888,6 +955,26 @@ def _normalize_theme_mode(raw_theme: object) -> Literal["light", "dark"]:
     if value == "dark":
         return "dark"
     return "light"
+
+
+def _deserialize_provider_id_list(raw_value: object) -> list[str]:
+    if isinstance(raw_value, list):
+        return sorted({str(entry).strip() for entry in raw_value if str(entry).strip()})
+    text = str(raw_value or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = [entry.strip() for entry in text.split(",") if entry.strip()]
+    if not isinstance(parsed, list):
+        return []
+    return sorted({str(entry).strip() for entry in parsed if str(entry).strip()})
+
+
+def _serialize_provider_id_list(provider_ids: list[str]) -> str:
+    normalized = sorted({str(entry).strip() for entry in provider_ids if str(entry).strip()})
+    return json.dumps(normalized)
 
 
 def _normalize_timezone_name(raw_timezone: object) -> str:

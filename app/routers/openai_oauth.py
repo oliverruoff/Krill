@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from ..config import ProviderConfig, load_settings, save_settings
+from ..timed_jobs import clear_timed_job_auth_alert_provider_id
 from ..providers.openai_codex_oauth import (
     OPENAI_CODEX_OAUTH_PROVIDER_ID,
     OpenAICodexOAuthCredentials,
@@ -379,6 +380,7 @@ async def _persist_openai_oauth_credentials(credentials: OpenAICodexOAuthCredent
             update={"api_key": serialize_oauth_bundle(credentials), "model": existing_model}
         )
     await save_settings(settings)
+    await clear_timed_job_auth_alert_provider_id(OPENAI_CODEX_OAUTH_PROVIDER_ID)
 
 
 def _parse_openai_manual_redirect_input(raw_input: str) -> dict[str, str]:

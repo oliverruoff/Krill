@@ -94,7 +94,7 @@ from .routers.openai_oauth import router as openai_oauth_router
 from .usage import add_daily_usage
 from .version import APP_VERSION
 from .timed_jobs import get_timed_job_channel_options, start_timed_jobs_worker, stop_timed_jobs_worker
-from .timed_jobs import get_timed_job_auth_alert_provider_ids
+from .timed_jobs import get_timed_job_auth_alert_provider_ids_for_status
 from .timed_jobs import trigger_timed_job_now
 
 
@@ -903,7 +903,7 @@ async def get_timed_jobs() -> TimedJobsResponse:
 
 @app.get("/api/timed-jobs/auth-alert-status", response_model=TimedJobAuthAlertStatusResponse)
 async def get_timed_job_auth_alert_status() -> TimedJobAuthAlertStatusResponse:
-    provider_ids = get_timed_job_auth_alert_provider_ids()
+    provider_ids = await get_timed_job_auth_alert_provider_ids_for_status()
     detail = ""
     if provider_ids:
         joined = ", ".join(provider_ids)

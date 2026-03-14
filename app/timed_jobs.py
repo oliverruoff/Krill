@@ -15,6 +15,9 @@ from app.config import (
     ChatSession,
     Settings,
     TimedJob,
+    add_timed_job_auth_alert_provider_id,
+    clear_timed_job_auth_alert_provider_id,
+    get_timed_job_auth_alert_provider_ids,
     get_timed_job,
     list_due_timed_jobs,
     load_settings,
@@ -36,7 +39,6 @@ TIMED_JOB_OUTPUT_DECISION_TRACE_TYPE = "timed_job_output_decision"
 _WORKER_TASK: asyncio.Task[None] | None = None
 _STOP_EVENT = asyncio.Event()
 _RUNNING_JOB_IDS: set[str] = set()
-_AUTH_ALERT_SENT_BY_PROVIDER: set[str] = set()
 LOGGER = logging.getLogger(__name__)
 
 
@@ -241,7 +243,7 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
                 ]
 
                 if provider_id:
-                    _AUTH_ALERT_SENT_BY_PROVIDER.discard(provider_id)
+                    await clear_timed_job_auth_alert_provider_id(provider_id)
 
         safe_output = output_text.strip() or "(No response text returned.)"
         should_dispatch = True
@@ -318,7 +320,8 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
         error_text = f"Timed job error: {exc}"
         if is_auth_failure:
             provider_label = provider_id or "current provider"
-            if provider_id and provider_id in _AUTH_ALERT_SENT_BY_PROVIDER:
+            active_provider_ids = await get_timed_job_auth_alert_provider_ids() if provider_id else []
+            if provider_id and provider_id in active_provider_ids:
                 notify_failure = False
                 LOGGER.warning(
                     "Timed job auth failure notification suppressed; reconnect required",
@@ -326,7 +329,7 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
                 )
             else:
                 if provider_id:
-                    _AUTH_ALERT_SENT_BY_PROVIDER.add(provider_id)
+                    await add_timed_job_auth_alert_provider_id(provider_id)
                 error_text = (
                     f"Timed job paused: provider authentication expired for '{provider_label}'. "
                     "Reconnect this provider in Setup, then timed jobs will continue normally."
@@ -513,9 +516,9 @@ def _is_auth_provider_error(exc: Exception) -> bool:
     )
 
 
-def get_timed_job_auth_alert_provider_ids() -> list[str]:
+async def get_timed_job_auth_alert_provider_ids_for_status() -> list[str]:
     """Return provider ids currently in auth-expired suppression state."""
-    return sorted(provider_id for provider_id in _AUTH_ALERT_SENT_BY_PROVIDER if provider_id)
+    return await get_timed_job_auth_alert_provider_ids()
 
 
 async def _should_dispatch_timed_job_output(

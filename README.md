@@ -30,6 +30,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Browse timed jobs in collapsed cards by default, then expand a job on demand to inspect its full prompt and details
 - Timed-job auth failures are de-noised: Krill sends one reconnect warning, suppresses repeated auth-expired spam, and advances the schedule instead of tight-loop retries
 - Gateway and Setup show a visible warning banner while timed-job auth-expiry suppression is active
+- Reconnecting the affected OAuth provider clears the timed-job auth warning immediately, without waiting for the next successful scheduled run
 - Let Krill orchestrate multi-step tool flows automatically (sequential recursive tool calls)
 - See live tool/system trace messages while execution runs
 - Stop running tool chains and clear queued work for the active chat

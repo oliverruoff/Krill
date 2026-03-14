@@ -1401,6 +1401,7 @@ if (fields.providerOauthConnectButton instanceof HTMLButtonElement) {
     setStatus(`Opening ${oauthConfig.label} OAuth...`);
     try {
       await startProviderOAuth(providerId);
+      await syncTimedJobAuthAlertStatus();
       setStatus(`${oauthConfig.label} OAuth connected. Add provider to save.`);
     } catch (error) {
       setStatus(error.message, true);
@@ -1422,6 +1423,7 @@ if (fields.providerOauthCompleteButton instanceof HTMLButtonElement) {
     setStatus(`Completing manual ${oauthConfig.label} OAuth...`);
     try {
       await completeProviderOAuthManually(providerId);
+      await syncTimedJobAuthAlertStatus();
       setStatus(`${oauthConfig.label} OAuth connected. Add provider to save.`);
     } catch (error) {
       setStatus(error.message, true);
@@ -1442,6 +1444,7 @@ if (fields.providerOauthDisconnectButton instanceof HTMLButtonElement) {
     fields.providerOauthDisconnectButton.disabled = true;
     try {
       await disconnectProviderOAuth(providerId);
+      await syncTimedJobAuthAlertStatus();
       setStatus(`${oauthConfig.label} OAuth disconnected.`);
     } catch (error) {
       setStatus(error.message, true);
@@ -1463,6 +1466,7 @@ window.addEventListener("message", async (event) => {
   const providerId = providerEntry[0];
   await refreshOAuthStatus(providerId);
   await refreshOAuthSupportedModels(providerId);
+  await syncTimedJobAuthAlertStatus();
   renderProviderAuthInputs(fields.providerSelect.value);
 });
 
