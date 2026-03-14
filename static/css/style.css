@@ -1369,11 +1369,16 @@ button:disabled {
   background: transparent;
   text-align: left;
   cursor: pointer;
+  width: 100%;
   font-size: 0.86rem;
   font-weight: 700;
+  color: var(--text);
+  box-shadow: none;
+  margin-top: 0;
 }
 
 .timed-job-item-title:hover {
+  background: transparent;
   color: #314862;
 }
 
@@ -1392,6 +1397,10 @@ button:disabled {
 .timed-job-item-details {
   display: grid;
   gap: 0.35rem;
+}
+
+.timed-job-item-details.hidden {
+  display: none;
 }
 
 .memory-modal.hidden {

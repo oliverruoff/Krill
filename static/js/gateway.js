@@ -3710,15 +3710,6 @@ function formatTimedJobMeta(job) {
   return `${interval} | ${status} | next: ${nextRun} | channels: ${channels} | ${outputMode}`;
 }
 
-function formatTimedJobDetails(job) {
-  const startDate = typeof job.start_date === "string" && job.start_date ? job.start_date : "-";
-  const timeOfDay = typeof job.time_of_day === "string" && job.time_of_day ? job.time_of_day : "-";
-  const lastRun = typeof job.last_run_at === "string" && job.last_run_at
-    ? formatMessageTimestamp(job.last_run_at)
-    : "-";
-  return `Start: ${startDate} | Time: ${timeOfDay} | Last run: ${lastRun}`;
-}
-
 function isTimedJobExpanded(jobId) {
   return Boolean(state.expandedTimedJobIds[String(jobId || "")]);
 }
@@ -3809,12 +3800,6 @@ function renderTimedJobsList() {
     const detailsNode = document.createElement("div");
     detailsNode.className = "timed-job-item-details";
     detailsNode.classList.toggle("hidden", !isExpanded);
-
-    const detailsMetaNode = document.createElement("p");
-    detailsMetaNode.className = "timed-job-item-meta";
-    detailsMetaNode.textContent = formatTimedJobDetails(job);
-
-    detailsNode.appendChild(detailsMetaNode);
     detailsNode.appendChild(promptNode);
 
     card.appendChild(titleRow);
