@@ -57,6 +57,9 @@ Authentication bootstrap behavior:
 - after bootstrap, all app/API routes require login (except `/login` and `/api/auth/*`)
 - failed logins are tracked by client IP and automatically ban for 1 hour after 5 wrong attempts
 - password changes are available from Gateway settings (old password + new password + confirmation)
+- session cookies follow the request scheme: HTTPS requests get `Secure` cookies, plain HTTP requests do not
+- this allows both direct `http://<server-ip>:8055` access and HTTPS reverse-proxy/Tailscale access to work side by side
+- if Krill sits behind a reverse proxy, make sure Uvicorn receives trusted forwarded scheme headers so HTTPS requests are detected correctly
 
 Because all important runtime state is in one file, backup/restore is simple:
 

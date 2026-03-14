@@ -160,14 +160,7 @@ def session_cookie_secure(request: Request) -> bool:
     if override is not None:
         return _bool_env("KRILL_AUTH_SECURE_COOKIE", False)
     scheme = str(request.url.scheme).strip().lower()
-    if scheme == "https":
-        return True
-
-    host = str(request.url.hostname or "").strip().lower()
-    if host in {"localhost", "127.0.0.1", "::1"}:
-        return False
-
-    return True
+    return scheme == "https"
 
 
 def is_trust_proxy_enabled() -> bool:
