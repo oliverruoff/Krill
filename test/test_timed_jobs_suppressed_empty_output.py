@@ -103,8 +103,8 @@ async def _run_scenario(*, channels: list[str], expect_gateway_debug_chat: bool)
         hidden_chat = refreshed_settings.chats[0]
         if not hidden_chat.title.startswith("[Hidden] "):
             raise RuntimeError(f"Expected hidden Gateway debug chat title, got {hidden_chat.title!r}.")
-        if not any(message.system_type == timed_jobs.TIMED_JOB_HIDDEN_CHAT_SYSTEM_TYPE for message in hidden_chat.messages):
-            raise RuntimeError("Expected hidden Gateway debug system message in suppressed chat.")
+        if not hidden_chat.hidden_from_history:
+            raise RuntimeError("Expected hidden Gateway debug chat to stay hidden in history.")
     elif refreshed_settings.chats:
         raise RuntimeError("Telegram-only suppressed empty output should not create any Gateway chat history entry.")
 

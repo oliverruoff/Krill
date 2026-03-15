@@ -12,7 +12,6 @@ const MEMORY_MAX_LENGTH = 1000000;
 const CHAT_HISTORY_PAGE_SIZE = 15;
 const CHAT_HISTORY_SCROLL_LOAD_THRESHOLD_PX = 120;
 const WHATSAPP_CONTACTS_CACHE_PARAM = "contacts_cache_json";
-const TIMED_JOB_HIDDEN_CHAT_SYSTEM_TYPE = "timed_job_hidden_debug";
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -1117,12 +1116,8 @@ function doesChatMatchSearch(chat, normalizedSearch) {
 }
 
 function isHiddenTimedJobDebugChat(chat) {
-  if (!chat || !Array.isArray(chat.messages)) {
-    return false;
-  }
-  return chat.messages.some(
-    (message) => message && message.role === "system" && message.system_type === TIMED_JOB_HIDDEN_CHAT_SYSTEM_TYPE,
-  );
+  const title = typeof chat?.title === "string" ? chat.title.trim() : "";
+  return title.startsWith("[Hidden]");
 }
 
 function getFilteredChats(chats, searchTerm) {
@@ -1387,6 +1382,7 @@ function createChatEntry(firstMessage) {
     memory_block: "",
     total_tokens_used: 0,
     collapse_system_trace: true,
+    hidden_from_history: false,
     created_at: timestamp,
     updated_at: timestamp,
   };
@@ -2645,7 +2641,7 @@ async function persistChatsToSettingsDirect() {
   }
 
   const persisted = await persistChatState(state.chats, state.activeChatId, state.dailyTokenUsage);
-  state.chats = normalizeIncomingChats(persisted.chats);
+  state.chats = mergeSessionOnlySystemMessages(normalizeIncomingChats(persisted.chats), state.chats);
   if (typeof persisted.active_chat_id === "string") {
     state.activeChatId = persisted.active_chat_id;
   }
@@ -5475,12 +5471,60 @@ function normalizeIncomingChats(rawChats) {
           : 0,
       collapse_system_trace:
         typeof rawChat.collapse_system_trace === "boolean" ? rawChat.collapse_system_trace : true,
+      hidden_from_history: Boolean(rawChat.hidden_from_history),
       created_at: typeof rawChat.created_at === "string" ? rawChat.created_at : "",
       updated_at: typeof rawChat.updated_at === "string" ? rawChat.updated_at : "",
     });
   });
 
   return normalized;
+}
+
+function mergeSessionOnlySystemMessages(incomingChats, currentChats = []) {
+  const currentById = new Map(
+    Array.isArray(currentChats)
+      ? currentChats
+          .filter((chat) => chat && typeof chat.id === "string" && chat.id)
+          .map((chat) => [chat.id, chat])
+      : [],
+  );
+
+  return (Array.isArray(incomingChats) ? incomingChats : []).map((chat) => {
+    const current = currentById.get(chat.id);
+    if (!current || !Array.isArray(current.messages)) {
+      return chat;
+    }
+
+    const transientSystemMessages = current.messages.filter((message) => message && message.role === "system");
+    if (transientSystemMessages.length === 0) {
+      return chat;
+    }
+
+    const mergedMessages = Array.isArray(chat.messages) ? [...chat.messages] : [];
+    transientSystemMessages.forEach((message) => {
+      const duplicate = mergedMessages.some(
+        (entry) => entry
+          && entry.role === "system"
+          && entry.request_id === message.request_id
+          && entry.system_type === message.system_type
+          && entry.content === message.content,
+      );
+      if (!duplicate) {
+        mergedMessages.push({ ...message, tool_usage: normalizeToolUsage(message.tool_usage) });
+      }
+    });
+
+    mergedMessages.sort((left, right) => {
+      const leftTime = new Date(typeof left?.timestamp === "string" ? left.timestamp : 0).getTime();
+      const rightTime = new Date(typeof right?.timestamp === "string" ? right.timestamp : 0).getTime();
+      return leftTime - rightTime;
+    });
+
+    return {
+      ...chat,
+      messages: mergedMessages,
+    };
+  });
 }
 
 function ensureVisibleActiveChat() {
@@ -5526,7 +5570,7 @@ async function loadGatewayMeta() {
     state.botName = typeof settings?.bot_name === "string" ? settings.bot_name.trim() : "";
     state.coreMemories = normalizeIncomingMemories(settings.core_memories);
     state.normalMemories = normalizeIncomingMemories(settings.normal_memories);
-    state.chats = normalizeIncomingChats(settings.chats);
+    state.chats = mergeSessionOnlySystemMessages(normalizeIncomingChats(settings.chats), state.chats);
     state.dailyTokenUsage = normalizeDailyTokenUsage(settings.daily_token_usage);
     state.mcps = Array.isArray(mcps) ? mcps : [];
     state.integrations = Array.isArray(integrations) ? integrations : [];
@@ -5609,7 +5653,20 @@ async function loadGatewayMeta() {
 }
 
 function buildChatStateSignature(payload) {
-  const chats = Array.isArray(payload?.chats) ? payload.chats : [];
+  const chats = Array.isArray(payload?.chats)
+    ? payload.chats.map((chat) => {
+      if (!chat || typeof chat !== "object") {
+        return chat;
+      }
+      const messages = Array.isArray(chat.messages)
+        ? chat.messages.filter((message) => message && message.role !== "system")
+        : [];
+      return {
+        ...chat,
+        messages,
+      };
+    })
+    : [];
   const activeChatId = typeof payload?.active_chat_id === "string" ? payload.active_chat_id : "";
   const dailyTokenUsage = Array.isArray(payload?.daily_token_usage) ? payload.daily_token_usage : [];
   return JSON.stringify({ chats, activeChatId, dailyTokenUsage });
@@ -5630,7 +5687,7 @@ function markLocalChatStatePending() {
 }
 
 function applyRemoteChatState(payload) {
-  const incomingChats = normalizeIncomingChats(payload?.chats);
+  const incomingChats = mergeSessionOnlySystemMessages(normalizeIncomingChats(payload?.chats), state.chats);
   const incomingActiveChatId = typeof payload?.active_chat_id === "string" ? payload.active_chat_id : "";
   const incomingDailyUsage = normalizeDailyTokenUsage(payload?.daily_token_usage);
   const currentActiveChatId = state.activeChatId;

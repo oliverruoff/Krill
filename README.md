@@ -196,6 +196,7 @@ WhatsApp integration notes:
 - WhatsApp API endpoints are present, but runtime polling/auto-reply only runs when the WhatsApp integration and MCP are enabled
 - uses a local sidecar (`whatsapp-web.js`) with QR connect popup and allowlist filtering
 - the QR popup now advances to explicit post-scan progress states and clears stale QR images after a successful scan or failed attempt
+- Gateway/system trace messages are session-only now; they stay visible while the page is open but are no longer persisted into `braindump.db`
 - `Allowed numbers (Send / Read)` controls who the model can message and whose recent chat history it can load
 - `Allowed numbers (Trigger)` controls who can trigger WhatsApp auto-answer when Auto answer is enabled
 - auto-answer delay window is configurable via `Auto-reply min delay (s)` and `Auto-reply max delay (s)`

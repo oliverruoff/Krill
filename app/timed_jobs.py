@@ -409,24 +409,9 @@ async def _dispatch_gateway(
         memory_block="",
         total_tokens_used=0,
         collapse_system_trace=True,
+        hidden_from_history=hidden_from_history,
     )
     ensure_runtime_context_seed(chat, settings)
-
-    if hidden_from_history:
-        chat.messages.append(
-            ChatMessage(
-                role="system",
-                content=(
-                    "Timed job output was suppressed by output decision mode. "
-                    "This debug chat is hidden from history unless enabled in chat history settings."
-                ),
-                timestamp=timestamp,
-                system_type=TIMED_JOB_HIDDEN_CHAT_SYSTEM_TYPE,
-                tool_usage=[],
-                request_id="",
-                status="",
-            )
-        )
 
     for trace in trace_messages:
         content = str(trace.get("content", "")).strip()

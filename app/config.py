@@ -62,6 +62,7 @@ class ChatSession(BaseModel):
     memory_block: str = Field(default="", max_length=8000)
     total_tokens_used: int = Field(default=0, ge=0)
     collapse_system_trace: bool = True
+    hidden_from_history: bool = False
 
 
 class McpConfig(BaseModel):
@@ -207,7 +208,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           type TEXT NOT NULL DEFAULT 'normal' CHECK (type = 'normal'),
           memory_block TEXT NOT NULL DEFAULT '',
           total_tokens_used INTEGER NOT NULL DEFAULT 0,
-          collapse_system_trace INTEGER NOT NULL DEFAULT 1 CHECK (collapse_system_trace IN (0,1))
+          collapse_system_trace INTEGER NOT NULL DEFAULT 1 CHECK (collapse_system_trace IN (0,1)),
+          hidden_from_history INTEGER NOT NULL DEFAULT 0 CHECK (hidden_from_history IN (0,1))
         );
 
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -366,10 +368,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_settings_core_column(conn, "user_call_name", "TEXT NOT NULL DEFAULT ''")
     _ensure_settings_core_column(conn, "timed_job_auth_alert_provider_ids", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_settings_core_column(conn, "theme", "TEXT NOT NULL DEFAULT 'light'")
+    _ensure_chats_column(conn, "hidden_from_history", "INTEGER NOT NULL DEFAULT 0 CHECK (hidden_from_history IN (0,1))")
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
     _ensure_timed_jobs_column(conn, "timezone_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
     _ensure_timed_jobs_column(conn, "output_decision_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK (output_decision_enabled IN (0,1))")
+    _backfill_hidden_history_flags(conn)
     _ensure_timed_jobs_interval_constraint(conn)
     conn.commit()
 
@@ -388,6 +392,29 @@ def _ensure_telegram_state_column(conn: sqlite3.Connection, column_name: str, de
     if column_name in existing:
         return
     conn.execute(f"ALTER TABLE telegram_state ADD COLUMN {column_name} {definition}")
+
+
+def _ensure_chats_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
+    rows = conn.execute("PRAGMA table_info(chats)").fetchall()
+    existing = {str(row["name"]) for row in rows}
+    if column_name in existing:
+        return
+    conn.execute(f"ALTER TABLE chats ADD COLUMN {column_name} {definition}")
+
+
+def _backfill_hidden_history_flags(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        UPDATE chats
+        SET hidden_from_history = 1
+        WHERE hidden_from_history = 0
+          AND id IN (
+              SELECT DISTINCT chat_id
+              FROM chat_messages
+              WHERE role = 'system' AND system_type = 'timed_job_hidden_debug'
+          )
+        """
+    )
 
 
 def _ensure_timed_jobs_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
@@ -523,7 +550,10 @@ def _load_settings_sync() -> Settings:
         chats = []
         for chat_row in conn.execute("SELECT * FROM chats"):
             messages = []
-            msg_cursor = conn.execute("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY seq ASC", (chat_row["id"],))
+            msg_cursor = conn.execute(
+                "SELECT * FROM chat_messages WHERE chat_id = ? AND role != 'system' ORDER BY seq ASC",
+                (chat_row["id"],),
+            )
             for msg_row in msg_cursor:
                 tools = []
                 tool_cursor = conn.execute("SELECT * FROM message_tool_usage WHERE message_id = ? ORDER BY seq ASC", (msg_row["id"],))
@@ -551,7 +581,8 @@ def _load_settings_sync() -> Settings:
                 messages=messages,
                 memory_block=chat_row["memory_block"],
                 total_tokens_used=chat_row["total_tokens_used"],
-                collapse_system_trace=bool(chat_row["collapse_system_trace"])
+                collapse_system_trace=bool(chat_row["collapse_system_trace"]),
+                hidden_from_history=bool(chat_row["hidden_from_history"]) if "hidden_from_history" in chat_row.keys() else False,
             ))
         
         # 5. MCPs
@@ -713,15 +744,29 @@ def _save_settings_sync(settings: Settings) -> None:
         conn.execute("DELETE FROM chat_messages")
         conn.execute("DELETE FROM chats")
         for chat in settings.chats:
-            conn.execute("INSERT INTO chats (id, title, type, memory_block, total_tokens_used, collapse_system_trace) VALUES (?, ?, ?, ?, ?, ?)",
-                (chat.id, chat.title, chat.type, chat.memory_block, chat.total_tokens_used, int(chat.collapse_system_trace)))
-            for i, msg in enumerate(chat.messages):
+            conn.execute(
+                "INSERT INTO chats (id, title, type, memory_block, total_tokens_used, collapse_system_trace, hidden_from_history) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    chat.id,
+                    chat.title,
+                    chat.type,
+                    chat.memory_block,
+                    chat.total_tokens_used,
+                    int(chat.collapse_system_trace),
+                    int(chat.hidden_from_history),
+                ),
+            )
+            seq = 0
+            for msg in chat.messages:
+                if msg.role == "system":
+                    continue
                 cursor = conn.execute("INSERT INTO chat_messages (chat_id, seq, role, content, timestamp, system_type, request_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (chat.id, i, msg.role, msg.content, msg.timestamp, msg.system_type, msg.request_id, msg.status))
+                    (chat.id, seq, msg.role, msg.content, msg.timestamp, msg.system_type, msg.request_id, msg.status))
                 msg_id = cursor.lastrowid
                 for j, tool in enumerate(msg.tool_usage):
                     conn.execute("INSERT INTO message_tool_usage (message_id, seq, mcp_id, mcp_label, tool_id, tool_label) VALUES (?, ?, ?, ?, ?, ?)",
                         (msg_id, j, tool["mcp_id"], tool.get("mcp_label", ""), tool["tool_id"], tool.get("tool_label", "")))
+                seq += 1
                         
         # 5. MCPs
         conn.execute("DELETE FROM mcp_config_params")
@@ -828,7 +873,10 @@ def _load_chats_from_conn(conn: sqlite3.Connection) -> list[ChatSession]:
     chats: list[ChatSession] = []
     for chat_row in conn.execute("SELECT * FROM chats"):
         messages = []
-        msg_cursor = conn.execute("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY seq ASC", (chat_row["id"],))
+        msg_cursor = conn.execute(
+            "SELECT * FROM chat_messages WHERE chat_id = ? AND role != 'system' ORDER BY seq ASC",
+            (chat_row["id"],),
+        )
         for msg_row in msg_cursor:
             tools = []
             tool_cursor = conn.execute("SELECT * FROM message_tool_usage WHERE message_id = ? ORDER BY seq ASC", (msg_row["id"],))
@@ -857,6 +905,7 @@ def _load_chats_from_conn(conn: sqlite3.Connection) -> list[ChatSession]:
             memory_block=chat_row["memory_block"],
             total_tokens_used=chat_row["total_tokens_used"],
             collapse_system_trace=bool(chat_row["collapse_system_trace"]),
+            hidden_from_history=bool(chat_row["hidden_from_history"]) if "hidden_from_history" in chat_row.keys() else False,
         ))
     return chats
 
@@ -867,13 +916,24 @@ def _rewrite_chat_tables(conn: sqlite3.Connection, chats: list[ChatSession]) -> 
     conn.execute("DELETE FROM chats")
     for chat in chats:
         conn.execute(
-            "INSERT INTO chats (id, title, type, memory_block, total_tokens_used, collapse_system_trace) VALUES (?, ?, ?, ?, ?, ?)",
-            (chat.id, chat.title, chat.type, chat.memory_block, chat.total_tokens_used, int(chat.collapse_system_trace)),
+            "INSERT INTO chats (id, title, type, memory_block, total_tokens_used, collapse_system_trace, hidden_from_history) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                chat.id,
+                chat.title,
+                chat.type,
+                chat.memory_block,
+                chat.total_tokens_used,
+                int(chat.collapse_system_trace),
+                int(chat.hidden_from_history),
+            ),
         )
-        for i, msg in enumerate(chat.messages):
+        seq = 0
+        for msg in chat.messages:
+            if msg.role == "system":
+                continue
             cursor = conn.execute(
                 "INSERT INTO chat_messages (chat_id, seq, role, content, timestamp, system_type, request_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (chat.id, i, msg.role, msg.content, msg.timestamp, msg.system_type, msg.request_id, msg.status),
+                (chat.id, seq, msg.role, msg.content, msg.timestamp, msg.system_type, msg.request_id, msg.status),
             )
             msg_id = cursor.lastrowid
             for j, tool in enumerate(msg.tool_usage):
@@ -881,6 +941,7 @@ def _rewrite_chat_tables(conn: sqlite3.Connection, chats: list[ChatSession]) -> 
                     "INSERT INTO message_tool_usage (message_id, seq, mcp_id, mcp_label, tool_id, tool_label) VALUES (?, ?, ?, ?, ?, ?)",
                     (msg_id, j, tool["mcp_id"], tool.get("mcp_label", ""), tool["tool_id"], tool.get("tool_label", "")),
                 )
+            seq += 1
 
 
 def _normalize_active_chat_id(active_chat_id: str, chats: list[ChatSession]) -> str:
