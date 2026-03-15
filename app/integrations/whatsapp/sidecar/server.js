@@ -10,9 +10,27 @@ const port = Number.parseInt(process.env.WA_SIDECAR_PORT || "18777", 10);
 let client = null;
 let status = "disconnected";
 let qrDataUrl = "";
+let statusDetail = "";
 let events = [];
 let allowlist = new Set();
 let initStarted = false;
+
+async function resetClient(nextStatus, detail = "") {
+  const current = client;
+  client = null;
+  initStarted = false;
+  qrDataUrl = "";
+  status = nextStatus;
+  statusDetail = String(detail || "").trim();
+  if (!current) {
+    return;
+  }
+  try {
+    await current.destroy();
+  } catch {
+    // Ignore teardown errors during reconnect cleanup.
+  }
+}
 
 function json(res, code, payload) {
   res.writeHead(code, { "Content-Type": "application/json" });
@@ -184,7 +202,9 @@ async function ensureClient() {
     if (!initStarted) {
       initStarted = true;
       status = "initializing";
-      client.initialize().catch(() => {
+      statusDetail = "Starting WhatsApp Web session...";
+      client.initialize().catch((err) => {
+        statusDetail = String(err?.message || err || "Failed to initialize WhatsApp client.").trim();
         status = "error";
       });
     }
@@ -208,24 +228,49 @@ async function ensureClient() {
 
   client.on("qr", async (qr) => {
     status = "qr";
+    statusDetail = "Scan the QR code with WhatsApp on your phone.";
     try {
       qrDataUrl = await qrcode.toDataURL(qr);
     } catch {
       qrDataUrl = "";
     }
   });
+  client.on("loading_screen", (percent, message) => {
+    const label = String(message || "Loading WhatsApp...").trim() || "Loading WhatsApp...";
+    const numericPercent = Number.isFinite(Number(percent)) ? Math.max(0, Math.min(100, Math.round(Number(percent)))) : null;
+    status = "loading";
+    qrDataUrl = "";
+    statusDetail = numericPercent === null ? label : `${label} (${numericPercent}%)`;
+  });
+  client.on("change_state", (nextState) => {
+    if (status === "ready") {
+      return;
+    }
+    const label = String(nextState || "").trim();
+    if (!label) {
+      return;
+    }
+    qrDataUrl = "";
+    if (status !== "authenticated" && status !== "loading") {
+      status = "initializing";
+    }
+    statusDetail = `WhatsApp state: ${label}`;
+  });
   client.on("ready", () => {
     status = "ready";
     qrDataUrl = "";
+    statusDetail = "WhatsApp connected and ready.";
   });
   client.on("authenticated", () => {
     status = "authenticated";
+    qrDataUrl = "";
+    statusDetail = "QR accepted. Finalizing WhatsApp login...";
   });
-  client.on("auth_failure", () => {
-    status = "auth_failure";
+  client.on("auth_failure", (message) => {
+    void resetClient("auth_failure", message || "WhatsApp authentication failed. Please retry the QR scan.");
   });
-  client.on("disconnected", () => {
-    status = "disconnected";
+  client.on("disconnected", (reason) => {
+    void resetClient("disconnected", reason || "WhatsApp disconnected. Reconnect to continue.");
   });
   client.on("message", (msg) => {
     try {
@@ -266,7 +311,9 @@ async function ensureClient() {
 
   status = "initializing";
   initStarted = true;
-  client.initialize().catch(() => {
+  statusDetail = "Starting WhatsApp Web session...";
+  client.initialize().catch((err) => {
+    statusDetail = String(err?.message || err || "Failed to initialize WhatsApp client.").trim();
     status = "error";
   });
 }
@@ -275,18 +322,18 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
     if (req.method === "GET" && url.pathname === "/health") {
-      json(res, 200, { ok: true, status });
+      json(res, 200, { ok: true, status, detail: statusDetail });
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/connect") {
       await ensureClient();
-      json(res, 200, { ok: true, status });
+      json(res, 200, { ok: true, status, detail: statusDetail });
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/status") {
-      json(res, 200, { ok: true, status, qr_data_url: qrDataUrl });
+      json(res, 200, { ok: true, status, detail: statusDetail, qr_data_url: qrDataUrl });
       return;
     }
 
@@ -419,7 +466,9 @@ const server = http.createServer(async (req, res) => {
       }
       client = null;
       status = "disconnected";
+      statusDetail = "";
       qrDataUrl = "";
+      initStarted = false;
       json(res, 200, { ok: true });
       server.close(() => process.exit(0));
       return;

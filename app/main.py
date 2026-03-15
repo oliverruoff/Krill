@@ -212,6 +212,7 @@ class GitSshVerifyResponse(BaseModel):
 class WhatsAppStatusResponse(BaseModel):
     connected: bool
     state: str
+    detail: str = ""
     qr_data_url: str = ""
 
 
@@ -815,6 +816,7 @@ async def get_whatsapp_runtime_status() -> WhatsAppStatusResponse:
     return WhatsAppStatusResponse(
         connected=state == "ready",
         state=state or "unknown",
+        detail=str(payload.get("detail", "")),
         qr_data_url=str(payload.get("qr_data_url", "")),
     )
 
@@ -1841,19 +1843,24 @@ def _whatsapp_popup_html(error: str = "") -> str:
         + "<div id='status' class='hint'>Loading status...</div>"
         "<div id='qr' class='qr'>Waiting for QR...</div>"
         "</div><script>"
+        "function escapeHtml(v){return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');}"
         "async function tick(){"
         "try{const r=await fetch('/api/mcps/whatsapp/status',{cache:'no-store'});"
         "const p=await r.json();"
         "const state=String(p.state||'unknown');"
         "const normalizedState=state.toLowerCase();"
-        "document.getElementById('status').textContent='State: '+state;"
+        "const detail=String(p.detail||'').trim();"
+        "document.getElementById('status').textContent=detail?('State: '+state+' - '+detail):('State: '+state);"
         "if(p.connected||normalizedState==='ready'){"
         "try{if(window.opener){window.opener.postMessage({type:'krill-whatsapp-connected',state:normalizedState},window.location.origin);}}catch(_e){}"
         "try{const cr=await fetch('/api/mcps/whatsapp/contacts',{cache:'no-store'});"
         "if(cr.ok){document.getElementById('qr').innerHTML='<p>Connected and contacts loaded. Closing...</p>';window.setTimeout(function(){window.close();},900);return;}}catch(_e){}"
         "document.getElementById('qr').innerHTML='<p>Connected. You can close this window.</p>';window.setTimeout(function(){window.close();},1200);return;}"
-        "if(normalizedState==='authenticated'){document.getElementById('qr').innerHTML='<p>Authenticated. Finalizing connection...</p>'; }"
-        "if(p.qr_data_url){document.getElementById('qr').innerHTML='<img alt=\"WhatsApp QR\" style=\"max-width:280px\" src=\"'+p.qr_data_url+'\" />';}"
+        "if(normalizedState==='auth_failure'||normalizedState==='error'){document.getElementById('qr').innerHTML='<p>'+escapeHtml(detail||'WhatsApp login failed. Close this window and try Connect again.')+'</p>';window.setTimeout(tick,2000);return;}"
+        "if(normalizedState==='disconnected'){document.getElementById('qr').innerHTML='<p>'+escapeHtml(detail||'WhatsApp disconnected. Retry Connect to generate a fresh QR code.')+'</p>';window.setTimeout(tick,2000);return;}"
+        "if(normalizedState==='authenticated'||normalizedState==='loading'||normalizedState==='initializing'){document.getElementById('qr').innerHTML='<p>'+escapeHtml(detail||'Finalizing WhatsApp connection...')+'</p>';window.setTimeout(tick,1500);return;}"
+        "if(normalizedState==='qr'&&p.qr_data_url){document.getElementById('qr').innerHTML='<img alt=\"WhatsApp QR\" style=\"max-width:280px\" src=\"'+p.qr_data_url+'\" />';window.setTimeout(tick,1500);return;}"
+        "document.getElementById('qr').innerHTML='<p>'+escapeHtml(detail||'Waiting for WhatsApp to become ready...')+'</p>';"
         "}catch(_e){document.getElementById('status').textContent='Failed to load status';}"
         "window.setTimeout(tick,1500);}"
         "tick();"
