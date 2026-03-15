@@ -5,14 +5,19 @@ from __future__ import annotations
 import asyncio
 import binascii
 import base64
+import html
+import io
 import json
 import mimetypes
 import os
+import re
+import zipfile
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib import error, parse, request
+from xml.etree import ElementTree
 
 from app.config import McpConfig, load_settings, save_settings
 
@@ -41,12 +46,27 @@ GOOGLE_DRIVE_BASE_URL = "https://www.googleapis.com/drive/v3"
 GOOGLE_DRIVE_UPLOAD_BASE_URL = "https://www.googleapis.com/upload/drive/v3"
 DRIVE_UPLOAD_MAX_BYTES = 1_000_000_000
 DRIVE_UPLOAD_REQUEST_TIMEOUT_SECONDS = 900
+DRIVE_READ_DEFAULT_MAX_BYTES = 10_000_000
+DRIVE_READ_MAX_BYTES = 20_000_000
+DRIVE_READ_DEFAULT_MAX_CHARS = 20_000
+DRIVE_READ_MAX_CHARS = 100_000
 GMAIL_WRITE_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 CALENDAR_WRITE_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 CALENDAR_FULL_SCOPE = "https://www.googleapis.com/auth/calendar"
 DRIVE_READ_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 DRIVE_WRITE_SCOPE = "https://www.googleapis.com/auth/drive"
 GOOGLE_WORKSPACE_MIME_PREFIX = "application/vnd.google-apps."
+GOOGLE_DOC_MIME_TYPE = "application/vnd.google-apps.document"
+GOOGLE_SHEET_MIME_TYPE = "application/vnd.google-apps.spreadsheet"
+TEXT_LIKE_MIME_PREFIXES = ("text/",)
+TEXT_LIKE_MIME_TYPES = {
+    "application/json",
+    "application/ld+json",
+    "application/rtf",
+    "application/x-javascript",
+    "application/xml",
+    "image/svg+xml",
+}
 
 
 def normalize_google_access_mode(raw_mode: object) -> str:
@@ -320,6 +340,21 @@ class GoogleServicesMCP(MCPPlugin):
                     "required": ["file_id"],
                 },
             ),
+            McpToolSpec(
+                id="drive_read_file",
+                label="Drive Read File",
+                description="Reads supported Google Drive documents into text context (Google Docs/Sheets, PDF, DOCX, and text-like files).",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "string", "minLength": 1},
+                        "export_mime_type": {"type": "string"},
+                        "max_bytes": {"type": "integer", "minimum": 1, "maximum": DRIVE_READ_MAX_BYTES},
+                        "max_chars": {"type": "integer", "minimum": 500, "maximum": DRIVE_READ_MAX_CHARS},
+                    },
+                    "required": ["file_id"],
+                },
+            ),
         ]
 
         if normalize_google_access_mode(params.get(ACCESS_MODE_PARAM, "")) == ACCESS_MODE_READ_WRITE:
@@ -510,6 +545,9 @@ class GoogleServicesMCP(MCPPlugin):
 
             if tool_id == "drive_download_file":
                 return await asyncio.to_thread(_drive_download_file, arguments, access_token)
+
+            if tool_id == "drive_read_file":
+                return await asyncio.to_thread(_drive_read_file, arguments, access_token)
 
             if tool_id == "gmail_send_message":
                 _require_read_write(access_mode)
@@ -1278,6 +1316,57 @@ def _drive_download_file(arguments: dict[str, object], access_token: str) -> dic
     }
 
 
+def _drive_read_file(arguments: dict[str, object], access_token: str) -> dict[str, object]:
+    file_id = _required_str(arguments, "file_id")
+    requested_export_mime_type = _optional_str(arguments, "export_mime_type", "")
+    max_bytes = _optional_int(arguments, "max_bytes", DRIVE_READ_DEFAULT_MAX_BYTES, 1, DRIVE_READ_MAX_BYTES)
+    max_chars = _optional_int(arguments, "max_chars", DRIVE_READ_DEFAULT_MAX_CHARS, 500, DRIVE_READ_MAX_CHARS)
+
+    metadata_payload = _google_api_get_json(
+        f"{GOOGLE_DRIVE_BASE_URL}/files/{parse.quote(file_id, safe='')}?"
+        + parse.urlencode({"fields": "id,name,mimeType,size,modifiedTime,parents,webViewLink"}),
+        access_token=access_token,
+    )
+    metadata = _drive_file_summary(metadata_payload)
+    drive_mime = str(metadata.get("mime_type", "")).strip()
+    file_name = str(metadata.get("name", "")).strip()
+
+    download_url, output_mime, effective_export_mime_type = _drive_read_download_plan(
+        file_id=file_id,
+        file_name=file_name,
+        drive_mime=drive_mime,
+        requested_export_mime_type=requested_export_mime_type,
+    )
+    file_bytes = _google_api_request_bytes(download_url, access_token=access_token, max_bytes=max_bytes)
+    extracted_text, extraction_method = _extract_drive_file_text(
+        file_name=file_name,
+        mime_type=output_mime,
+        drive_mime_type=drive_mime,
+        file_bytes=file_bytes,
+    )
+
+    normalized_text = _normalize_extracted_text(extracted_text)
+    text_char_count = len(normalized_text)
+    text_truncated = text_char_count > max_chars
+    if text_truncated:
+        normalized_text = normalized_text[:max_chars].rstrip() + "\n...[truncated]"
+
+    return {
+        "file_id": file_id,
+        "name": file_name,
+        "mime_type": output_mime,
+        "drive_mime_type": drive_mime,
+        "modified_time": str(metadata.get("modified_time", "")).strip(),
+        "size": metadata.get("size", 0),
+        "downloaded_bytes": len(file_bytes),
+        "export_mime_type_used": effective_export_mime_type,
+        "extraction_method": extraction_method,
+        "text_char_count": text_char_count,
+        "text_truncated": text_truncated,
+        "extracted_text": normalized_text,
+    }
+
+
 def _drive_file_summary(payload: dict[str, object]) -> dict[str, object]:
     file_id = str(payload.get("id", "")).strip() if isinstance(payload, dict) else ""
     size_raw = str(payload.get("size", "")).strip() if isinstance(payload, dict) else ""
@@ -1298,6 +1387,167 @@ def _drive_file_summary(payload: dict[str, object]) -> dict[str, object]:
         "parents": parents,
         "web_view_link": str(payload.get("webViewLink", "")).strip() if isinstance(payload, dict) else "",
     }
+
+
+def _drive_read_download_plan(
+    *,
+    file_id: str,
+    file_name: str,
+    drive_mime: str,
+    requested_export_mime_type: str,
+) -> tuple[str, str, str]:
+    if drive_mime.startswith(GOOGLE_WORKSPACE_MIME_PREFIX):
+        export_mime_type = requested_export_mime_type or _default_google_workspace_export_mime_type(drive_mime)
+        if not export_mime_type:
+            raise RuntimeError(
+                "This Google Workspace file type is not supported for text extraction yet. "
+                "Supported MVP types: Google Docs and Google Sheets."
+            )
+        download_url = (
+            f"{GOOGLE_DRIVE_BASE_URL}/files/{parse.quote(file_id, safe='')}/export?"
+            + parse.urlencode({"mimeType": export_mime_type})
+        )
+        return download_url, export_mime_type, export_mime_type
+
+    guessed_mime = mimetypes.guess_type(file_name)[0] or ""
+    output_mime = drive_mime or guessed_mime or "application/octet-stream"
+    download_url = f"{GOOGLE_DRIVE_BASE_URL}/files/{parse.quote(file_id, safe='')}?alt=media"
+    return download_url, output_mime, ""
+
+
+def _default_google_workspace_export_mime_type(drive_mime: str) -> str:
+    if drive_mime == GOOGLE_DOC_MIME_TYPE:
+        return "text/plain"
+    if drive_mime == GOOGLE_SHEET_MIME_TYPE:
+        return "text/csv"
+    return ""
+
+
+def _extract_drive_file_text(
+    *,
+    file_name: str,
+    mime_type: str,
+    drive_mime_type: str,
+    file_bytes: bytes,
+) -> tuple[str, str]:
+    normalized_mime = mime_type.strip().lower()
+    suffix = Path(file_name).suffix.strip().lower()
+
+    if normalized_mime == "application/pdf" or suffix == ".pdf":
+        return _extract_pdf_text(file_bytes), "pdf"
+
+    if normalized_mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" or suffix == ".docx":
+        return _extract_docx_text(file_bytes), "docx"
+
+    if normalized_mime in {"text/html", "application/xhtml+xml"} or suffix in {".html", ".htm", ".xhtml"}:
+        return _extract_html_text(file_bytes), "html"
+
+    if _is_text_like_drive_mime_type(normalized_mime) or suffix in {".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml", ".log"}:
+        return file_bytes.decode("utf-8", errors="replace"), "text"
+
+    raise RuntimeError(
+        "Unsupported file type for text extraction. "
+        f"Drive MIME: {drive_mime_type or '(unknown)'}, output MIME: {mime_type or '(unknown)'}."
+    )
+
+
+def _is_text_like_drive_mime_type(mime_type: str) -> bool:
+    if not mime_type:
+        return False
+    if mime_type.startswith(TEXT_LIKE_MIME_PREFIXES):
+        return True
+    return mime_type in TEXT_LIKE_MIME_TYPES
+
+
+def _extract_pdf_text(file_bytes: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise RuntimeError("PDF reading requires the 'pypdf' dependency.") from exc
+
+    try:
+        reader = PdfReader(io.BytesIO(file_bytes))
+    except Exception as exc:
+        raise RuntimeError("Failed to open PDF for text extraction.") from exc
+
+    page_text: list[str] = []
+    for page in reader.pages:
+        try:
+            extracted = page.extract_text() or ""
+        except Exception:
+            extracted = ""
+        if extracted.strip():
+            page_text.append(extracted)
+
+    text = "\n\n".join(page_text).strip()
+    if text:
+        return text
+    raise RuntimeError("PDF text extraction produced no readable text. The PDF may be image-only or scanned.")
+
+
+def _extract_docx_text(file_bytes: bytes) -> str:
+    try:
+        docx_buffer = io.BytesIO(file_bytes)
+        archive = zipfile.ZipFile(docx_buffer)
+    except Exception as exc:
+        raise RuntimeError("Failed to open DOCX file for text extraction.") from exc
+
+    try:
+        document_xml = archive.read("word/document.xml")
+    except KeyError as exc:
+        raise RuntimeError("DOCX file is missing word/document.xml.") from exc
+    finally:
+        archive.close()
+        docx_buffer.close()
+
+    try:
+        root = ElementTree.fromstring(document_xml)
+    except ElementTree.ParseError as exc:
+        raise RuntimeError("DOCX XML could not be parsed.") from exc
+
+    namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    paragraphs: list[str] = []
+    for paragraph in root.findall(".//w:p", namespace):
+        text_parts: list[str] = []
+        for text_node in paragraph.findall(".//w:t", namespace):
+            if text_node.text:
+                text_parts.append(text_node.text)
+        paragraph_text = "".join(text_parts).strip()
+        if paragraph_text:
+            paragraphs.append(paragraph_text)
+
+    text = "\n\n".join(paragraphs).strip()
+    if text:
+        return text
+    raise RuntimeError("DOCX text extraction produced no readable text.")
+
+
+def _extract_html_text(file_bytes: bytes) -> str:
+    html_text = file_bytes.decode("utf-8", errors="replace")
+    without_scripts = re.sub(r"<script\b[^>]*>.*?</script>", " ", html_text, flags=re.IGNORECASE | re.DOTALL)
+    without_styles = re.sub(r"<style\b[^>]*>.*?</style>", " ", without_scripts, flags=re.IGNORECASE | re.DOTALL)
+    with_breaks = re.sub(r"<(br|/p|/div|/li|/tr|/h[1-6])\b[^>]*>", "\n", without_styles, flags=re.IGNORECASE)
+    without_tags = re.sub(r"<[^>]+>", " ", with_breaks)
+    return html.unescape(without_tags)
+
+
+def _normalize_extracted_text(text: str) -> str:
+    normalized_lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.replace("\r", "").split("\n")]
+    kept_lines: list[str] = []
+    previous_blank = False
+    for line in normalized_lines:
+        if not line:
+            if previous_blank:
+                continue
+            kept_lines.append("")
+            previous_blank = True
+            continue
+        kept_lines.append(line)
+        previous_blank = False
+    normalized = "\n".join(kept_lines).strip()
+    if normalized:
+        return normalized
+    raise RuntimeError("File was read successfully, but no readable text content was extracted.")
 
 
 def _calendar_create_event(arguments: dict[str, object], access_token: str) -> dict[str, object]:

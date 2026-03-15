@@ -41,6 +41,7 @@ _MAX_RECURSIVE_VALUE_DEPTH = 5
 _MAX_RECURSIVE_LIST_ITEMS = 20
 _MAX_RECURSIVE_DICT_ITEMS = 40
 _MAX_RETRIES_PER_TOOL_SIGNATURE = 2
+_BULKY_BINARY_FIELD_NAMES = {"content_base64"}
 
 
 async def generate_with_tools(
@@ -900,7 +901,8 @@ def _interaction_summary(interaction_log: list[dict[str, object]]) -> dict[str, 
 
 
 def _compact_payload_for_prompt(value: object) -> object:
-    compacted = _limit_recursive_value(value, depth=0)
+    compacted = _summarize_bulky_binary_fields(value)
+    compacted = _limit_recursive_value(compacted, depth=0)
     serialized = _safe_json_dumps(compacted)
     if len(serialized) <= _MAX_TOOL_RESULT_CHARS:
         return compacted
@@ -910,6 +912,27 @@ def _compact_payload_for_prompt(value: object) -> object:
         "preview": serialized[:_MAX_TOOL_RESULT_CHARS],
         "original_chars": len(serialized),
     }
+
+
+def _summarize_bulky_binary_fields(value: object) -> object:
+    if isinstance(value, dict):
+        summarized: dict[str, object] = {}
+        for key, item in value.items():
+            normalized_key = str(key)
+            if normalized_key in _BULKY_BINARY_FIELD_NAMES and isinstance(item, str):
+                summarized[normalized_key] = {
+                    "omitted": True,
+                    "reason": "binary_base64_removed_from_prompt",
+                    "original_chars": len(item),
+                }
+                continue
+            summarized[normalized_key] = _summarize_bulky_binary_fields(item)
+        return summarized
+
+    if isinstance(value, list):
+        return [_summarize_bulky_binary_fields(item) for item in value]
+
+    return value
 
 
 def _limit_recursive_value(value: object, *, depth: int) -> object:

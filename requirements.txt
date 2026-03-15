@@ -5,3 +5,4 @@ python-multipart
 playwright
 paramiko
 youtube-transcript-api
+pypdf

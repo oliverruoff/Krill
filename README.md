@@ -173,6 +173,7 @@ Google Services MCP notes:
 - click **Login Google** to complete OAuth consent
 - Gmail tools support attachments: list/download/save attachments from messages, and send email with base64 or local-file attachments (write mode required for sending)
 - Drive local uploads (`drive_upload_local_file`) now allow `max_bytes` up to 1GB
+- Drive document reading now supports `drive_read_file` for Google Docs, Google Sheets, PDFs, DOCX files, and text-like files so the model can pull file contents into context without passing raw base64 blobs through the prompt
 - if Google OAuth shows private-IP redirect errors in Docker, set `KRILL_PUBLIC_BASE_URL` to a reachable host URL (for local host-browser use: `http://localhost:8055`)
 - OAuth tokens and resolved client credentials are persisted in `braindump.db` (`mcp_config_params`), so export/import keeps the connection usable
 
