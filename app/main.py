@@ -37,7 +37,6 @@ from .config import (
     load_chat_state,
     load_settings,
     resolve_short_term_memories,
-    rehydrate_script_files,
     save_chat_state,
     save_settings,
     upsert_timed_job,
@@ -348,6 +347,7 @@ _gateway_chat_lock = asyncio.Lock()
 _gateway_chat_queues: dict[str, list[dict[str, Any]]] = {}
 _gateway_chat_tasks: dict[str, asyncio.Task[None]] = {}
 _gateway_chat_active_request_ids: dict[str, str] = {}
+_gateway_chat_user_cancelled_request_ids: set[str] = set()
 _gateway_chat_client_enqueue_ids: dict[str, dict[str, tuple[str, float]]] = {}
 _GATEWAY_CHAT_CLIENT_ENQUEUE_TTL_SECONDS = 600.0
 
@@ -369,7 +369,6 @@ def _prune_gateway_client_enqueue_ids(chat_id: str) -> None:
 async def startup_event() -> None:
     await ensure_settings_file()
     await _rehydrate_git_ssh_material()
-    await rehydrate_script_files()
     await start_memory_extraction_worker()
     await start_timed_jobs_worker()
     for integration in get_runtime_integrations():
@@ -383,6 +382,7 @@ async def shutdown_event() -> None:
         _gateway_chat_tasks.clear()
         _gateway_chat_queues.clear()
         _gateway_chat_active_request_ids.clear()
+        _gateway_chat_user_cancelled_request_ids.clear()
         _gateway_chat_client_enqueue_ids.clear()
     for task in tasks:
         task.cancel()
@@ -459,7 +459,6 @@ async def import_braindump(file: UploadFile = File(...)):
         tmp_path.write_bytes(content)
         await import_braindump_db(tmp_path)
         await _rehydrate_git_ssh_material()
-        await rehydrate_script_files()
         return {"ok": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Import failed: {exc}")
@@ -1286,7 +1285,14 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
             source_request_id=request_id,
         )
     except asyncio.CancelledError:
-        await _mark_gateway_requests_interrupted(chat_id, request_ids=[request_id], detail="Execution interrupted by user.")
+        user_cancelled = request_id in _gateway_chat_user_cancelled_request_ids
+        _gateway_chat_user_cancelled_request_ids.discard(request_id)
+        detail = (
+            "Execution interrupted by user."
+            if user_cancelled
+            else "Execution interrupted (server restart/reload or background cancellation)."
+        )
+        await _mark_gateway_requests_interrupted(chat_id, request_ids=[request_id], detail=detail)
         raise
     except Exception as exc:
         await _mark_gateway_request_error(chat_id, request_id, f"Hard error: {exc}")
@@ -1375,6 +1381,7 @@ async def _stop_gateway_chat(chat_id: str) -> int:
     request_ids = [request_id for request_id in queued_request_ids if request_id]
     if active_request_id and active_request_id not in request_ids:
         request_ids.append(active_request_id)
+    _gateway_chat_user_cancelled_request_ids.update(request_ids)
     return await _mark_gateway_requests_interrupted(chat_id, request_ids=request_ids, detail="Execution interrupted by user.")
 
 

@@ -2,17 +2,21 @@
 
 import asyncio
 import json
+import logging
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 
-from app.config import SCRIPTS_DIR, delete_script, get_script, list_scripts, rehydrate_script_files, upsert_script
+from app.config import SCRIPTS_DIR, delete_script, get_script, list_scripts, upsert_script
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
+
+logger = logging.getLogger(__name__)
 
 
 _TITLE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -63,7 +67,7 @@ class ScriptsMCP(MCPPlugin):
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 120},
                         "description": {"type": "string", "minLength": 1, "maxLength": 1024},
                         "instructions": {"type": "string", "minLength": 1, "maxLength": 5000},
                         "python_requirements": {"type": "string", "maxLength": 500},
@@ -79,7 +83,7 @@ class ScriptsMCP(MCPPlugin):
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 120},
                     },
                     "required": ["title"],
                 },
@@ -91,7 +95,7 @@ class ScriptsMCP(MCPPlugin):
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 120},
                         "only_missing": {"type": "boolean"},
                         "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 300000},
                     },
@@ -105,7 +109,7 @@ class ScriptsMCP(MCPPlugin):
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 120},
                         "input_json": {"type": "object"},
                         "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 120000},
                     },
@@ -194,8 +198,7 @@ async def _create_script(arguments: dict[str, object]) -> dict[str, object]:
         },
         script_id=title,
     )
-    rehydrate_stats = await rehydrate_script_files()
-    return _script_payload(saved, "updated" if existing is not None else "created", rehydrate_stats)
+    return _script_payload(saved, "updated" if existing is not None else "created")
 
 
 async def _list_scripts_tool() -> dict[str, object]:
@@ -210,6 +213,7 @@ async def _list_scripts_tool() -> dict[str, object]:
             {
                 "title": script.title,
                 "description": script.description,
+                "instructions": script.instructions,
                 "python_requirements": script.python_requirements,
                 "path": str(path),
             }
@@ -218,10 +222,8 @@ async def _list_scripts_tool() -> dict[str, object]:
 
 
 async def _edit_script(arguments: dict[str, object]) -> dict[str, object]:
-    title = _required_script_title(arguments.get("title"))
-    existing = await get_script(title)
-    if existing is None:
-        raise RuntimeError(f"Script '{title}' not found.")
+    title = _required_script_query(arguments.get("title"))
+    existing = await _resolve_script_for_execution(title)
 
     changed = False
     description = existing.description
@@ -258,28 +260,23 @@ async def _edit_script(arguments: dict[str, object]) -> dict[str, object]:
             "file_name": existing.file_name,
             "created_at": existing.created_at,
         },
-        script_id=title,
+        script_id=str(existing.id),
     )
-    rehydrate_stats = await rehydrate_script_files()
-    return _script_payload(saved, "updated", rehydrate_stats)
+    return _script_payload(saved, "updated")
 
 
 async def _check_script_requirements_tool(arguments: dict[str, object]) -> dict[str, object]:
-    title = _required_script_title(arguments.get("title"))
-    script = await get_script(title)
-    if script is None:
-        raise RuntimeError(f"Script '{title}' not found.")
+    title = _required_script_query(arguments.get("title"))
+    script = await _resolve_script_for_execution(title)
     return await _evaluate_script_requirements(script)
 
 
 async def _install_script_requirements_tool(arguments: dict[str, object]) -> dict[str, object]:
-    title = _required_script_title(arguments.get("title"))
+    title = _required_script_query(arguments.get("title"))
     timeout_ms = _optional_timeout_ms(arguments.get("timeout_ms"), default_ms=180000, max_ms=300000)
     only_missing = bool(arguments.get("only_missing", True))
 
-    script = await get_script(title)
-    if script is None:
-        raise RuntimeError(f"Script '{title}' not found.")
+    script = await _resolve_script_for_execution(title)
 
     check = await _evaluate_script_requirements(script)
     all_requirements = _as_string_list(check.get("python_requirements_list"))
@@ -310,36 +307,46 @@ async def _install_script_requirements_tool(arguments: dict[str, object]) -> dic
 
 
 async def _execute_script(arguments: dict[str, object]) -> dict[str, object]:
-    title = _required_script_title(arguments.get("title"))
+    try:
+        return await _execute_script_inner(arguments)
+    except Exception as exc:
+        exc_type = type(exc).__name__
+        exc_msg = str(exc).strip() or "(no message)"
+        logger.error("execute_script FAILED: %s: %s", exc_type, exc_msg, exc_info=True)
+        raise RuntimeError(f"execute_script failed: {exc_type}: {exc_msg}") from exc
+
+
+async def _execute_script_inner(arguments: dict[str, object]) -> dict[str, object]:
+    logger.info("execute_script called with arguments: %s", json.dumps({k: str(v)[:200] for k, v in arguments.items()}, ensure_ascii=True))
+    title = _required_script_query(arguments.get("title"))
     timeout_ms = _optional_timeout_ms(arguments.get("timeout_ms"), default_ms=30000, max_ms=120000)
-    input_json = arguments.get("input_json")
-    if input_json is None:
-        input_json = {}
-    if not isinstance(input_json, dict):
-        raise RuntimeError("input_json must be a JSON object.")
+    input_json = _normalize_script_input_payload(arguments.get("input_json"))
 
-    script = await get_script(title)
-    if script is None:
-        raise RuntimeError(f"Script '{title}' not found.")
+    logger.info("execute_script resolved title=%r, timeout_ms=%d", title, timeout_ms)
+    script = await _resolve_script_for_execution(title)
+    logger.info("execute_script resolved script id=%s title=%s", getattr(script, "id", "?"), getattr(script, "title", "?"))
 
-    path = _resolve_script_path(script.file_name)
-    temp_path: Path | None = None
-    execution_path = path
-    if not path.exists() or not path.is_file():
-        temp_path = await _materialize_temp_script(script)
-        execution_path = temp_path
+    # Always use a temp file for execution to avoid stale data/scripts/ files
+    # and to prevent uvicorn --reload from being triggered by writes to data/scripts/.
+    temp_path = await _materialize_temp_script(script)
+    execution_path = temp_path
+    logger.info("execute_script using temp file at %s", execution_path)
 
     before_check = await _evaluate_script_requirements(script)
     install_result: dict[str, object] | None = None
     missing_before = _as_string_list(before_check.get("missing_requirements"))
     if missing_before:
-        install_result = await _run_pip_install(missing_before, timeout_ms=180000)
+        # Cap pip install timeout to leave room for actual script execution within the
+        # orchestrator's overall tool_timeout_seconds (typically 90s).
+        pip_timeout = min(timeout_ms, 60000)
+        logger.info("execute_script installing missing requirements: %s (pip timeout=%dms)", missing_before, pip_timeout)
+        install_result = await _run_pip_install(missing_before, timeout_ms=pip_timeout)
         if install_result["exit_code"] != 0:
             await _cleanup_temp_script(temp_path)
             return {
                 "status": "dependency_install_failed",
                 "title": script.title,
-                "path": str(path),
+                "path": str(_resolve_script_path(script.file_name)),
                 "missing_requirements": missing_before,
                 "pip": install_result,
             }
@@ -351,38 +358,31 @@ async def _execute_script(arguments: dict[str, object]) -> dict[str, object]:
         return {
             "status": "requirements_missing",
             "title": script.title,
-            "path": str(path),
+            "path": str(_resolve_script_path(script.file_name)),
             "missing_requirements": missing_after,
             "detail": "Some python requirements are still missing after install attempt.",
         }
 
     stdin_text = json.dumps(input_json, ensure_ascii=True)
+    cli_args = _build_cli_args_from_input(input_json)
     started = time.monotonic()
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        str(execution_path),
-        stdin_text,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    logger.info("execute_script running script at %s with cli_args=%s", execution_path, cli_args)
+    execution_result = await _run_script_process_attempts(
+        execution_path=execution_path,
+        stdin_text=stdin_text,
+        timeout_ms=timeout_ms,
         env=env,
+        cli_args=cli_args,
     )
-    try:
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(stdin_text.encode("utf-8")),
-            timeout=timeout_ms / 1000.0,
-        )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
+    if execution_result.get("timeout"):
         duration_ms = int((time.monotonic() - started) * 1000)
         await _cleanup_temp_script(temp_path)
         return {
             "status": "timeout",
             "title": script.title,
-            "path": str(path),
+            "path": str(_resolve_script_path(script.file_name)),
             "timeout_ms": timeout_ms,
             "duration_ms": duration_ms,
             "stdout": "",
@@ -393,14 +393,20 @@ async def _execute_script(arguments: dict[str, object]) -> dict[str, object]:
         }
 
     duration_ms = int((time.monotonic() - started) * 1000)
-    stdout_text = _truncate_text(stdout_bytes.decode("utf-8", errors="replace"))
-    stderr_text = _truncate_text(stderr_bytes.decode("utf-8", errors="replace"))
-    exit_code = proc.returncode
+    stdout_text = str(execution_result.get("stdout", ""))
+    stderr_text = str(execution_result.get("stderr", ""))
+    exit_code = int(execution_result.get("exit_code", -1))
+    logger.info(
+        "execute_script completed: exit_code=%s mode=%s duration_ms=%d stdout_len=%d stderr_len=%d",
+        exit_code, execution_result.get("mode", "?"), duration_ms, len(stdout_text), len(stderr_text),
+    )
+    if exit_code != 0:
+        logger.warning("execute_script non-zero exit: stderr=%s", stderr_text[:500])
     await _cleanup_temp_script(temp_path)
     return {
         "status": "ok" if exit_code == 0 else "error",
         "title": script.title,
-        "path": str(path),
+        "path": str(_resolve_script_path(script.file_name)),
         "timeout_ms": timeout_ms,
         "duration_ms": duration_ms,
         "stdout": stdout_text,
@@ -408,29 +414,28 @@ async def _execute_script(arguments: dict[str, object]) -> dict[str, object]:
         "exit_code": exit_code,
         "requirements_check": after_check,
         "pip": install_result,
+        "execution_mode": str(execution_result.get("mode", "unknown")),
     }
 
 
 async def _remove_script(arguments: dict[str, object]) -> dict[str, object]:
-    title = _required_script_title(arguments.get("title"))
-    existing = await get_script(title)
+    title = _required_script_query(arguments.get("title"))
+    existing = await _resolve_script_for_execution(title)
     if existing is None:
         raise RuntimeError(f"Script '{title}' not found.")
 
     path = _resolve_script_path(existing.file_name)
-    deleted = await delete_script(title)
+    deleted = await delete_script(str(existing.id))
     if not deleted:
         raise RuntimeError(f"Script '{title}' could not be deleted.")
 
     await asyncio.to_thread(path.unlink, missing_ok=True)
-    rehydrate_stats = await rehydrate_script_files()
     return {
         "status": "deleted",
         "id": title,
         "title": existing.title,
         "file_name": existing.file_name,
         "path": str(path),
-        "rehydration": rehydrate_stats,
     }
 
 
@@ -450,6 +455,180 @@ async def _cleanup_temp_script(path: Path | None) -> None:
         await asyncio.to_thread(path.unlink, missing_ok=True)
     except Exception:
         return
+
+
+async def _resolve_script_for_execution(requested_title: str) -> object:
+    exact = await get_script(requested_title)
+    if exact is not None:
+        return exact
+
+    scripts = await list_scripts()
+    if len(scripts) == 1:
+        return scripts[0]
+
+    lowered = requested_title.lower()
+    query_tokens = set(re.findall(r"[a-z0-9]+", lowered))
+    best: object | None = None
+    best_score = -1
+    for script in scripts:
+        title = str(getattr(script, "title", "")).strip()
+        description = str(getattr(script, "description", "")).strip().lower()
+        instructions = str(getattr(script, "instructions", "")).strip().lower()
+        if not title:
+            continue
+        title_lower = title.lower()
+        title_words = set(re.findall(r"[a-z0-9]+", title_lower))
+        exact_phrase = title_lower in lowered or title_lower.replace("-", " ") in lowered
+        overlap = len(title_words.intersection(query_tokens))
+        semantic_overlap = len(set(re.findall(r"[a-z0-9]+", f"{description} {instructions}")).intersection(query_tokens))
+        score = (100 if exact_phrase else 0) + overlap * 3 + semantic_overlap
+        if score > best_score:
+            best_score = score
+            best = script
+
+    if best is not None and best_score > 0:
+        return best
+    raise RuntimeError(f"Script '{requested_title}' not found.")
+
+
+def _normalize_script_input_payload(value: object) -> dict[str, object]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, bool):
+        return {"value": value}
+    if isinstance(value, int | float):
+        return _number_payload(int(value))
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            decoded = json.loads(text)
+            if isinstance(decoded, dict):
+                return decoded
+            if isinstance(decoded, int | float):
+                return _number_payload(int(decoded))
+            if isinstance(decoded, list):
+                return {"args": decoded, "argv": decoded}
+        except Exception:
+            pass
+        if re.fullmatch(r"-?\d+", text):
+            return _number_payload(int(text))
+        return {"input": text, "value": text}
+    if isinstance(value, list):
+        payload: dict[str, object] = {"args": value, "argv": value}
+        first = value[0] if value else None
+        if isinstance(first, int | float):
+            payload.update(_number_payload(int(first)))
+        elif isinstance(first, str) and re.fullmatch(r"-?\d+", first.strip()):
+            payload.update(_number_payload(int(first.strip())))
+        return payload
+    return {"value": str(value)}
+
+
+def _number_payload(number: int) -> dict[str, object]:
+    return {
+        "limit": number,
+        "count": number,
+        "n": number,
+        "number": number,
+        "value": number,
+        "input": number,
+        "to": number,
+    }
+
+
+def _build_cli_args_from_input(input_payload: dict[str, object]) -> list[str]:
+    if len(input_payload) == 0:
+        return []
+    numeric_keys = ["n", "limit", "count", "number", "value", "input", "to"]
+    for key in numeric_keys:
+        value = input_payload.get(key)
+        if isinstance(value, int | float):
+            return [str(int(value))]
+        if isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
+            return [value.strip()]
+
+    args = input_payload.get("args")
+    if isinstance(args, list):
+        values = [str(item) for item in args if str(item).strip()]
+        if values:
+            return values
+    argv = input_payload.get("argv")
+    if isinstance(argv, list):
+        values = [str(item) for item in argv if str(item).strip()]
+        if values:
+            return values
+    return []
+
+
+async def _run_script_process_attempts(
+    *,
+    execution_path: Path,
+    stdin_text: str,
+    timeout_ms: int,
+    env: dict[str, str],
+    cli_args: list[str],
+) -> dict[str, object]:
+    """Run a script with multiple argument strategies, using subprocess.run in a thread.
+
+    Uses synchronous subprocess.run via asyncio.to_thread instead of
+    asyncio.create_subprocess_exec because the latter requires ProactorEventLoop
+    on Windows, which uvicorn does not guarantee.
+    """
+    attempts: list[tuple[str, list[str]]] = [("json_argv", [stdin_text])]
+    if cli_args:
+        attempts.append(("positional_args", cli_args))
+    attempts.append(("stdin_only", []))
+
+    last_result: dict[str, object] = {
+        "mode": "none",
+        "exit_code": -1,
+        "stdout": "",
+        "stderr": "",
+        "timeout": False,
+    }
+    timeout_seconds = timeout_ms / 1000.0
+
+    for mode, argv in attempts:
+        cmd = [sys.executable, str(execution_path)] + argv
+
+        def _run_process(command: list[str] = cmd, attempt_mode: str = mode) -> dict[str, object]:
+            try:
+                result = subprocess.run(
+                    command,
+                    input=stdin_text.encode("utf-8"),
+                    capture_output=True,
+                    timeout=timeout_seconds,
+                    env=env,
+                )
+                return {
+                    "mode": attempt_mode,
+                    "exit_code": result.returncode,
+                    "stdout": _truncate_text(result.stdout.decode("utf-8", errors="replace")),
+                    "stderr": _truncate_text(result.stderr.decode("utf-8", errors="replace")),
+                    "timeout": False,
+                }
+            except subprocess.TimeoutExpired:
+                return {
+                    "mode": attempt_mode,
+                    "exit_code": None,
+                    "stdout": "",
+                    "stderr": f"Script execution exceeded timeout of {timeout_ms} ms.",
+                    "timeout": True,
+                }
+
+        attempt_result = await asyncio.to_thread(_run_process)
+
+        if attempt_result.get("timeout"):
+            return attempt_result
+
+        last_result = attempt_result
+        if attempt_result.get("exit_code") == 0:
+            return last_result
+    return last_result
 
 
 async def _evaluate_script_requirements(script: object) -> dict[str, object]:
@@ -473,41 +652,46 @@ async def _evaluate_script_requirements(script: object) -> dict[str, object]:
 
 
 async def _run_pip_install(requirements: list[str], *, timeout_ms: int) -> dict[str, object]:
+    """Install pip requirements using subprocess.run in a thread.
+
+    Uses synchronous subprocess.run via asyncio.to_thread instead of
+    asyncio.create_subprocess_exec for Windows compatibility (ProactorEventLoop).
+    """
     if len(requirements) == 0:
         return {"stdout": "", "stderr": "", "exit_code": 0, "timeout_ms": timeout_ms}
 
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
+    cmd = [
+        sys.executable, "-m", "pip", "install",
         "--disable-pip-version-check",
         *requirements,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
-    try:
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout_ms / 1000.0
-        )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
-        return {
-            "stdout": "",
-            "stderr": f"pip install exceeded timeout of {timeout_ms} ms.",
-            "exit_code": -1,
-            "timeout_ms": timeout_ms,
-        }
-    return {
-        "stdout": _truncate_text(stdout_bytes.decode("utf-8", errors="replace")),
-        "stderr": _truncate_text(stderr_bytes.decode("utf-8", errors="replace")),
-        "exit_code": proc.returncode,
-        "timeout_ms": timeout_ms,
-    }
+    ]
+    timeout_seconds = timeout_ms / 1000.0
+
+    def _run() -> dict[str, object]:
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=timeout_seconds,
+                env=env,
+            )
+            return {
+                "stdout": _truncate_text(result.stdout.decode("utf-8", errors="replace")),
+                "stderr": _truncate_text(result.stderr.decode("utf-8", errors="replace")),
+                "exit_code": result.returncode,
+                "timeout_ms": timeout_ms,
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "stdout": "",
+                "stderr": f"pip install exceeded timeout of {timeout_ms} ms.",
+                "exit_code": -1,
+                "timeout_ms": timeout_ms,
+            }
+
+    return await asyncio.to_thread(_run)
 
 
 def _is_requirement_installed(item: dict[str, str]) -> bool:
@@ -519,7 +703,7 @@ def _is_requirement_installed(item: dict[str, str]) -> bool:
         return False
 
 
-def _script_payload(saved: object, status: str, rehydrate_stats: dict[str, int]) -> dict[str, object]:
+def _script_payload(saved: object, status: str) -> dict[str, object]:
     file_name = str(getattr(saved, "file_name", ""))
     return {
         "status": status,
@@ -532,7 +716,6 @@ def _script_payload(saved: object, status: str, rehydrate_stats: dict[str, int])
             "instructions": str(getattr(saved, "instructions", "")),
             "python_requirements": str(getattr(saved, "python_requirements", "")),
         },
-        "rehydration": rehydrate_stats,
     }
 
 
@@ -570,6 +753,17 @@ def _required_script_title(value: object) -> str:
     if "--" in title:
         raise RuntimeError("title must not contain consecutive hyphens.")
     return title
+
+
+def _required_script_query(value: object) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError("Missing required argument 'title'.")
+    text = " ".join(value.split()).strip()
+    if not text:
+        raise RuntimeError("Missing required argument 'title'.")
+    if len(text) > 120:
+        raise RuntimeError("title must be 120 characters or fewer.")
+    return text
 
 
 def _required_limited_text(value: object, field_name: str, max_length: int) -> str:

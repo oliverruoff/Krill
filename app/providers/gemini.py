@@ -68,6 +68,25 @@ class GeminiProvider(LLMProvider):
             text = _extract_text(retry_body)
             if not text:
                 detail = _extract_empty_reason(retry_body)
+                if "MALFORMED_FUNCTION_CALL" in detail:
+                    fallback_prompt = merged_system_prompt.strip()
+                    directive = (
+                        "Important: return plain text only. Do not emit functionCall or functionResponse parts."
+                    )
+                    fallback_prompt = f"{fallback_prompt}\n\n{directive}" if fallback_prompt else directive
+                    fallback_payload: dict[str, object] = {"contents": contents}
+                    fallback_payload["system_instruction"] = {"parts": [{"text": fallback_prompt}]}
+                    try:
+                        fallback_body = await asyncio.to_thread(_post_json_return_body, endpoint, fallback_payload)
+                        fallback_text = _extract_text(fallback_body)
+                        if fallback_text:
+                            response_body = fallback_body
+                            text = fallback_text
+                    except Exception:
+                        pass
+
+            if not text:
+                detail = _extract_empty_reason(retry_body)
                 if detail:
                     raise RuntimeError(f"Gemini returned an empty response. {detail}")
                 raise RuntimeError("Gemini returned an empty response.")
