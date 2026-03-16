@@ -117,6 +117,7 @@ Current tools:
 - `local_files` (enabled by default)
 - `memory_access` (enabled by default)
 - `opencode` (disabled by default, delegates coding work to `npx opencode run`)
+- `scripts` (disabled by default, creates DB-backed Python scripts with metadata comments in `data/scripts`)
 - `ssh_control` (disabled by default, chat-driven SSH connect/execute/session management)
 - `timed_jobs` (manage timed jobs via tools: list/get/create/update/delete/trigger)
 - `youtube_summarizer` (enabled by default, fetches YouTube transcripts and summarizes videos)
@@ -135,6 +136,70 @@ OpenCode MCP notes:
 - exposes planning/build tools (`opencode_plan`, `opencode_build`)
 - always uses the fixed free model `opencode/minimax-m2.5-free`
 - OpenCode sessions are kept in-memory per channel/chat and reset on app/container restart
+
+Scripts MCP notes:
+
+- disabled by default
+- tools: `create_script`, `list_scripts`, `edit_script`, `check_script_requirements`, `install_script_requirements`, `execute_script`, `remove_script`
+- every script is one Python file under `data/scripts` with required metadata comment rows:
+  - `# krill-script-title: ...`
+  - `# krill-script-description: ...`
+  - `# krill-script-instructions: ...`
+  - `# krill-script-python-requirements: ...`
+- script definitions are also persisted in `braindump.db` (`scripts` table), so braindump import/export restores script files
+- `list_scripts` returns the current stored script catalog (title/metadata/path)
+- `edit_script` updates metadata and/or body for an existing script title
+- `check_script_requirements` validates installed Python dependencies for a script
+- `install_script_requirements` installs dependencies from `python_requirements` using pip
+- `execute_script` auto-installs missing Python dependencies, then runs the script by title using server Python (supports optional `input_json` and `timeout_ms`)
+- `remove_script` deletes a stored script from `braindump.db` and removes its file from `data/scripts`
+
+#### Scripts MCP: Agent Skills pendant for Python files
+
+Krill `scripts` is the Python-file pendant to Agent Skills:
+
+- Agent Skills: one skill folder with `SKILL.md` frontmatter + instructions
+- Krill Scripts: one `.py` file with top metadata comment rows + script body
+
+This gives Krill a progressive-disclosure-like flow:
+
+1. the orchestrator gets lightweight script discovery context (`title`, `description`, `path`)
+2. when relevant, it can call `scripts.execute_script`
+3. script execution is explicit and observable through MCP tool traces
+
+How script persistence works:
+
+- source of truth is `braindump.db` (`scripts` table)
+- script files are materialized in `data/scripts`
+- on startup and after braindump import, Krill rehydrates files from DB so scripts survive export/import cycles
+
+Crucial script metadata comments (required at the top of each script file):
+
+- `# krill-script-title: ...`
+  - stable script identifier
+  - constraints: lowercase slug format `^[a-z0-9]+(?:-[a-z0-9]+)*$`, max 64 chars
+- `# krill-script-description: ...`
+  - discovery text used by orchestration/planning to decide when a script is relevant
+  - constraint: max 1024 chars
+- `# krill-script-instructions: ...`
+  - concise runtime intent and usage guidance for the script
+  - constraint: max 5000 chars
+- `# krill-script-python-requirements: ...`
+  - optional comma-separated Python package requirements (for example: `pandas>=2.2, requests==2.32.3`)
+  - single-line, comma-separated format; constraint: max 500 chars
+
+Why these comments matter:
+
+- they make each script self-describing and auditable like a skill file
+- they provide the script execution contract and dependency context in the script itself
+- they keep behavior portable: one file contains both metadata and executable logic
+
+Execution contract for script authors:
+
+- `execute_script` checks `python_requirements` and auto-installs missing dependencies before executing
+- `execute_script` passes optional `input_json` to the script via `stdin` as JSON text
+- scripts should parse `stdin`, run deterministically, print result to `stdout`, and use `stderr` for errors
+- `timeout_ms` is enforced by the MCP tool; long-running scripts should be designed with that bound in mind
 
 Browser Control MCP notes:
 

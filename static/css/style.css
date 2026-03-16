@@ -2034,6 +2034,17 @@ button:disabled {
   display: none;
 }
 
+.mcp-scripts-list {
+  margin: 0;
+  padding-left: 1rem;
+  max-height: 9.2rem;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.18rem;
+  font-size: 0.71rem;
+  color: #5f6f87;
+}
+
 .mcp-card-actions {
   display: flex;
   gap: 0.4rem;
@@ -3220,6 +3231,7 @@ button:disabled {
 :root[data-theme="dark"] .assistant-meta-subtle,
 :root[data-theme="dark"] .current-chat-title,
 :root[data-theme="dark"] .mcp-description,
+:root[data-theme="dark"] .mcp-scripts-list,
 :root[data-theme="dark"] .memory-token-subtle,
 :root[data-theme="dark"] .memory-modal-card-time,
 :root[data-theme="dark"] .memory-edit-hint,

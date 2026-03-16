@@ -167,6 +167,7 @@ const state = {
   settings: null,
   dailyTokenUsage: [],
   mcps: [],
+  scriptTitles: [],
   mcpConfigs: {},
   integrations: [],
   integrationConfigs: {},
@@ -3929,6 +3930,40 @@ async function refreshTimedJobsAfterMcpUsage(toolUsage) {
   await loadTimedJobs(renderModal);
 }
 
+async function refreshScriptsAfterMcpUsage(toolUsage) {
+  if (!Array.isArray(toolUsage) || toolUsage.length === 0) {
+    return;
+  }
+  const usedScriptsMcp = toolUsage.some((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    if (String(entry.mcp_id || "") !== "scripts") {
+      return false;
+    }
+    const toolId = String(entry.tool_id || "");
+    return (
+      toolId === "create_script"
+      || toolId === "edit_script"
+      || toolId === "check_script_requirements"
+      || toolId === "install_script_requirements"
+      || toolId === "execute_script"
+      || toolId === "remove_script"
+    );
+  });
+  if (!usedScriptsMcp) {
+    return;
+  }
+
+  const response = await fetch("/api/mcps/scripts", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(await buildHttpErrorDetail(response, "Failed to refresh scripts list."));
+  }
+  const payload = await response.json();
+  state.scriptTitles = normalizeScriptTitles(payload?.titles);
+  renderMcpPanel();
+}
+
 async function openTimedJobsModal() {
   if (!(timedJobsModal instanceof HTMLElement)) {
     return;
@@ -5169,6 +5204,43 @@ function renderConfigPanel(container, items, getConfig, options) {
       actions.appendChild(loginButton);
       actions.appendChild(verifyButton);
       cardBody.appendChild(actions);
+    } else if (options.kind === "mcp" && item.id === "scripts") {
+      const scriptsBox = document.createElement("div");
+      scriptsBox.className = "mcp-guide";
+
+      const scriptsTitle = document.createElement("p");
+      scriptsTitle.className = "mcp-guide-title";
+      scriptsTitle.textContent = `Loaded scripts (${state.scriptTitles.length})`;
+      scriptsBox.appendChild(scriptsTitle);
+
+      if (state.scriptTitles.length === 0) {
+        const emptyNode = document.createElement("p");
+        emptyNode.className = "mcp-description";
+        emptyNode.textContent = "No scripts loaded yet.";
+        scriptsBox.appendChild(emptyNode);
+      } else {
+        const scriptsList = document.createElement("ul");
+        scriptsList.className = "mcp-scripts-list";
+        state.scriptTitles.forEach((titleValue) => {
+          const scriptNode = document.createElement("li");
+          scriptNode.textContent = titleValue;
+          scriptsList.appendChild(scriptNode);
+        });
+        scriptsBox.appendChild(scriptsList);
+      }
+
+      cardBody.appendChild(scriptsBox);
+
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "mcp-link-btn";
+      verifyButton.textContent = "Verify";
+      verifyButton.dataset.action = "verify";
+      verifyButton.dataset.configKind = options.kind;
+      verifyButton.dataset.configId = item.id;
+
+      actions.appendChild(verifyButton);
+      cardBody.appendChild(actions);
     } else if (options.kind === "mcp") {
       if (item.id === "local_files") {
         card.appendChild(cardBody);
@@ -5258,6 +5330,23 @@ function renderIntegrationPanel() {
     kind: "integration",
     emptyLabel: "No integrations available.",
   });
+}
+
+function normalizeScriptTitles(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set();
+  const titles = [];
+  value.forEach((entry) => {
+    const title = typeof entry === "string" ? entry.trim() : "";
+    if (!title || seen.has(title)) {
+      return;
+    }
+    seen.add(title);
+    titles.push(title);
+  });
+  return titles;
 }
 
 async function compactHistoryForLimit(chat, targetTokenLimit, reasonLabel) {
@@ -5543,14 +5632,15 @@ function ensureVisibleActiveChat() {
 async function loadGatewayMeta() {
   try {
     loadAppVersion();
-    const [providersResponse, settingsResponse, mcpsResponse, integrationsResponse] = await Promise.all([
+    const [providersResponse, settingsResponse, mcpsResponse, integrationsResponse, scriptsResponse] = await Promise.all([
       fetch("/api/providers"),
       fetch("/api/settings"),
       fetch("/api/mcps"),
       fetch("/api/integrations"),
+      fetch("/api/mcps/scripts", { cache: "no-store" }),
     ]);
 
-    if (!providersResponse.ok || !settingsResponse.ok || !mcpsResponse.ok || !integrationsResponse.ok) {
+    if (!providersResponse.ok || !settingsResponse.ok || !mcpsResponse.ok || !integrationsResponse.ok || !scriptsResponse.ok) {
       throw new Error("Failed to load gateway metadata.");
     }
 
@@ -5558,6 +5648,7 @@ async function loadGatewayMeta() {
     const settings = await settingsResponse.json();
     const mcps = await mcpsResponse.json();
     const integrations = await integrationsResponse.json();
+    const scriptsCatalog = await scriptsResponse.json();
 
     const activeProvider = providers.find((provider) => provider.id === settings.active_provider_id);
     const activeConfig = settings.provider_configs?.[settings.active_provider_id];
@@ -5573,6 +5664,7 @@ async function loadGatewayMeta() {
     state.chats = mergeSessionOnlySystemMessages(normalizeIncomingChats(settings.chats), state.chats);
     state.dailyTokenUsage = normalizeDailyTokenUsage(settings.daily_token_usage);
     state.mcps = Array.isArray(mcps) ? mcps : [];
+    state.scriptTitles = normalizeScriptTitles(scriptsCatalog?.titles);
     state.integrations = Array.isArray(integrations) ? integrations : [];
     state.mcpConfigs = normalizeIncomingMcpConfigs(settings.mcp_configs);
     state.integrationConfigs = normalizeIncomingMcpConfigs(settings.integration_configs);
@@ -5994,6 +6086,12 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
 
   try {
     await refreshTimedJobsAfterMcpUsage(context.toolUsage);
+  } catch {
+    // Best-effort sync only.
+  }
+
+  try {
+    await refreshScriptsAfterMcpUsage(context.toolUsage);
   } catch {
     // Best-effort sync only.
   }

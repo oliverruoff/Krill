@@ -32,10 +32,12 @@ from .config import (
     ensure_settings_file,
     import_braindump_db,
     list_short_term_memories,
+    list_scripts,
     list_timed_jobs,
     load_chat_state,
     load_settings,
     resolve_short_term_memories,
+    rehydrate_script_files,
     save_chat_state,
     save_settings,
     upsert_timed_job,
@@ -367,6 +369,7 @@ def _prune_gateway_client_enqueue_ids(chat_id: str) -> None:
 async def startup_event() -> None:
     await ensure_settings_file()
     await _rehydrate_git_ssh_material()
+    await rehydrate_script_files()
     await start_memory_extraction_worker()
     await start_timed_jobs_worker()
     for integration in get_runtime_integrations():
@@ -456,6 +459,7 @@ async def import_braindump(file: UploadFile = File(...)):
         tmp_path.write_bytes(content)
         await import_braindump_db(tmp_path)
         await _rehydrate_git_ssh_material()
+        await rehydrate_script_files()
         return {"ok": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Import failed: {exc}")
@@ -807,6 +811,13 @@ async def verify_mcp(payload: VerifyMcpRequest) -> VerifyMcpResponse:
         raise HTTPException(status_code=422, detail=detail)
 
     return VerifyMcpResponse(ok=True, detail=detail)
+
+
+@app.get("/api/mcps/scripts")
+async def get_scripts_catalog() -> dict[str, object]:
+    scripts = await list_scripts()
+    titles = [script.title for script in scripts if script.title.strip()]
+    return {"titles": titles}
 
 
 @app.get("/api/mcps/whatsapp/status", response_model=WhatsAppStatusResponse)

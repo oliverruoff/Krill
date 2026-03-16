@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Sequence, TypedDict, cast
 
-from app.config import McpConfig, Settings
+from app.config import McpConfig, SCRIPTS_DIR, Settings, list_scripts
 from app.mcps.base import MCPPlugin, McpConfigField
 from app.mcps.registry import get_all_mcps
 from app.providers.base import LLMProvider
@@ -42,6 +42,8 @@ _MAX_RECURSIVE_LIST_ITEMS = 20
 _MAX_RECURSIVE_DICT_ITEMS = 40
 _MAX_RETRIES_PER_TOOL_SIGNATURE = 2
 _BULKY_BINARY_FIELD_NAMES = {"content_base64"}
+_MAX_SCRIPT_CATALOG_ENTRIES = 100
+_MAX_SCRIPT_DESCRIPTION_CHARS = 300
 
 
 async def generate_with_tools(
@@ -68,6 +70,7 @@ async def generate_with_tools(
 
     await trace("runtime_system_prompt", system_prompt)
     enabled_tools = _collect_enabled_tools(settings)
+    scripts_catalog = await _collect_script_catalog(settings)
 
     async def provider_generate(
         *,
@@ -134,6 +137,7 @@ async def generate_with_tools(
         planner_prompt = _build_recursive_planner_prompt(
             prompt,
             enabled_tools,
+            scripts_catalog,
             _planner_interaction_context(interaction_log),
             step_index,
             normalized_recursion,
@@ -578,6 +582,7 @@ def _missing_required_params(config_fields: Sequence[McpConfigField], config: Mc
 def _build_recursive_planner_prompt(
     user_message: str,
     tools: list[dict[str, object]],
+    scripts_catalog: list[dict[str, str]],
     interaction_context: dict[str, object],
     step_index: int,
     max_steps: int,
@@ -602,6 +607,7 @@ def _build_recursive_planner_prompt(
         "Tool selection is intent-based and language-agnostic: infer user intent semantically even when the user writes in any language or mixed languages.\n"
         "Your goal is to complete the user's original request end-to-end, not to stop at intermediate status updates.\n"
         "If user asks for live/external/private data (web, files, integrations, devices, Home Assistant, calendars, email), use a tool call first.\n"
+        "Scripts catalog items are reference assets. To run one, call scripts.execute_script with its title.\n"
         "If user asks you to remember/memorize/not forget something for future chats, call memory_access.save_memory before responding.\n"
         "Do not claim you cannot access browsing/tools/devices when relevant tools are listed.\n"
         "Only ask the user for help if truly blocked by missing user-only input, explicit approval, or an external challenge that tools cannot resolve.\n"
@@ -618,8 +624,47 @@ def _build_recursive_planner_prompt(
         "When user asks relative dates (today/tomorrow/day after tomorrow), convert using this datetime and keep the correct year.\n"
         f"User message: {user_message}\n"
         f"Available tools: {json.dumps(tool_payload)}\n"
+        f"Available scripts catalog: {json.dumps(scripts_catalog, ensure_ascii=True)}\n"
         f"Completed tool interactions so far: {json.dumps(interaction_context, ensure_ascii=True)}"
     )
+
+
+async def _collect_script_catalog(settings: Settings) -> list[dict[str, str]]:
+    scripts_config = settings.mcp_configs.get("scripts")
+    if scripts_config is None:
+        scripts_enabled = False
+    else:
+        scripts_enabled = bool(scripts_config.enabled)
+
+    if not scripts_enabled:
+        return []
+
+    try:
+        scripts = await list_scripts()
+    except Exception:
+        return []
+
+    entries: list[dict[str, str]] = []
+    for script in sorted(scripts, key=lambda item: item.title.lower()):
+        title = str(script.title).strip()
+        description = str(script.description).strip()
+        file_name = str(script.file_name).strip()
+        if not title or not description or not file_name:
+            continue
+        path = (SCRIPTS_DIR / file_name).resolve()
+        if path.parent != SCRIPTS_DIR:
+            continue
+        compact_description = description[:_MAX_SCRIPT_DESCRIPTION_CHARS]
+        entries.append(
+            {
+                "title": title,
+                "description": compact_description,
+                "path": str(path),
+            }
+        )
+        if len(entries) >= _MAX_SCRIPT_CATALOG_ENTRIES:
+            break
+    return entries
 
 
 def _build_final_prompt_with_interactions(user_message: str, interaction_log: list[dict[str, object]]) -> str:

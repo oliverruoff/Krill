@@ -20,6 +20,7 @@ DEFAULT_BRAINDUMP_PATH = BASE_DIR / "data" / "braindump.db"
 BRAINDUMP_PATH = Path(os.getenv("KRILL_BRAINDUMP_PATH", str(DEFAULT_BRAINDUMP_PATH))).resolve()
 BRAINDUMP_BACKUP_PATH = BRAINDUMP_PATH.with_suffix(".db.bak")
 DATA_DIR = BRAINDUMP_PATH.parent
+SCRIPTS_DIR = (DATA_DIR / "scripts").resolve()
 _DB_LOCK = asyncio.Lock()
 SENSITIVE_KEYWORDS = {
     "api_key",
@@ -120,6 +121,18 @@ class TimedJob(BaseModel):
     channels: list[str] = Field(default_factory=list)
     next_run_at: str = ""
     last_run_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ScriptDefinition(BaseModel):
+    id: str
+    title: str = Field(default="", max_length=64)
+    description: str = Field(default="", max_length=1024)
+    instructions: str = Field(default="", max_length=5000)
+    python_requirements: str = Field(default="", max_length=500)
+    body: str = Field(default="")
+    file_name: str = Field(default="", max_length=100)
     created_at: str = ""
     updated_at: str = ""
 
@@ -360,6 +373,19 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           updated_at TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_timed_jobs_next_run ON timed_jobs(enabled, next_run_at);
+
+        CREATE TABLE IF NOT EXISTS scripts (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL DEFAULT '',
+          description TEXT NOT NULL DEFAULT '',
+          instructions TEXT NOT NULL DEFAULT '',
+          requirements TEXT NOT NULL DEFAULT '',
+          python_requirements TEXT NOT NULL DEFAULT '',
+          body TEXT NOT NULL DEFAULT '',
+          file_name TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT ''
+        );
     """)
 
     _ensure_settings_core_column(conn, "memory_extraction_interval", "INTEGER NOT NULL DEFAULT 10")
@@ -373,6 +399,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
     _ensure_timed_jobs_column(conn, "timezone_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
     _ensure_timed_jobs_column(conn, "output_decision_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK (output_decision_enabled IN (0,1))")
+    _ensure_scripts_column(conn, "python_requirements", "TEXT NOT NULL DEFAULT ''")
+    _backfill_scripts_python_requirements(conn)
     _backfill_hidden_history_flags(conn)
     _ensure_timed_jobs_interval_constraint(conn)
     conn.commit()
@@ -423,6 +451,25 @@ def _ensure_timed_jobs_column(conn: sqlite3.Connection, column_name: str, defini
     if column_name in existing:
         return
     conn.execute(f"ALTER TABLE timed_jobs ADD COLUMN {column_name} {definition}")
+
+
+def _ensure_scripts_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
+    rows = conn.execute("PRAGMA table_info(scripts)").fetchall()
+    existing = {str(row["name"]) for row in rows}
+    if column_name in existing:
+        return
+    conn.execute(f"ALTER TABLE scripts ADD COLUMN {column_name} {definition}")
+
+
+def _backfill_scripts_python_requirements(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        UPDATE scripts
+        SET python_requirements = requirements
+        WHERE COALESCE(TRIM(python_requirements), '') = ''
+          AND COALESCE(TRIM(requirements), '') <> ''
+        """
+    )
 
 
 def _ensure_timed_jobs_interval_constraint(conn: sqlite3.Connection) -> None:
@@ -1599,6 +1646,198 @@ def _mark_timed_job_executed_sync(timed_job_id: str, executed_at_utc: datetime) 
         )
     finally:
         conn.close()
+
+
+async def list_scripts() -> list[ScriptDefinition]:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_list_scripts_sync)
+
+
+async def get_script(script_id: str) -> ScriptDefinition | None:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_get_script_sync, script_id)
+
+
+async def upsert_script(payload: dict[str, object], *, script_id: str = "") -> ScriptDefinition:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_upsert_script_sync, payload, script_id)
+
+
+async def delete_script(script_id: str) -> bool:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_delete_script_sync, script_id)
+
+
+async def rehydrate_script_files() -> dict[str, int]:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        scripts = await asyncio.to_thread(_list_scripts_sync)
+    written = await asyncio.to_thread(_write_script_files_sync, scripts)
+    return {
+        "scripts_count": len(scripts),
+        "files_written": written,
+    }
+
+
+def _list_scripts_sync() -> list[ScriptDefinition]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        rows = conn.execute("SELECT * FROM scripts ORDER BY title ASC").fetchall()
+        return [_row_to_script(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _get_script_sync(script_id: str) -> ScriptDefinition | None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute("SELECT * FROM scripts WHERE id = ?", (script_id.strip(),)).fetchone()
+        if row is None:
+            return None
+        return _row_to_script(row)
+    finally:
+        conn.close()
+
+
+def _upsert_script_sync(payload: dict[str, object], script_id: str) -> ScriptDefinition:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        existing_id = script_id.strip() or str(payload.get("id", "")).strip()
+        existing_row = None
+        if existing_id:
+            existing_row = conn.execute("SELECT * FROM scripts WHERE id = ?", (existing_id,)).fetchone()
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        safe_id = existing_id or str(payload.get("title", "")).strip()
+        safe_title = str(payload.get("title", "")).strip()[:64]
+        safe_description = str(payload.get("description", "")).strip()[:1024]
+        safe_instructions = str(payload.get("instructions", "")).strip()[:5000]
+        safe_python_requirements = str(
+            payload.get("python_requirements", payload.get("requirements", ""))
+        ).strip()[:500]
+        safe_body = str(payload.get("body", ""))
+        safe_file_name = str(payload.get("file_name", "")).strip()[:100]
+        safe_created_at = (
+            str(payload.get("created_at", "")).strip()
+            or (str(existing_row["created_at"]) if existing_row is not None else "")
+            or now_iso
+        )
+
+        script = ScriptDefinition(
+            id=safe_id,
+            title=safe_title,
+            description=safe_description,
+            instructions=safe_instructions,
+            python_requirements=safe_python_requirements,
+            body=safe_body,
+            file_name=safe_file_name,
+            created_at=safe_created_at,
+            updated_at=now_iso,
+        )
+
+        conn.execute(
+            """
+            INSERT INTO scripts (
+              id, title, description, instructions, requirements, python_requirements, body, file_name, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              title = excluded.title,
+              description = excluded.description,
+              instructions = excluded.instructions,
+              requirements = excluded.requirements,
+              python_requirements = excluded.python_requirements,
+              body = excluded.body,
+              file_name = excluded.file_name,
+              created_at = excluded.created_at,
+              updated_at = excluded.updated_at
+            """,
+            (
+                script.id,
+                script.title,
+                script.description,
+                script.instructions,
+                "",
+                script.python_requirements,
+                script.body,
+                script.file_name,
+                script.created_at,
+                script.updated_at,
+            ),
+        )
+        conn.commit()
+        return script
+    finally:
+        conn.close()
+
+
+def _delete_script_sync(script_id: str) -> bool:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        cursor = conn.execute("DELETE FROM scripts WHERE id = ?", (script_id.strip(),))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def _row_to_script(row: sqlite3.Row) -> ScriptDefinition:
+    return ScriptDefinition(
+        id=str(row["id"]),
+        title=str(row["title"]),
+        description=str(row["description"]),
+        instructions=str(row["instructions"]),
+        python_requirements=str(row["python_requirements"] or row["requirements"]),
+        body=str(row["body"]),
+        file_name=str(row["file_name"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _render_script_file_content(script: ScriptDefinition) -> str:
+    title = " ".join(str(script.title).split()).strip()
+    description = " ".join(str(script.description).split()).strip()
+    instructions = " ".join(str(script.instructions).split()).strip()
+    python_requirements = " ".join(str(script.python_requirements).split()).strip()
+    lines = [
+        f"# krill-script-title: {title}",
+        f"# krill-script-description: {description}",
+        f"# krill-script-instructions: {instructions}",
+        f"# krill-script-python-requirements: {python_requirements}",
+        "",
+    ]
+    body = script.body.rstrip("\n")
+    if body:
+        lines.append(body)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _write_script_files_sync(scripts: list[ScriptDefinition]) -> int:
+    SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for script in scripts:
+        file_name = str(script.file_name or "").strip()
+        if not file_name:
+            continue
+        path = (SCRIPTS_DIR / file_name).resolve()
+        if path.parent != SCRIPTS_DIR:
+            continue
+        rendered = _render_script_file_content(script)
+        if path.exists() and path.is_file():
+            try:
+                existing = path.read_text(encoding="utf-8")
+            except Exception:
+                existing = ""
+            if existing == rendered:
+                continue
+        path.write_text(rendered, encoding="utf-8")
+        written += 1
+    return written
 
 
 async def create_braindump_snapshot(target_path: Path) -> None:
