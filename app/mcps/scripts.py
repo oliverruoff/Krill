@@ -153,7 +153,8 @@ class ScriptsMCP(MCPPlugin):
             "- title must be lowercase letters/numbers/hyphens only and 1-64 chars.\n"
             "- python_requirements must be comma-separated pip requirement items.\n"
             "- execute_script auto-installs missing python requirements before running.\n"
-            "- Scripts receive input_json keys as --key value CLI arguments; use argparse with named arguments."
+            "- Scripts receive input_json keys as --key value CLI arguments; use argparse with named arguments.\n"
+            "- description must be a use-case trigger (start with 'Use when...' or 'For...'), not a feature summary."
         )
 
     async def async_tool_call_system_reminder(
@@ -174,7 +175,21 @@ class ScriptsMCP(MCPPlugin):
                 "    parser = argparse.ArgumentParser()\n"
                 "    parser.add_argument('--query', required=True)\n"
                 "    args = parser.parse_args()\n"
-                "    print(json.dumps({'result': args.query}))"
+                "    print(json.dumps({'result': args.query}))\n\n"
+                "Description guidance (critical for orchestrator routing):\n"
+                "- The description is how the orchestrator decides when to run this script.\n"
+                "- Write it as a use-case trigger, not a feature summary.\n"
+                "- Start with 'Use when...' or 'For...' followed by concrete user intents.\n"
+                "- Include key trigger words and phrases a user would naturally say.\n"
+                "- Bad example: 'A script that checks the weather.'\n"
+                "- Good example: 'Use when the user asks about weather, temperature, forecast, "
+                "or climate conditions for a city or location.'\n"
+                "- Keep under 300 characters; that is all the orchestrator sees.\n\n"
+                "Instructions guidance:\n"
+                "- The first 220 characters of instructions are visible to the orchestrator during planning.\n"
+                "- Front-load the most important usage context into those first 220 characters.\n"
+                "- Include expected input_json keys and their meaning early.\n"
+                "- Put detailed edge-case handling or output format notes after the first 220 characters."
             )
         if tool_id != "execute_script":
             return base
