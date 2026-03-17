@@ -392,8 +392,8 @@ async def generate_with_tools(
             "step": step_index,
         }
 
-        reminder_text = _get_mcp_tool_call_reminder(plugin, tool_id, config.params)
-        if reminder_text and not is_direct_routed:
+        reminder_text = await _get_mcp_tool_call_reminder(plugin, tool_id, config.params, arguments=tool_arguments)
+        if reminder_text and (not is_direct_routed or mcp_id == "scripts"):
             await trace("mcp_tool_call_reminder", reminder_text)
             tool_arguments, reminder_tokens = await _apply_tool_call_reminder(
                 provider=provider,
@@ -827,7 +827,20 @@ def _parse_planner_response(response_text: str) -> dict[str, object]:
     return {"action": "respond", "final_answer": ""}
 
 
-def _get_mcp_tool_call_reminder(plugin: MCPPlugin, tool_id: str, params: dict[str, str]) -> str:
+async def _get_mcp_tool_call_reminder(
+    plugin: MCPPlugin, tool_id: str, params: dict[str, str],
+    arguments: dict[str, object] | None = None,
+) -> str:
+    # Prefer async variant that receives tool arguments (script-specific instructions).
+    async_factory = getattr(plugin, "async_tool_call_system_reminder", None)
+    if callable(async_factory) and arguments is not None:
+        try:
+            reminder = await async_factory(tool_id, arguments, params)
+            if isinstance(reminder, str) and reminder.strip():
+                return reminder.strip()
+        except Exception:
+            pass  # fall through to sync variant
+
     reminder_factory = getattr(plugin, "tool_call_system_reminder", None)
     if not callable(reminder_factory):
         return ""

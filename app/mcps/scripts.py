@@ -154,6 +154,29 @@ class ScriptsMCP(MCPPlugin):
             "- execute_script auto-installs missing python requirements before running."
         )
 
+    async def async_tool_call_system_reminder(
+        self, tool_id: str, arguments: dict[str, object], params: dict[str, str],
+    ) -> str:
+        """Return a script-specific reminder that includes the target script's full instructions."""
+        base = self.tool_call_system_reminder(tool_id, params)
+        if tool_id != "execute_script":
+            return base
+        raw_title = arguments.get("title")
+        if not isinstance(raw_title, str) or not raw_title.strip():
+            return base
+        try:
+            script = await _resolve_script_for_execution(raw_title.strip())
+        except Exception:
+            return base
+        instructions = str(getattr(script, "instructions", "")).strip()
+        if not instructions:
+            return base
+        return (
+            f"{base}\n\n"
+            f"Target script: {getattr(script, 'title', raw_title)}\n"
+            f"Script instructions:\n{instructions}"
+        )
+
     async def call_tool(self, tool_id: str, arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
         del params
         if tool_id == "create_script":
@@ -186,18 +209,21 @@ async def _create_script(arguments: dict[str, object]) -> dict[str, object]:
         raise RuntimeError("Script already exists. Set overwrite=true to update it.")
 
     file_name = f"{title}.py"
-    saved = await upsert_script(
-        {
-            "id": title,
-            "title": title,
-            "description": description,
-            "instructions": instructions,
-            "python_requirements": python_requirements,
-            "body": body,
-            "file_name": file_name,
-        },
-        script_id=title,
+    record = {
+        "id": title,
+        "title": title,
+        "description": description,
+        "instructions": instructions,
+        "python_requirements": python_requirements,
+        "body": body,
+        "file_name": file_name,
+    }
+    candidate_source = _render_script_source_from_record(
+        type("_S", (), record)()
     )
+    _validate_script_metadata_headers(candidate_source)
+
+    saved = await upsert_script(record, script_id=title)
     return _script_payload(saved, "updated" if existing is not None else "created")
 
 
@@ -249,19 +275,22 @@ async def _edit_script(arguments: dict[str, object]) -> dict[str, object]:
             "No changes provided. Set at least one field: description, instructions, python_requirements, or body."
         )
 
-    saved = await upsert_script(
-        {
-            "id": existing.id,
-            "title": existing.title,
-            "description": description,
-            "instructions": instructions,
-            "python_requirements": python_requirements,
-            "body": body,
-            "file_name": existing.file_name,
-            "created_at": existing.created_at,
-        },
-        script_id=str(existing.id),
+    record = {
+        "id": existing.id,
+        "title": existing.title,
+        "description": description,
+        "instructions": instructions,
+        "python_requirements": python_requirements,
+        "body": body,
+        "file_name": existing.file_name,
+        "created_at": existing.created_at,
+    }
+    candidate_source = _render_script_source_from_record(
+        type("_S", (), record)()
     )
+    _validate_script_metadata_headers(candidate_source)
+
+    saved = await upsert_script(record, script_id=str(existing.id))
     return _script_payload(saved, "updated")
 
 
@@ -775,6 +804,52 @@ def _parse_script_source(source: str) -> dict[str, str]:
         "python_requirements": python_requirements,
         "body": body,
     }
+
+
+def _validate_script_metadata_headers(source: str) -> None:
+    """Validate that *source* starts with exactly 4 krill-script-* header lines in the correct order.
+
+    Raises ``RuntimeError`` with an actionable message on any violation.
+    """
+    lines = source.split("\n")
+    if len(lines) < 4:
+        raise RuntimeError(
+            "Script must start with 4 metadata header lines: "
+            "# krill-script-title, # krill-script-description, "
+            "# krill-script-instructions, # krill-script-python-requirements."
+        )
+
+    _HEADER_PREFIXES = [
+        "# krill-script-title:",
+        "# krill-script-description:",
+        "# krill-script-instructions:",
+        "# krill-script-python-requirements:",
+    ]
+    _HEADER_NAMES = ["title", "description", "instructions", "python-requirements"]
+
+    for idx, (prefix, name) in enumerate(zip(_HEADER_PREFIXES, _HEADER_NAMES)):
+        line = lines[idx]
+        if not line.startswith(prefix):
+            raise RuntimeError(
+                f"Line {idx + 1} must start with '{prefix}' but got: {line!r}"
+            )
+
+    # --- title (line 1) ---
+    title_value = lines[0][len(_HEADER_PREFIXES[0]):].strip()
+    _required_script_title(title_value)
+
+    # --- description (line 2) ---
+    desc_value = lines[1][len(_HEADER_PREFIXES[1]):].strip()
+    _required_limited_text(desc_value, "description", 1024)
+
+    # --- instructions (line 3) ---
+    instr_value = lines[2][len(_HEADER_PREFIXES[2]):].strip()
+    _required_limited_text(instr_value, "instructions", 5000)
+
+    # --- python_requirements (line 4) ---
+    reqs_value = lines[3][len(_HEADER_PREFIXES[3]):].strip()
+    if reqs_value:
+        _normalize_python_requirements(reqs_value)
 
 
 def _required_script_title(value: object) -> str:

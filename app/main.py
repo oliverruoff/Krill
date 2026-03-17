@@ -81,7 +81,7 @@ from .mcps.google_services import (
     normalize_google_access_mode,
 )
 from .mcps import get_mcp, get_mcp_options, is_supported_mcp
-from .mcps.scripts import _render_script_source_from_record, _parse_script_source
+from .mcps.scripts import _render_script_source_from_record, _parse_script_source, _validate_script_metadata_headers
 from .memory_extraction import (
     get_memory_extraction_status,
     register_completed_turn,
@@ -853,10 +853,12 @@ async def update_script_source(title: str, request: Request) -> dict[str, object
     source = body.get("source", "")
     if not isinstance(source, str) or not source.strip():
         raise HTTPException(status_code=422, detail="Missing 'source' field.")
+    try:
+        _validate_script_metadata_headers(source)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     parsed = _parse_script_source(source)
     parsed_title = parsed.get("title", "").strip()
-    if not parsed_title:
-        raise HTTPException(status_code=422, detail="Could not parse title from source headers.")
     script = await get_script(title.strip())
     if script is None:
         raise HTTPException(status_code=404, detail="Script not found.")
@@ -890,22 +892,12 @@ async def create_script_endpoint(request: Request) -> dict[str, object]:
     source = body.get("source", "")
     if not isinstance(source, str) or not source.strip():
         raise HTTPException(status_code=422, detail="Missing 'source' field.")
+    try:
+        _validate_script_metadata_headers(source)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     parsed = _parse_script_source(source)
     parsed_title = parsed.get("title", "").strip()
-    if not parsed_title:
-        raise HTTPException(
-            status_code=422,
-            detail="Could not parse title from source. Add a '# krill-script-title: my-script' header.",
-        )
-    import re
-    title_pattern = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-    if not title_pattern.fullmatch(parsed_title) or "--" in parsed_title:
-        raise HTTPException(
-            status_code=422,
-            detail="Title must be lowercase alphanumeric with single-hyphen separators (e.g. 'my-script').",
-        )
-    if len(parsed_title) > 64:
-        raise HTTPException(status_code=422, detail="Title must be 64 characters or fewer.")
     existing = await get_script(parsed_title)
     if existing is not None:
         raise HTTPException(
