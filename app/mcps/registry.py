@@ -13,6 +13,7 @@ from .ssh_control import SSHControlMCP
 from .scripts import ScriptsMCP
 from .timed_jobs import TimedJobsMCP
 from .whatsapp import WhatsAppMCP
+from .text_to_speech import TextToSpeechMCP
 from .youtube_summarizer import YouTubeSummarizerMCP
 
 
@@ -27,6 +28,7 @@ _MCPS: dict[str, MCPPlugin] = {
     "opencode": OpenCodeMCP(),
     "ssh_control": SSHControlMCP(),
     "scripts": ScriptsMCP(),
+    "text_to_speech": TextToSpeechMCP(),
     "timed_jobs": TimedJobsMCP(),
     "whatsapp": WhatsAppMCP(),
     "youtube_summarizer": YouTubeSummarizerMCP(),

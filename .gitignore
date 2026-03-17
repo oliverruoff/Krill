@@ -11,3 +11,4 @@ app/integrations/whatsapp/sidecar/node_modules/
 braindump.json
 braindump.json.bak
 .env_test
+data/tts_audio/*

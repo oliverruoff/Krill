@@ -20,6 +20,7 @@ from .client import (
     telegram_get_file_path,
     telegram_get_me,
     telegram_get_updates,
+    telegram_send_audio,
     telegram_send_message,
 )
 from .utils import chunk_telegram_text, markdown_to_html
@@ -196,10 +197,24 @@ class TelegramBridgeWorker:
 
         response_text = await self._handle_user_message(settings, prompt_text, image=image_payload)
         if response_text:
-            for chunk in chunk_telegram_text(response_text):
-                # LLM responses: convert markdown to HTML
-                html_chunk = markdown_to_html(chunk)
-                await asyncio.to_thread(telegram_send_message, token, chat_id, html_chunk, "HTML")
+            # Extract TTS audio URLs before sending text
+            tts_audio_files = _extract_tts_audio_files(response_text)
+            clean_text = _strip_tts_audio_urls(response_text)
+            if clean_text.strip():
+                for chunk in chunk_telegram_text(clean_text):
+                    # LLM responses: convert markdown to HTML
+                    html_chunk = markdown_to_html(chunk)
+                    await asyncio.to_thread(telegram_send_message, token, chat_id, html_chunk, "HTML")
+            # Send any TTS audio files as Telegram audio messages
+            for audio_filename in tts_audio_files:
+                try:
+                    audio_bytes = _read_tts_audio_file(audio_filename)
+                    if audio_bytes:
+                        await asyncio.to_thread(
+                            telegram_send_audio, token, chat_id, audio_bytes, audio_filename,
+                        )
+                except Exception:
+                    pass
 
     async def _extract_message_image(self, token: str, message: dict[str, Any]) -> dict[str, object] | None:
         photo = message.get("photo")
@@ -511,6 +526,48 @@ def _escape_markdown_v2(text: str) -> str:
     """
     special_chars = "_*[]()~`>#+-=|{}.!"
     return "".join(f"\\{char}" if char in special_chars else char for char in text)
+
+
+_TTS_URL_PATTERN = r"/api/tts/audio/([a-f0-9\-]+\.mp3)"
+
+
+def _extract_tts_audio_files(text: str) -> list[str]:
+    """Return list of TTS audio filenames found in the response text."""
+    import re
+    return re.findall(_TTS_URL_PATTERN, text)
+
+
+def _strip_tts_audio_urls(text: str) -> str:
+    """Remove TTS audio URL lines from text so Telegram gets clean prose."""
+    import re
+    # Remove lines that contain only a TTS audio URL (possibly in markdown link syntax)
+    cleaned = re.sub(
+        r"(?:^|\n)\s*(?:\[[^\]]*\]\()?/api/tts/audio/[a-f0-9\-]+\.mp3\)?\s*(?:\n|$)",
+        "\n",
+        text,
+    )
+    # Also remove inline TTS URLs that may appear mid-text
+    cleaned = re.sub(
+        r"(?:\[[^\]]*\]\()?/api/tts/audio/[a-f0-9\-]+\.mp3\)?",
+        "",
+        cleaned,
+    )
+    return cleaned.strip()
+
+
+def _read_tts_audio_file(filename: str) -> bytes | None:
+    """Read a TTS audio file from the data directory. Returns None if not found."""
+    import re
+    from app.config import DATA_DIR
+    if not re.fullmatch(r"[a-f0-9\-]+\.mp3", filename):
+        return None
+    path = (DATA_DIR / "tts_audio" / filename).resolve()
+    tts_dir = (DATA_DIR / "tts_audio").resolve()
+    if not str(path).startswith(str(tts_dir)):
+        return None
+    if not path.is_file():
+        return None
+    return path.read_bytes()
 
 
 def _get_bot_token(settings: Settings) -> str:

@@ -2572,6 +2572,80 @@ button:disabled {
   color: #0a4fb0;
 }
 
+/* Voice message player (TTS) */
+.voice-msg-player {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  background: #e8f0e4;
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+  margin: 0.4rem 0;
+  min-width: 200px;
+  max-width: 340px;
+}
+
+.voice-msg-play-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  border-radius: 50%;
+  border: none;
+  background: #4caf50;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+  padding: 0;
+}
+
+.voice-msg-play-btn:hover {
+  background: #43a047;
+}
+
+.voice-msg-track {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.voice-msg-progress {
+  flex: 1;
+  height: 4px;
+  background: #c8d6c2;
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.voice-msg-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: #4caf50;
+  border-radius: 2px;
+  transition: width 0.12s linear;
+}
+
+.voice-msg-time {
+  font-size: 0.72rem;
+  color: #6b7b65;
+  min-width: 2.2rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.voice-msg-expired {
+  font-size: 0.78rem;
+  color: #999;
+  font-style: italic;
+  padding: 0.3rem 0;
+}
+
 .chat-message {
   max-width: 92%;
 }
@@ -3479,6 +3553,34 @@ button:disabled {
 :root[data-theme="dark"] .chat-message.assistant.status-processing .chat-bubble {
   background: var(--chat-assistant-tint);
   border-color: var(--chat-assistant-border);
+}
+
+:root[data-theme="dark"] .voice-msg-player {
+  background: #1e3a2a;
+}
+
+:root[data-theme="dark"] .voice-msg-play-btn {
+  background: #388e3c;
+}
+
+:root[data-theme="dark"] .voice-msg-play-btn:hover {
+  background: #2e7d32;
+}
+
+:root[data-theme="dark"] .voice-msg-progress {
+  background: #2a4a35;
+}
+
+:root[data-theme="dark"] .voice-msg-progress-fill {
+  background: #4caf50;
+}
+
+:root[data-theme="dark"] .voice-msg-time {
+  color: #8fa888;
+}
+
+:root[data-theme="dark"] .voice-msg-expired {
+  color: #6b7b65;
 }
 
 :root[data-theme="dark"] .chat-composer .actions .composer-icon-btn {

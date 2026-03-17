@@ -55,3 +55,56 @@ def telegram_download_file_bytes(token: str, file_path: str) -> bytes:
     req = request.Request(url=url, headers={"Accept": "*/*"}, method="GET")
     with request.urlopen(req, timeout=30) as response:
         return response.read()
+
+
+def telegram_send_audio(
+    token: str,
+    chat_id: int,
+    audio_bytes: bytes,
+    filename: str = "voice.mp3",
+    caption: str | None = None,
+    parse_mode: str | None = None,
+) -> dict[str, object]:
+    """Send an audio file to a Telegram chat via POST /sendAudio (multipart/form-data)."""
+    import io
+    import email.generator
+    import email.mime.multipart
+    import email.mime.base
+    import email.mime.text
+
+    boundary = f"----KrillBoundary{id(audio_bytes):016x}"
+    body = io.BytesIO()
+
+    def _write_field(name: str, value: str) -> None:
+        body.write(f"--{boundary}\r\n".encode())
+        body.write(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+        body.write(f"{value}\r\n".encode())
+
+    def _write_file(name: str, fname: str, data: bytes, content_type: str) -> None:
+        body.write(f"--{boundary}\r\n".encode())
+        body.write(f'Content-Disposition: form-data; name="{name}"; filename="{fname}"\r\n'.encode())
+        body.write(f"Content-Type: {content_type}\r\n\r\n".encode())
+        body.write(data)
+        body.write(b"\r\n")
+
+    _write_field("chat_id", str(chat_id))
+    if caption:
+        _write_field("caption", caption)
+    if parse_mode:
+        _write_field("parse_mode", parse_mode)
+    _write_file("audio", filename, audio_bytes, "audio/mpeg")
+    body.write(f"--{boundary}--\r\n".encode())
+
+    url = f"https://api.telegram.org/bot{parse.quote(token, safe=':')}/sendAudio"
+    raw_body = body.getvalue()
+    req = request.Request(
+        url=url,
+        data=raw_body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    with request.urlopen(req, timeout=60) as response:
+        return json.loads(response.read().decode("utf-8"))

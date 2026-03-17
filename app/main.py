@@ -22,6 +22,7 @@ from .chat_engine import generate_chat_response
 from .config import (
     ChatSession,
     DailyTokenUsage,
+    DATA_DIR,
     IntegrationConfig,
     MemoryEntry,
     McpConfig,
@@ -474,6 +475,21 @@ async def import_braindump(file: UploadFile = File(...)):
 @app.get("/api/braindump/view")
 async def get_braindump_view() -> dict[str, object]:
     return await view_braindump(show_secrets=True)
+
+
+@app.get("/api/tts/audio/{filename}")
+async def serve_tts_audio(filename: str):
+    import re
+    if not re.fullmatch(r"[a-f0-9\-]+\.mp3", filename):
+        raise HTTPException(status_code=400, detail="Invalid TTS audio filename.")
+    audio_path = DATA_DIR / "tts_audio" / filename
+    resolved = audio_path.resolve()
+    tts_dir = (DATA_DIR / "tts_audio").resolve()
+    if not str(resolved).startswith(str(tts_dir)):
+        raise HTTPException(status_code=400, detail="Invalid TTS audio path.")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Audio file not found or expired.")
+    return FileResponse(resolved, media_type="audio/mpeg", filename=filename)
 
 
 @app.get("/api/settings", response_model=Settings)
