@@ -180,6 +180,7 @@ const state = {
   scriptTitles: [],
   scripts: [],
   scriptEditorTitle: "",
+  scriptEditorMode: "",
   mcpConfigs: {},
   integrations: [],
   integrationConfigs: {},
@@ -5264,6 +5265,14 @@ function renderConfigPanel(container, items, getConfig, options) {
 
       cardBody.appendChild(scriptsBox);
 
+      const newScriptButton = document.createElement("button");
+      newScriptButton.type = "button";
+      newScriptButton.className = "mcp-link-btn";
+      newScriptButton.textContent = "New Script";
+      newScriptButton.dataset.action = "script-new";
+      newScriptButton.dataset.configKind = options.kind;
+      newScriptButton.dataset.configId = item.id;
+
       const verifyButton = document.createElement("button");
       verifyButton.type = "button";
       verifyButton.className = "mcp-link-btn";
@@ -5272,6 +5281,7 @@ function renderConfigPanel(container, items, getConfig, options) {
       verifyButton.dataset.configKind = options.kind;
       verifyButton.dataset.configId = item.id;
 
+      actions.appendChild(newScriptButton);
       actions.appendChild(verifyButton);
       cardBody.appendChild(actions);
     } else if (options.kind === "mcp") {
@@ -6796,6 +6806,11 @@ async function handleMcpActionClick(event) {
       return;
     }
 
+    if (action === "script-new" && configKind === "mcp" && configId === "scripts") {
+      openNewScriptEditor();
+      return;
+    }
+
     if (action === "verify") {
       if (configKind === "integration") {
         const result = await verifyIntegrationConfig(configId);
@@ -6990,11 +7005,66 @@ function syncScriptEditorScroll() {
   scriptEditorHighlight.scrollLeft = scriptEditorTextarea.scrollLeft;
 }
 
+function applyScriptEditorMode() {
+  const isCreate = state.scriptEditorMode === "create";
+  if (scriptEditorSaveButton instanceof HTMLElement) {
+    scriptEditorSaveButton.textContent = isCreate ? "Create" : "Save";
+  }
+  if (scriptEditorDeleteButton instanceof HTMLElement) {
+    scriptEditorDeleteButton.style.display = isCreate ? "none" : "";
+  }
+}
+
+const SCRIPT_TEMPLATE = [
+  "# krill-script-title: my-new-script",
+  "# krill-script-description: A short description of what this script does",
+  "# krill-script-instructions: Tell the AI when and how to use this script",
+  "# krill-script-python-requirements: ",
+  "",
+  "import sys",
+  "import json",
+  "",
+  "def main():",
+  "    name = sys.argv[1] if len(sys.argv) > 1 else \"world\"",
+  "    result = {\"message\": f\"Hello, {name}!\"}",
+  "    print(json.dumps(result))",
+  "",
+  "if __name__ == \"__main__\":",
+  "    main()",
+  "",
+].join("\n");
+
+function openNewScriptEditor() {
+  if (!(scriptEditorModal instanceof HTMLElement) || !(scriptEditorTextarea instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  state.scriptEditorTitle = "";
+  state.scriptEditorMode = "create";
+  if (scriptEditorTitleNode instanceof HTMLElement) {
+    scriptEditorTitleNode.textContent = "New Script";
+  }
+  if (scriptEditorMetaNode instanceof HTMLElement) {
+    scriptEditorMetaNode.textContent = "Fill in the metadata headers and write your script code below.";
+  }
+  scriptEditorTextarea.value = SCRIPT_TEMPLATE;
+  syncScriptEditorHighlight();
+  applyScriptEditorMode();
+
+  scriptEditorModal.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+
+  scriptEditorTextarea.focus({ preventScroll: true });
+  // Place cursor at end of title value for quick editing
+  const titleEnd = SCRIPT_TEMPLATE.indexOf("my-new-script") + "my-new-script".length;
+  scriptEditorTextarea.setSelectionRange(titleEnd, titleEnd);
+}
+
 async function openScriptEditor(title) {
   if (!(scriptEditorModal instanceof HTMLElement) || !(scriptEditorTextarea instanceof HTMLTextAreaElement)) {
     return;
   }
   state.scriptEditorTitle = title;
+  state.scriptEditorMode = "edit";
   if (scriptEditorTitleNode instanceof HTMLElement) {
     scriptEditorTitleNode.textContent = "Script: " + title;
   }
@@ -7003,6 +7073,7 @@ async function openScriptEditor(title) {
   }
   scriptEditorTextarea.value = "";
   syncScriptEditorHighlight();
+  applyScriptEditorMode();
 
   scriptEditorModal.classList.remove("hidden");
   document.body.style.overflow = "hidden";
@@ -7036,39 +7107,57 @@ function closeScriptEditor() {
   scriptEditorModal.classList.add("hidden");
   document.body.style.overflow = "";
   state.scriptEditorTitle = "";
+  state.scriptEditorMode = "";
+}
+
+async function refreshScriptsCatalog() {
+  const listResponse = await fetch("/api/mcps/scripts", { cache: "no-store" });
+  if (listResponse.ok) {
+    const payload = await listResponse.json();
+    state.scriptTitles = normalizeScriptTitles(payload?.titles);
+    state.scripts = normalizeScriptsCatalog(payload?.scripts);
+    renderMcpPanel();
+  }
 }
 
 async function saveScriptEditor() {
   if (!(scriptEditorTextarea instanceof HTMLTextAreaElement)) {
     return;
   }
-  const title = state.scriptEditorTitle;
-  if (!title) {
-    return;
-  }
   const source = scriptEditorTextarea.value;
+  const isCreate = state.scriptEditorMode === "create";
+
   try {
-    const response = await fetch("/api/mcps/scripts/" + encodeURIComponent(title), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: source }),
-    });
-    if (!response.ok) {
-      throw new Error(await buildHttpErrorDetail(response, "Failed to save script."));
+    if (isCreate) {
+      const response = await fetch("/api/mcps/scripts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: source }),
+      });
+      if (!response.ok) {
+        throw new Error(await buildHttpErrorDetail(response, "Failed to create script."));
+      }
+      showToast("Script created.");
+    } else {
+      const title = state.scriptEditorTitle;
+      if (!title) {
+        return;
+      }
+      const response = await fetch("/api/mcps/scripts/" + encodeURIComponent(title), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: source }),
+      });
+      if (!response.ok) {
+        throw new Error(await buildHttpErrorDetail(response, "Failed to save script."));
+      }
+      showToast("Script saved.");
     }
-    showToast("Script saved.");
     closeScriptEditor();
-    // Refresh scripts list
-    const listResponse = await fetch("/api/mcps/scripts", { cache: "no-store" });
-    if (listResponse.ok) {
-      const payload = await listResponse.json();
-      state.scriptTitles = normalizeScriptTitles(payload?.titles);
-      state.scripts = normalizeScriptsCatalog(payload?.scripts);
-      renderMcpPanel();
-    }
+    await refreshScriptsCatalog();
   } catch (error) {
     setStatus(error.message, true);
-    showToast("Save failed: " + error.message);
+    showToast((isCreate ? "Create" : "Save") + " failed: " + error.message);
   }
 }
 
@@ -7089,14 +7178,7 @@ async function deleteScriptFromEditor() {
     }
     showToast("Script deleted.");
     closeScriptEditor();
-    // Refresh scripts list
-    const listResponse = await fetch("/api/mcps/scripts", { cache: "no-store" });
-    if (listResponse.ok) {
-      const payload = await listResponse.json();
-      state.scriptTitles = normalizeScriptTitles(payload?.titles);
-      state.scripts = normalizeScriptsCatalog(payload?.scripts);
-      renderMcpPanel();
-    }
+    await refreshScriptsCatalog();
   } catch (error) {
     setStatus(error.message, true);
     showToast("Delete failed: " + error.message);

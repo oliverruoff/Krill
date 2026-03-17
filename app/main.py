@@ -884,6 +884,49 @@ async def delete_script_endpoint(title: str) -> dict[str, object]:
     return {"ok": True, "title": title.strip()}
 
 
+@app.post("/api/mcps/scripts")
+async def create_script_endpoint(request: Request) -> dict[str, object]:
+    body = await request.json()
+    source = body.get("source", "")
+    if not isinstance(source, str) or not source.strip():
+        raise HTTPException(status_code=422, detail="Missing 'source' field.")
+    parsed = _parse_script_source(source)
+    parsed_title = parsed.get("title", "").strip()
+    if not parsed_title:
+        raise HTTPException(
+            status_code=422,
+            detail="Could not parse title from source. Add a '# krill-script-title: my-script' header.",
+        )
+    import re
+    title_pattern = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    if not title_pattern.fullmatch(parsed_title) or "--" in parsed_title:
+        raise HTTPException(
+            status_code=422,
+            detail="Title must be lowercase alphanumeric with single-hyphen separators (e.g. 'my-script').",
+        )
+    if len(parsed_title) > 64:
+        raise HTTPException(status_code=422, detail="Title must be 64 characters or fewer.")
+    existing = await get_script(parsed_title)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Script '{parsed_title}' already exists. Use the editor to update it.",
+        )
+    saved = await upsert_script(
+        {
+            "id": parsed_title,
+            "title": parsed_title,
+            "description": parsed.get("description", ""),
+            "instructions": parsed.get("instructions", ""),
+            "python_requirements": parsed.get("python_requirements", ""),
+            "body": parsed.get("body", ""),
+            "file_name": f"{parsed_title}.py",
+        },
+        script_id=parsed_title,
+    )
+    return {"ok": True, "title": saved.title}
+
+
 @app.get("/api/mcps/whatsapp/status", response_model=WhatsAppStatusResponse)
 async def get_whatsapp_runtime_status() -> WhatsAppStatusResponse:
     payload = await whatsapp_status()
