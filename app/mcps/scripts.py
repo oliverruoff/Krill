@@ -738,6 +738,45 @@ def _render_script_source_from_record(script: object) -> str:
     return "\n".join(lines)
 
 
+def _parse_script_source(source: str) -> dict[str, str]:
+    """Parse a full script source (with krill-script-* metadata headers) back into components.
+
+    Returns dict with keys: title, description, instructions, python_requirements, body.
+    """
+    title = ""
+    description = ""
+    instructions = ""
+    python_requirements = ""
+    body_lines: list[str] = []
+    in_body = False
+
+    for line in source.split("\n"):
+        if not in_body and line.startswith("# krill-script-title:"):
+            title = line[len("# krill-script-title:"):].strip()
+        elif not in_body and line.startswith("# krill-script-description:"):
+            description = line[len("# krill-script-description:"):].strip()
+        elif not in_body and line.startswith("# krill-script-instructions:"):
+            instructions = line[len("# krill-script-instructions:"):].strip()
+        elif not in_body and line.startswith("# krill-script-python-requirements:"):
+            python_requirements = line[len("# krill-script-python-requirements:"):].strip()
+        elif not in_body and line.strip() == "":
+            # First blank line after headers marks start of body
+            if title:
+                in_body = True
+        else:
+            in_body = True
+            body_lines.append(line)
+
+    body = "\n".join(body_lines).strip()
+    return {
+        "title": title,
+        "description": description,
+        "instructions": instructions,
+        "python_requirements": python_requirements,
+        "body": body,
+    }
+
+
 def _required_script_title(value: object) -> str:
     if not isinstance(value, str):
         raise RuntimeError("Missing required argument 'title'.")

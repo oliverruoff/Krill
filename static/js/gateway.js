@@ -130,6 +130,16 @@ const changePasswordOldInput = document.getElementById("change-password-old");
 const changePasswordNewInput = document.getElementById("change-password-new");
 const changePasswordConfirmInput = document.getElementById("change-password-confirm");
 const changePasswordSubmitButton = document.getElementById("change-password-submit");
+const scriptEditorModal = document.getElementById("script-editor-modal");
+const scriptEditorBackdrop = document.getElementById("script-editor-backdrop");
+const scriptEditorCloseButton = document.getElementById("script-editor-close");
+const scriptEditorTextarea = document.getElementById("script-editor-textarea");
+const scriptEditorHighlight = document.getElementById("script-editor-highlight");
+const scriptEditorSaveButton = document.getElementById("script-editor-save");
+const scriptEditorCancelButton = document.getElementById("script-editor-cancel");
+const scriptEditorDeleteButton = document.getElementById("script-editor-delete");
+const scriptEditorTitleNode = document.getElementById("script-editor-title");
+const scriptEditorMetaNode = document.getElementById("script-editor-meta");
 const memoryTokenTotalNode = document.getElementById("memory-token-total");
 const coreMemoryTokenCountNode = document.getElementById("core-memory-token-count");
 const normalMemoryTokenCountNode = document.getElementById("normal-memory-token-count");
@@ -168,6 +178,8 @@ const state = {
   dailyTokenUsage: [],
   mcps: [],
   scriptTitles: [],
+  scripts: [],
+  scriptEditorTitle: "",
   mcpConfigs: {},
   integrations: [],
   integrationConfigs: {},
@@ -3961,6 +3973,7 @@ async function refreshScriptsAfterMcpUsage(toolUsage) {
   }
   const payload = await response.json();
   state.scriptTitles = normalizeScriptTitles(payload?.titles);
+  state.scripts = normalizeScriptsCatalog(payload?.scripts);
   renderMcpPanel();
 }
 
@@ -5210,10 +5223,10 @@ function renderConfigPanel(container, items, getConfig, options) {
 
       const scriptsTitle = document.createElement("p");
       scriptsTitle.className = "mcp-guide-title";
-      scriptsTitle.textContent = `Loaded scripts (${state.scriptTitles.length})`;
+      scriptsTitle.textContent = `Loaded scripts (${state.scripts.length})`;
       scriptsBox.appendChild(scriptsTitle);
 
-      if (state.scriptTitles.length === 0) {
+      if (state.scripts.length === 0) {
         const emptyNode = document.createElement("p");
         emptyNode.className = "mcp-description";
         emptyNode.textContent = "No scripts loaded yet.";
@@ -5221,9 +5234,29 @@ function renderConfigPanel(container, items, getConfig, options) {
       } else {
         const scriptsList = document.createElement("ul");
         scriptsList.className = "mcp-scripts-list";
-        state.scriptTitles.forEach((titleValue) => {
+        state.scripts.forEach((scriptItem) => {
           const scriptNode = document.createElement("li");
-          scriptNode.textContent = titleValue;
+          scriptNode.className = "mcp-script-item";
+
+          const scriptLabel = document.createElement("span");
+          scriptLabel.className = "mcp-script-label";
+          scriptLabel.textContent = scriptItem.title;
+          if (scriptItem.description) {
+            scriptLabel.title = scriptItem.description;
+          }
+          scriptNode.appendChild(scriptLabel);
+
+          const editBtn = document.createElement("button");
+          editBtn.type = "button";
+          editBtn.className = "mcp-script-edit-btn";
+          editBtn.title = "Edit script";
+          editBtn.textContent = "\u270E";
+          editBtn.dataset.action = "script-open";
+          editBtn.dataset.configKind = "mcp";
+          editBtn.dataset.configId = "scripts";
+          editBtn.dataset.scriptTitle = scriptItem.title;
+          scriptNode.appendChild(editBtn);
+
           scriptsList.appendChild(scriptNode);
         });
         scriptsBox.appendChild(scriptsList);
@@ -5347,6 +5380,30 @@ function normalizeScriptTitles(value) {
     titles.push(title);
   });
   return titles;
+}
+
+function normalizeScriptsCatalog(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set();
+  const scripts = [];
+  value.forEach((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const title = typeof entry.title === "string" ? entry.title.trim() : "";
+    if (!title || seen.has(title)) {
+      return;
+    }
+    seen.add(title);
+    scripts.push({
+      title: title,
+      description: typeof entry.description === "string" ? entry.description : "",
+      id: typeof entry.id === "string" ? entry.id : title,
+    });
+  });
+  return scripts;
 }
 
 async function compactHistoryForLimit(chat, targetTokenLimit, reasonLabel) {
@@ -5665,6 +5722,7 @@ async function loadGatewayMeta() {
     state.dailyTokenUsage = normalizeDailyTokenUsage(settings.daily_token_usage);
     state.mcps = Array.isArray(mcps) ? mcps : [];
     state.scriptTitles = normalizeScriptTitles(scriptsCatalog?.titles);
+    state.scripts = normalizeScriptsCatalog(scriptsCatalog?.scripts);
     state.integrations = Array.isArray(integrations) ? integrations : [];
     state.mcpConfigs = normalizeIncomingMcpConfigs(settings.mcp_configs);
     state.integrationConfigs = normalizeIncomingMcpConfigs(settings.integration_configs);
@@ -6730,6 +6788,14 @@ async function handleMcpActionClick(event) {
       return;
     }
 
+    if (action === "script-open" && configKind === "mcp" && configId === "scripts") {
+      const scriptTitle = actionNode.dataset.scriptTitle;
+      if (scriptTitle) {
+        await openScriptEditor(scriptTitle);
+      }
+      return;
+    }
+
     if (action === "verify") {
       if (configKind === "integration") {
         const result = await verifyIntegrationConfig(configId);
@@ -6772,6 +6838,302 @@ async function toggleSystemTraceVisibility() {
   } catch (error) {
     setStatus(`System trace toggle saved locally only: ${error.message}`, true);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Script Editor
+// ---------------------------------------------------------------------------
+
+function highlightPython(source) {
+  const escaped = escapeHtml(source);
+  const lines = escaped.split("\n");
+  const result = [];
+  const kwSet = new Set([
+    "False", "None", "True", "and", "as", "assert", "async", "await",
+    "break", "class", "continue", "def", "del", "elif", "else", "except",
+    "finally", "for", "from", "global", "if", "import", "in", "is",
+    "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+    "while", "with", "yield",
+  ]);
+  const builtinSet = new Set([
+    "print", "len", "range", "int", "str", "float", "list", "dict", "set",
+    "tuple", "bool", "type", "isinstance", "hasattr", "getattr", "setattr",
+    "open", "enumerate", "zip", "map", "filter", "sorted", "reversed",
+    "any", "all", "min", "max", "sum", "abs", "round", "input", "super",
+    "staticmethod", "classmethod", "property",
+  ]);
+  let inMultiLine = false;
+  let multiDelim = "";
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    let highlighted = "";
+    let pos = 0;
+    if (inMultiLine) {
+      const endIdx = line.indexOf(multiDelim);
+      if (endIdx === -1) {
+        highlighted += '<span class="py-str">' + line + "</span>";
+        pos = line.length;
+      } else {
+        const end = endIdx + multiDelim.length;
+        highlighted += '<span class="py-str">' + line.substring(0, end) + "</span>";
+        pos = end;
+        inMultiLine = false;
+      }
+    }
+    while (pos < line.length) {
+      const ch = line[pos];
+      const rest = line.substring(pos);
+      // Comments
+      if (ch === "#") {
+        highlighted += '<span class="py-cmt">' + rest + "</span>";
+        pos = line.length;
+        break;
+      }
+      // Triple-quoted strings
+      if (rest.startsWith("&quot;&quot;&quot;") || rest.startsWith("&#x27;&#x27;&#x27;")) {
+        const delim = rest.startsWith("&quot;&quot;&quot;") ? "&quot;&quot;&quot;" : "&#x27;&#x27;&#x27;";
+        const after = rest.substring(delim.length);
+        const closeIdx = after.indexOf(delim);
+        if (closeIdx === -1) {
+          highlighted += '<span class="py-str">' + rest + "</span>";
+          inMultiLine = true;
+          multiDelim = delim;
+          pos = line.length;
+        } else {
+          const end = delim.length + closeIdx + delim.length;
+          highlighted += '<span class="py-str">' + rest.substring(0, end) + "</span>";
+          pos += end;
+        }
+        continue;
+      }
+      // Single/double quoted strings (escaped entities)
+      if (rest.startsWith("&quot;") || rest.startsWith("&#x27;")) {
+        const delim = rest.startsWith("&quot;") ? "&quot;" : "&#x27;";
+        let j = delim.length;
+        let closed = false;
+        while (j < rest.length) {
+          if (rest.substring(j).startsWith(delim)) {
+            j += delim.length;
+            closed = true;
+            break;
+          }
+          if (rest[j] === "\\") {
+            j += 2;
+          } else {
+            j++;
+          }
+        }
+        if (!closed) {
+          j = rest.length;
+        }
+        highlighted += '<span class="py-str">' + rest.substring(0, j) + "</span>";
+        pos += j;
+        continue;
+      }
+      // Numbers
+      if (/[0-9]/.test(ch)) {
+        const numMatch = rest.match(/^(0[xXoObB])?[0-9a-fA-F._]+/);
+        if (numMatch) {
+          highlighted += '<span class="py-num">' + numMatch[0] + "</span>";
+          pos += numMatch[0].length;
+          continue;
+        }
+      }
+      // Identifiers / keywords
+      if (/[a-zA-Z_]/.test(ch)) {
+        const idMatch = rest.match(/^[a-zA-Z_]\w*/);
+        if (idMatch) {
+          const word = idMatch[0];
+          if (kwSet.has(word)) {
+            highlighted += '<span class="py-kw">' + word + "</span>";
+          } else if (builtinSet.has(word)) {
+            highlighted += '<span class="py-bi">' + word + "</span>";
+          } else if (rest.startsWith("@")) {
+            highlighted += '<span class="py-dec">' + word + "</span>";
+          } else {
+            highlighted += word;
+          }
+          pos += word.length;
+          continue;
+        }
+      }
+      // Decorators
+      if (ch === "@") {
+        const decMatch = rest.match(/^@[a-zA-Z_]\w*/);
+        if (decMatch) {
+          highlighted += '<span class="py-dec">' + decMatch[0] + "</span>";
+          pos += decMatch[0].length;
+          continue;
+        }
+      }
+      highlighted += ch;
+      pos++;
+    }
+    result.push(highlighted);
+  }
+  return result.join("\n");
+}
+
+function syncScriptEditorHighlight() {
+  if (!(scriptEditorTextarea instanceof HTMLTextAreaElement) || !(scriptEditorHighlight instanceof HTMLElement)) {
+    return;
+  }
+  const source = scriptEditorTextarea.value;
+  scriptEditorHighlight.innerHTML = highlightPython(source) + "\n";
+}
+
+function syncScriptEditorScroll() {
+  if (!(scriptEditorTextarea instanceof HTMLTextAreaElement) || !(scriptEditorHighlight instanceof HTMLElement)) {
+    return;
+  }
+  scriptEditorHighlight.scrollTop = scriptEditorTextarea.scrollTop;
+  scriptEditorHighlight.scrollLeft = scriptEditorTextarea.scrollLeft;
+}
+
+async function openScriptEditor(title) {
+  if (!(scriptEditorModal instanceof HTMLElement) || !(scriptEditorTextarea instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  state.scriptEditorTitle = title;
+  if (scriptEditorTitleNode instanceof HTMLElement) {
+    scriptEditorTitleNode.textContent = "Script: " + title;
+  }
+  if (scriptEditorMetaNode instanceof HTMLElement) {
+    scriptEditorMetaNode.textContent = "Loading...";
+  }
+  scriptEditorTextarea.value = "";
+  syncScriptEditorHighlight();
+
+  scriptEditorModal.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+
+  try {
+    const response = await fetch("/api/mcps/scripts/" + encodeURIComponent(title), { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(await buildHttpErrorDetail(response, "Failed to load script."));
+    }
+    const data = await response.json();
+    scriptEditorTextarea.value = typeof data.source === "string" ? data.source : "";
+    syncScriptEditorHighlight();
+    if (scriptEditorMetaNode instanceof HTMLElement) {
+      scriptEditorMetaNode.textContent = "Edit the full script source including metadata headers.";
+    }
+  } catch (error) {
+    if (scriptEditorMetaNode instanceof HTMLElement) {
+      scriptEditorMetaNode.textContent = "Error: " + error.message;
+    }
+  }
+
+  if (scriptEditorCloseButton instanceof HTMLElement) {
+    scriptEditorCloseButton.focus({ preventScroll: true });
+  }
+}
+
+function closeScriptEditor() {
+  if (!(scriptEditorModal instanceof HTMLElement)) {
+    return;
+  }
+  scriptEditorModal.classList.add("hidden");
+  document.body.style.overflow = "";
+  state.scriptEditorTitle = "";
+}
+
+async function saveScriptEditor() {
+  if (!(scriptEditorTextarea instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  const title = state.scriptEditorTitle;
+  if (!title) {
+    return;
+  }
+  const source = scriptEditorTextarea.value;
+  try {
+    const response = await fetch("/api/mcps/scripts/" + encodeURIComponent(title), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: source }),
+    });
+    if (!response.ok) {
+      throw new Error(await buildHttpErrorDetail(response, "Failed to save script."));
+    }
+    showToast("Script saved.");
+    closeScriptEditor();
+    // Refresh scripts list
+    const listResponse = await fetch("/api/mcps/scripts", { cache: "no-store" });
+    if (listResponse.ok) {
+      const payload = await listResponse.json();
+      state.scriptTitles = normalizeScriptTitles(payload?.titles);
+      state.scripts = normalizeScriptsCatalog(payload?.scripts);
+      renderMcpPanel();
+    }
+  } catch (error) {
+    setStatus(error.message, true);
+    showToast("Save failed: " + error.message);
+  }
+}
+
+async function deleteScriptFromEditor() {
+  const title = state.scriptEditorTitle;
+  if (!title) {
+    return;
+  }
+  if (!window.confirm("Delete script \"" + title + "\"? This cannot be undone.")) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/mcps/scripts/" + encodeURIComponent(title), {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      throw new Error(await buildHttpErrorDetail(response, "Failed to delete script."));
+    }
+    showToast("Script deleted.");
+    closeScriptEditor();
+    // Refresh scripts list
+    const listResponse = await fetch("/api/mcps/scripts", { cache: "no-store" });
+    if (listResponse.ok) {
+      const payload = await listResponse.json();
+      state.scriptTitles = normalizeScriptTitles(payload?.titles);
+      state.scripts = normalizeScriptsCatalog(payload?.scripts);
+      renderMcpPanel();
+    }
+  } catch (error) {
+    setStatus(error.message, true);
+    showToast("Delete failed: " + error.message);
+  }
+}
+
+// Script editor event listeners
+if (scriptEditorTextarea instanceof HTMLTextAreaElement) {
+  scriptEditorTextarea.addEventListener("input", syncScriptEditorHighlight);
+  scriptEditorTextarea.addEventListener("scroll", syncScriptEditorScroll);
+  scriptEditorTextarea.addEventListener("keydown", (event) => {
+    // Tab key inserts spaces
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const start = scriptEditorTextarea.selectionStart;
+      const end = scriptEditorTextarea.selectionEnd;
+      scriptEditorTextarea.value =
+        scriptEditorTextarea.value.substring(0, start) + "    " + scriptEditorTextarea.value.substring(end);
+      scriptEditorTextarea.selectionStart = scriptEditorTextarea.selectionEnd = start + 4;
+      syncScriptEditorHighlight();
+    }
+  });
+}
+if (scriptEditorSaveButton instanceof HTMLElement) {
+  scriptEditorSaveButton.addEventListener("click", saveScriptEditor);
+}
+if (scriptEditorCancelButton instanceof HTMLElement) {
+  scriptEditorCancelButton.addEventListener("click", closeScriptEditor);
+}
+if (scriptEditorDeleteButton instanceof HTMLElement) {
+  scriptEditorDeleteButton.addEventListener("click", deleteScriptFromEditor);
+}
+if (scriptEditorCloseButton instanceof HTMLElement) {
+  scriptEditorCloseButton.addEventListener("click", closeScriptEditor);
+}
+if (scriptEditorBackdrop instanceof HTMLElement) {
+  scriptEditorBackdrop.addEventListener("click", closeScriptEditor);
 }
 
 if (memoryManagementButton instanceof HTMLButtonElement) {

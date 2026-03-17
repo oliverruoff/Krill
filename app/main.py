@@ -25,11 +25,14 @@ from .config import (
     IntegrationConfig,
     MemoryEntry,
     McpConfig,
+    ScriptDefinition,
     Settings,
     TimedJob,
     create_braindump_snapshot,
+    delete_script,
     delete_timed_job,
     ensure_settings_file,
+    get_script,
     import_braindump_db,
     list_short_term_memories,
     list_scripts,
@@ -39,6 +42,7 @@ from .config import (
     resolve_short_term_memories,
     save_chat_state,
     save_settings,
+    upsert_script,
     upsert_timed_job,
     view_braindump,
     ChatMessage,
@@ -77,6 +81,7 @@ from .mcps.google_services import (
     normalize_google_access_mode,
 )
 from .mcps import get_mcp, get_mcp_options, is_supported_mcp
+from .mcps.scripts import _render_script_source_from_record, _parse_script_source
 from .memory_extraction import (
     get_memory_extraction_status,
     register_completed_turn,
@@ -815,8 +820,68 @@ async def verify_mcp(payload: VerifyMcpRequest) -> VerifyMcpResponse:
 @app.get("/api/mcps/scripts")
 async def get_scripts_catalog() -> dict[str, object]:
     scripts = await list_scripts()
-    titles = [script.title for script in scripts if script.title.strip()]
-    return {"titles": titles}
+    items: list[dict[str, str]] = []
+    for s in scripts:
+        if not s.title.strip():
+            continue
+        items.append({
+            "title": s.title,
+            "description": s.description,
+            "id": s.id,
+        })
+    return {"scripts": items, "titles": [i["title"] for i in items]}
+
+
+@app.get("/api/mcps/scripts/{title}")
+async def get_script_source(title: str) -> dict[str, object]:
+    script = await get_script(title.strip())
+    if script is None:
+        raise HTTPException(status_code=404, detail="Script not found.")
+    source = _render_script_source_from_record(script)
+    return {
+        "title": script.title,
+        "description": script.description,
+        "instructions": script.instructions,
+        "python_requirements": script.python_requirements,
+        "source": source,
+    }
+
+
+@app.put("/api/mcps/scripts/{title}")
+async def update_script_source(title: str, request: Request) -> dict[str, object]:
+    body = await request.json()
+    source = body.get("source", "")
+    if not isinstance(source, str) or not source.strip():
+        raise HTTPException(status_code=422, detail="Missing 'source' field.")
+    parsed = _parse_script_source(source)
+    parsed_title = parsed.get("title", "").strip()
+    if not parsed_title:
+        raise HTTPException(status_code=422, detail="Could not parse title from source headers.")
+    script = await get_script(title.strip())
+    if script is None:
+        raise HTTPException(status_code=404, detail="Script not found.")
+    saved = await upsert_script(
+        {
+            "id": parsed_title,
+            "title": parsed_title,
+            "description": parsed.get("description", ""),
+            "instructions": parsed.get("instructions", ""),
+            "python_requirements": parsed.get("python_requirements", ""),
+            "body": parsed.get("body", ""),
+            "file_name": f"{parsed_title}.py",
+        },
+        script_id=title.strip(),
+    )
+    return {"ok": True, "title": saved.title}
+
+
+@app.delete("/api/mcps/scripts/{title}")
+async def delete_script_endpoint(title: str) -> dict[str, object]:
+    script = await get_script(title.strip())
+    if script is None:
+        raise HTTPException(status_code=404, detail="Script not found.")
+    await delete_script(title.strip())
+    return {"ok": True, "title": title.strip()}
 
 
 @app.get("/api/mcps/whatsapp/status", response_model=WhatsAppStatusResponse)

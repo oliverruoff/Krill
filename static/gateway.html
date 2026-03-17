@@ -423,6 +423,30 @@
       </section>
     </div>
 
+    <div id="script-editor-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="script-editor-title">
+      <div id="script-editor-backdrop" class="brain-modal-backdrop"></div>
+      <section class="brain-modal-card script-editor-modal-card">
+        <header class="brain-modal-header">
+          <div>
+            <h2 id="script-editor-title">Script Editor</h2>
+            <p id="script-editor-meta" class="brain-modal-meta">Edit the full script source including metadata headers.</p>
+          </div>
+          <button type="button" id="script-editor-close" class="brain-modal-close" aria-label="Close script editor">&times;</button>
+        </header>
+        <div class="script-editor-body">
+          <div class="script-editor-code-wrap">
+            <pre id="script-editor-highlight" class="script-editor-highlight" aria-hidden="true"></pre>
+            <textarea id="script-editor-textarea" class="script-editor-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" data-form-type="other"></textarea>
+          </div>
+        </div>
+        <div class="script-editor-actions">
+          <button type="button" id="script-editor-save" class="secondary">Save</button>
+          <button type="button" id="script-editor-cancel" class="secondary">Cancel</button>
+          <button type="button" id="script-editor-delete" class="script-editor-delete-btn">Delete</button>
+        </div>
+      </section>
+    </div>
+
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
     <p id="app-version" class="app-version">v...</p>
 
