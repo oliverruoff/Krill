@@ -1922,6 +1922,22 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function handleInlineImageError(img) {
+  const url = img.src;
+  const alt = img.alt || url;
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = alt;
+  const wrapper = img.parentElement;
+  if (wrapper && wrapper.tagName === "A") {
+    wrapper.replaceWith(link);
+  } else {
+    img.replaceWith(link);
+  }
+}
+
 function renderInlineMarkdown(text) {
   let output = text;
   output = output.replace(/~~([^~]+)~~/g, "<del>$1</del>");
@@ -1929,7 +1945,9 @@ function renderInlineMarkdown(text) {
   output = output.replace(/`([^`]+)`/g, "<code>$1</code>");
   output = output.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   output = output.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  output = output.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer"><img src="$2" alt="$1" referrerpolicy="no-referrer" loading="lazy" onerror="handleInlineImageError(this)" /></a>');
   output = output.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  output = output.replace(/(^|[^"=])(https?:\/\/[^\s<>]+\.(?:png|jpe?g|gif|webp|svg|bmp|ico)(?:\?[^\s<>]*)?)(?=$|[\s,;)\]&])/gi, '$1<a href="$2" target="_blank" rel="noopener noreferrer"><img src="$2" alt="$2" referrerpolicy="no-referrer" loading="lazy" onerror="handleInlineImageError(this)" /></a>');
   return output;
 }
 

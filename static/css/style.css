@@ -2527,6 +2527,15 @@ button:disabled {
   border-radius: 0;
 }
 
+.chat-bubble img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 0.3rem 0;
+  display: block;
+  cursor: pointer;
+}
+
 .chat-bubble blockquote {
   border-left: 3px solid #a9bbd8;
   padding-left: 0.65rem;
