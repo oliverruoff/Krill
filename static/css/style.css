@@ -3083,6 +3083,20 @@ button:disabled {
     padding: 0.58rem;
   }
 
+  .chat-message {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .chat-bubble {
+    overflow-x: auto;
+    min-width: 0;
+  }
+
+  .chat-bubble pre {
+    max-width: 100%;
+  }
+
   .chat-composer {
     position: sticky;
     bottom: 0;
