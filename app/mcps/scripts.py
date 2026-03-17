@@ -105,7 +105,8 @@ class ScriptsMCP(MCPPlugin):
             McpToolSpec(
                 id="execute_script",
                 label="Execute Script",
-                description="Auto-installs missing python requirements, then executes script by title.",
+                description="Auto-installs missing python requirements, then executes script by title. "
+                "input_json keys are passed as --key value CLI arguments (e.g. {\"query\": \"hello\"} becomes --query hello).",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -151,7 +152,8 @@ class ScriptsMCP(MCPPlugin):
             "Scripts MCP reminder:\n"
             "- title must be lowercase letters/numbers/hyphens only and 1-64 chars.\n"
             "- python_requirements must be comma-separated pip requirement items.\n"
-            "- execute_script auto-installs missing python requirements before running."
+            "- execute_script auto-installs missing python requirements before running.\n"
+            "- Scripts receive input_json keys as --key value CLI arguments; use argparse with named arguments."
         )
 
     async def async_tool_call_system_reminder(
@@ -159,6 +161,21 @@ class ScriptsMCP(MCPPlugin):
     ) -> str:
         """Return a script-specific reminder that includes the target script's full instructions."""
         base = self.tool_call_system_reminder(tool_id, params)
+        if tool_id == "create_script":
+            return (
+                f"{base}\n\n"
+                "Script body guidance:\n"
+                "- Scripts receive input_json as --key value CLI arguments.\n"
+                "- Use argparse with named arguments matching expected input keys.\n"
+                "- Always include an `if __name__ == \"__main__\":` guard.\n"
+                "- Output results as JSON via `print(json.dumps(result))`.\n"
+                "- Example pattern:\n"
+                "    import argparse, json\n"
+                "    parser = argparse.ArgumentParser()\n"
+                "    parser.add_argument('--query', required=True)\n"
+                "    args = parser.parse_args()\n"
+                "    print(json.dumps({'result': args.query}))"
+            )
         if tool_id != "execute_script":
             return base
         raw_title = arguments.get("title")
@@ -393,17 +410,19 @@ async def _execute_script_inner(arguments: dict[str, object]) -> dict[str, objec
         }
 
     stdin_text = json.dumps(input_json, ensure_ascii=True)
+    named_args = _build_named_args_from_input(input_json)
     cli_args = _build_cli_args_from_input(input_json)
     started = time.monotonic()
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
-    logger.info("execute_script running script at %s with cli_args=%s", execution_path, cli_args)
+    logger.info("execute_script running script at %s with named_args=%s cli_args=%s", execution_path, named_args, cli_args)
     execution_result = await _run_script_process_attempts(
         execution_path=execution_path,
         stdin_text=stdin_text,
         timeout_ms=timeout_ms,
         env=env,
         cli_args=cli_args,
+        named_args=named_args,
     )
     if execution_result.get("timeout"):
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -569,6 +588,30 @@ def _number_payload(number: int) -> dict[str, object]:
     }
 
 
+_NAMED_ARGS_SKIP_KEYS = {"args", "argv"}
+
+
+def _build_named_args_from_input(input_payload: dict[str, object]) -> list[str]:
+    """Convert input_json keys to ``--key value`` CLI arguments for argparse-based scripts.
+
+    Only scalar values (str, int, float, bool) are emitted.  Keys whose values
+    are dicts, lists, or None are silently skipped, as are meta keys produced by
+    ``_normalize_script_input_payload`` (``args``, ``argv``).
+    """
+    result: list[str] = []
+    for key, value in input_payload.items():
+        if key in _NAMED_ARGS_SKIP_KEYS:
+            continue
+        if isinstance(value, bool):
+            result.extend([f"--{key}", str(value).lower()])
+        elif isinstance(value, int | float):
+            result.extend([f"--{key}", str(value)])
+        elif isinstance(value, str):
+            result.extend([f"--{key}", value])
+        # dicts, lists, None → skip
+    return result
+
+
 def _build_cli_args_from_input(input_payload: dict[str, object]) -> list[str]:
     if len(input_payload) == 0:
         return []
@@ -600,14 +643,20 @@ async def _run_script_process_attempts(
     timeout_ms: int,
     env: dict[str, str],
     cli_args: list[str],
+    named_args: list[str] | None = None,
 ) -> dict[str, object]:
     """Run a script with multiple argument strategies, using subprocess.run in a thread.
+
+    Strategy order: named_args → json_argv → positional_args → stdin_only.
 
     Uses synchronous subprocess.run via asyncio.to_thread instead of
     asyncio.create_subprocess_exec because the latter requires ProactorEventLoop
     on Windows, which uvicorn does not guarantee.
     """
-    attempts: list[tuple[str, list[str]]] = [("json_argv", [stdin_text])]
+    attempts: list[tuple[str, list[str]]] = []
+    if named_args:
+        attempts.append(("named_args", named_args))
+    attempts.append(("json_argv", [stdin_text]))
     if cli_args:
         attempts.append(("positional_args", cli_args))
     attempts.append(("stdin_only", []))

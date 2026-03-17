@@ -5258,6 +5258,30 @@ function renderConfigPanel(container, items, getConfig, options) {
           editBtn.dataset.scriptTitle = scriptItem.title;
           scriptNode.appendChild(editBtn);
 
+          const dlBtn = document.createElement("button");
+          dlBtn.type = "button";
+          dlBtn.className = "mcp-script-dl-btn";
+          dlBtn.title = "Download script";
+          dlBtn.textContent = "\u2193";
+          dlBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            try {
+              const resp = await fetch(`/api/mcps/scripts/${encodeURIComponent(scriptItem.title)}`);
+              if (!resp.ok) return;
+              const data = await resp.json();
+              const blob = new Blob([data.source], { type: "text/x-python" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `${scriptItem.title}.py`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+            } catch { /* silent */ }
+          });
+          scriptNode.appendChild(dlBtn);
+
           scriptsList.appendChild(scriptNode);
         });
         scriptsBox.appendChild(scriptsList);
@@ -6984,9 +7008,9 @@ function highlightPython(source) {
       highlighted += ch;
       pos++;
     }
-    result.push(highlighted);
+    result.push('<span class="py-line">' + highlighted + "</span>");
   }
-  return result.join("\n");
+  return result.join("");
 }
 
 function syncScriptEditorHighlight() {
@@ -6994,7 +7018,7 @@ function syncScriptEditorHighlight() {
     return;
   }
   const source = scriptEditorTextarea.value;
-  scriptEditorHighlight.innerHTML = highlightPython(source) + "\n";
+  scriptEditorHighlight.innerHTML = highlightPython(source);
 }
 
 function syncScriptEditorScroll() {
@@ -7021,12 +7045,14 @@ const SCRIPT_TEMPLATE = [
   "# krill-script-instructions: Tell the AI when and how to use this script",
   "# krill-script-python-requirements: ",
   "",
-  "import sys",
+  "import argparse",
   "import json",
   "",
   "def main():",
-  "    name = sys.argv[1] if len(sys.argv) > 1 else \"world\"",
-  "    result = {\"message\": f\"Hello, {name}!\"}",
+  "    parser = argparse.ArgumentParser()",
+  "    parser.add_argument(\"--name\", default=\"world\")",
+  "    args = parser.parse_args()",
+  "    result = {\"message\": f\"Hello, {args.name}!\"}",
   "    print(json.dumps(result))",
   "",
   "if __name__ == \"__main__\":",

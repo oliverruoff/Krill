@@ -1266,7 +1266,7 @@ button:disabled {
   position: absolute;
   inset: 0;
   margin: 0;
-  padding: 0.75rem;
+  padding: 0.75rem 0.75rem 0.75rem 3.5rem;
   border: none;
   font: inherit;
   line-height: inherit;
@@ -1279,6 +1279,27 @@ button:disabled {
 .script-editor-highlight {
   pointer-events: none;
   color: #3b4252;
+  counter-reset: py-ln;
+}
+
+.py-line {
+  display: block;
+  position: relative;
+  counter-increment: py-ln;
+  min-height: 1.55em;
+}
+
+.py-line::before {
+  content: counter(py-ln);
+  position: absolute;
+  right: calc(100% + 0.75rem);
+  width: 2.2rem;
+  text-align: right;
+  color: #9ca5b0;
+  font-size: inherit;
+  line-height: inherit;
+  pointer-events: none;
+  user-select: none;
 }
 
 .script-editor-textarea {
@@ -1320,13 +1341,13 @@ button:disabled {
   color: #fff;
 }
 
-/* Python syntax highlighting tokens */
-.py-kw { color: #5e81ac; font-weight: 600; }
-.py-bi { color: #b48ead; }
-.py-str { color: #a3be8c; }
-.py-cmt { color: #9aa5b4; font-style: italic; }
-.py-num { color: #d08770; }
-.py-dec { color: #88c0d0; }
+/* Python syntax highlighting tokens (VS Code Light+ palette) */
+.py-kw { color: #0000ff; font-weight: 600; }
+.py-bi { color: #795e26; }
+.py-str { color: #a31515; }
+.py-cmt { color: #008000; font-style: italic; }
+.py-num { color: #098658; }
+.py-dec { color: #795e26; }
 
 .token-usage-toolbar {
   display: grid;
@@ -2182,6 +2203,28 @@ button:disabled {
 }
 
 .mcp-script-edit-btn:hover {
+  color: #4a7ccc;
+}
+
+.mcp-script-dl-btn {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #9aa5b4;
+  font-size: 0.68rem;
+  cursor: pointer;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.mcp-script-item:hover .mcp-script-dl-btn {
+  opacity: 1;
+}
+
+.mcp-script-dl-btn:hover {
   color: #4a7ccc;
 }
 
@@ -3476,16 +3519,20 @@ button:disabled {
 }
 
 :root[data-theme="dark"] .script-editor-code-wrap {
-  background: #131a27;
+  background: #1e1e1e;
   border-color: var(--border);
 }
 
 :root[data-theme="dark"] .script-editor-highlight {
-  color: #d8e5f7;
+  color: #d4d4d4;
 }
 
 :root[data-theme="dark"] .script-editor-textarea {
-  caret-color: #d8e5f7;
+  caret-color: #d4d4d4;
+}
+
+:root[data-theme="dark"] .py-line::before {
+  color: #5a5a5a;
 }
 
 :root[data-theme="dark"] .script-editor-textarea::selection {
@@ -3514,12 +3561,20 @@ button:disabled {
   color: #8cb4e8;
 }
 
-:root[data-theme="dark"] .py-kw { color: #81a1c1; }
-:root[data-theme="dark"] .py-bi { color: #b48ead; }
-:root[data-theme="dark"] .py-str { color: #a3be8c; }
-:root[data-theme="dark"] .py-cmt { color: #6b7a8e; }
-:root[data-theme="dark"] .py-num { color: #d08770; }
-:root[data-theme="dark"] .py-dec { color: #88c0d0; }
+:root[data-theme="dark"] .mcp-script-dl-btn {
+  color: #6b7a8e;
+}
+
+:root[data-theme="dark"] .mcp-script-dl-btn:hover {
+  color: #8cb4e8;
+}
+
+:root[data-theme="dark"] .py-kw { color: #569cd6; }
+:root[data-theme="dark"] .py-bi { color: #dcdcaa; }
+:root[data-theme="dark"] .py-str { color: #ce9178; }
+:root[data-theme="dark"] .py-cmt { color: #6a9955; }
+:root[data-theme="dark"] .py-num { color: #b5cea8; }
+:root[data-theme="dark"] .py-dec { color: #dcdcaa; }
 
 @media (max-width: 900px) {
   :root[data-theme="dark"] .chat-panel {
