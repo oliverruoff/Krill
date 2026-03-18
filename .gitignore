@@ -12,3 +12,5 @@ braindump.json
 braindump.json.bak
 .env_test
 data/tts_audio/*
+You
+run_Claude_Code.bat

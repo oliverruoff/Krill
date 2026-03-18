@@ -632,17 +632,29 @@ def _build_recursive_planner_prompt(
     max_steps: int,
     current_local_time: str,
 ) -> str:
-    tool_payload = [
-        {
-            "mcp_id": entry["mcp_id"],
-            "mcp_label": entry["mcp_label"],
-            "tool_id": entry["tool_id"],
-            "tool_label": entry["tool_label"],
-            "description": entry["tool_description"],
-            "input_schema": entry["input_schema"],
-        }
-        for entry in tools
-    ]
+    if step_index <= 1:
+        tool_payload = [
+            {
+                "mcp_id": entry["mcp_id"],
+                "mcp_label": entry["mcp_label"],
+                "tool_id": entry["tool_id"],
+                "tool_label": entry["tool_label"],
+                "description": entry["tool_description"],
+                "input_schema": entry["input_schema"],
+            }
+            for entry in tools
+        ]
+    else:
+        tool_payload = [
+            {
+                "mcp_id": entry["mcp_id"],
+                "tool_id": entry["tool_id"],
+                "description": entry["tool_description"],
+            }
+            for entry in tools
+        ]
+
+    compact_separators = (",", ":")
 
     return (
         "You can recursively call tools.\n"
@@ -667,9 +679,9 @@ def _build_recursive_planner_prompt(
         f"Current datetime (server local): {current_local_time}\n"
         "When user asks relative dates (today/tomorrow/day after tomorrow), convert using this datetime and keep the correct year.\n"
         f"User message: {user_message}\n"
-        f"Available tools: {json.dumps(tool_payload)}\n"
-        f"Available scripts catalog: {json.dumps(scripts_catalog, ensure_ascii=True)}\n"
-        f"Completed tool interactions so far: {json.dumps(interaction_context, ensure_ascii=True)}"
+        f"Available tools: {json.dumps(tool_payload, separators=compact_separators)}\n"
+        f"Available scripts catalog: {json.dumps(scripts_catalog, ensure_ascii=True, separators=compact_separators)}\n"
+        f"Completed tool interactions so far: {json.dumps(interaction_context, ensure_ascii=True, separators=compact_separators)}"
     )
 
 
