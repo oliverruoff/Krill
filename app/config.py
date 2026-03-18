@@ -33,6 +33,8 @@ SENSITIVE_KEYWORDS = {
     "private_key",
     "ssh_private",
 }
+SCRIPTS_DISABLED_TITLES_PARAM = "disabled_script_titles"
+_SCRIPTS_ENABLED_TITLES_LEGACY_PARAM = "enabled_script_titles"
 
 # Pydantic models remain the source of truth for the application layer
 class ProviderConfig(BaseModel):
@@ -171,6 +173,51 @@ class ShortTermMemoryItem(BaseModel):
     source_request_id: str = ""
     status: Literal["pending", "accepted", "rejected"] = "pending"
     created_at: str
+
+
+def _parse_script_title_set_from_param(config_params: dict[str, str] | None, param_name: str) -> set[str]:
+    if not isinstance(config_params, dict):
+        return set()
+
+    raw_value = config_params.get(param_name, "")
+    if not isinstance(raw_value, str):
+        return set()
+
+    trimmed = raw_value.strip()
+    if not trimmed:
+        return set()
+
+    try:
+        parsed = json.loads(trimmed)
+    except Exception:
+        return set()
+
+    if not isinstance(parsed, list):
+        return set()
+
+    titles: set[str] = set()
+    for item in parsed:
+        title = str(item or "").strip()
+        if not title:
+            continue
+        titles.add(title)
+    return titles
+
+
+def is_script_title_enabled(script_title: str, config_params: dict[str, str] | None) -> bool:
+    title = str(script_title or "").strip()
+    if not title:
+        return False
+
+    disabled_titles = _parse_script_title_set_from_param(config_params, SCRIPTS_DISABLED_TITLES_PARAM)
+    if title in disabled_titles:
+        return False
+
+    enabled_titles_legacy = _parse_script_title_set_from_param(config_params, _SCRIPTS_ENABLED_TITLES_LEGACY_PARAM)
+    if enabled_titles_legacy and title not in enabled_titles_legacy:
+        return False
+
+    return True
 
 
 def _get_conn(path: Path) -> sqlite3.Connection:

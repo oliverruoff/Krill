@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable, Sequence, TypedDict, cast
 
 logger = logging.getLogger(__name__)
 
-from app.config import McpConfig, SCRIPTS_DIR, Settings, list_scripts
+from app.config import McpConfig, SCRIPTS_DIR, Settings, is_script_title_enabled, list_scripts
 from app.mcps.base import MCPPlugin, McpConfigField
 from app.mcps.registry import get_all_mcps
 from app.providers.base import LLMProvider
@@ -695,6 +695,8 @@ async def _collect_script_catalog(settings: Settings) -> list[dict[str, str]]:
     if not scripts_enabled:
         return []
 
+    scripts_params = scripts_config.params if scripts_config is not None else {}
+
     try:
         scripts = await list_scripts()
     except Exception:
@@ -707,6 +709,8 @@ async def _collect_script_catalog(settings: Settings) -> list[dict[str, str]]:
         instructions = str(script.instructions).strip()
         file_name = str(script.file_name).strip()
         if not title or not description or not file_name:
+            continue
+        if not is_script_title_enabled(title, scripts_params):
             continue
         path = (SCRIPTS_DIR / file_name).resolve()
         if path.parent != SCRIPTS_DIR:
@@ -847,7 +851,11 @@ async def _get_mcp_tool_call_reminder(
     async_factory = getattr(plugin, "async_tool_call_system_reminder", None)
     if callable(async_factory) and arguments is not None:
         try:
-            reminder = await async_factory(tool_id, arguments, params)
+            maybe_reminder = async_factory(tool_id, arguments, params)
+            if asyncio.iscoroutine(maybe_reminder):
+                reminder = await maybe_reminder
+            else:
+                reminder = maybe_reminder
             if isinstance(reminder, str) and reminder.strip():
                 return reminder.strip()
         except Exception:

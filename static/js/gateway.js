@@ -12,6 +12,7 @@ const MEMORY_MAX_LENGTH = 1000000;
 const CHAT_HISTORY_PAGE_SIZE = 15;
 const CHAT_HISTORY_SCROLL_LOAD_THRESHOLD_PX = 120;
 const WHATSAPP_CONTACTS_CACHE_PARAM = "contacts_cache_json";
+const SCRIPTS_DISABLED_TITLES_PARAM = "disabled_script_titles";
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -5357,6 +5358,24 @@ function renderConfigPanel(container, items, getConfig, options) {
           const scriptNode = document.createElement("li");
           scriptNode.className = "mcp-script-item";
 
+          const enabledToggleLabel = document.createElement("label");
+          enabledToggleLabel.className = "mcp-toggle";
+
+          const enabledToggleInput = document.createElement("input");
+          enabledToggleInput.type = "checkbox";
+          enabledToggleInput.checked = isScriptEnabledForExecution(scriptItem.title);
+          enabledToggleInput.dataset.action = "script-toggle";
+          enabledToggleInput.dataset.configKind = "mcp";
+          enabledToggleInput.dataset.configId = "scripts";
+          enabledToggleInput.dataset.scriptTitle = scriptItem.title;
+
+          const enabledToggleText = document.createElement("span");
+          enabledToggleText.textContent = "Enabled";
+
+          enabledToggleLabel.appendChild(enabledToggleInput);
+          enabledToggleLabel.appendChild(enabledToggleText);
+          scriptNode.appendChild(enabledToggleLabel);
+
           const scriptLabel = document.createElement("span");
           scriptLabel.className = "mcp-script-label";
           scriptLabel.textContent = scriptItem.title;
@@ -5556,6 +5575,63 @@ function normalizeScriptsCatalog(value) {
     });
   });
   return scripts;
+}
+
+function getDisabledScriptTitlesFromConfig() {
+  const scriptsConfig = ensureMcpConfig("scripts");
+  const rawValue = typeof scriptsConfig.params?.[SCRIPTS_DISABLED_TITLES_PARAM] === "string"
+    ? scriptsConfig.params[SCRIPTS_DISABLED_TITLES_PARAM]
+    : "";
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return new Set();
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) {
+      return new Set();
+    }
+    const disabledTitles = new Set();
+    parsed.forEach((entry) => {
+      const title = typeof entry === "string" ? entry.trim() : "";
+      if (!title) {
+        return;
+      }
+      disabledTitles.add(title);
+    });
+    return disabledTitles;
+  } catch (error) {
+    return new Set();
+  }
+}
+
+function isScriptEnabledForExecution(scriptTitle) {
+  const title = typeof scriptTitle === "string" ? scriptTitle.trim() : "";
+  if (!title) {
+    return false;
+  }
+  const disabledTitles = getDisabledScriptTitlesFromConfig();
+  return !disabledTitles.has(title);
+}
+
+function setScriptEnabledForExecution(scriptTitle, enabled) {
+  const title = typeof scriptTitle === "string" ? scriptTitle.trim() : "";
+  if (!title) {
+    return;
+  }
+
+  const scriptsConfig = ensureMcpConfig("scripts");
+  const disabledTitles = getDisabledScriptTitlesFromConfig();
+  if (enabled) {
+    disabledTitles.delete(title);
+  } else {
+    disabledTitles.add(title);
+  }
+
+  const availableTitles = new Set(state.scripts.map((script) => script.title));
+  const persistedTitles = Array.from(disabledTitles).filter((entry) => availableTitles.has(entry));
+  scriptsConfig.params[SCRIPTS_DISABLED_TITLES_PARAM] = JSON.stringify(persistedTitles);
 }
 
 async function compactHistoryForLimit(chat, targetTokenLimit, reasonLabel) {
@@ -6848,6 +6924,16 @@ function handleMcpInputChange(event) {
     if (configKind === "mcp") {
       scheduleMcpAutosave(configId);
     }
+    return;
+  }
+
+  if (action === "script-toggle" && configKind === "mcp" && configId === "scripts") {
+    if (!(target instanceof HTMLInputElement)) {
+      return;
+    }
+    const scriptTitle = typeof target.dataset.scriptTitle === "string" ? target.dataset.scriptTitle : "";
+    setScriptEnabledForExecution(scriptTitle, target.checked);
+    scheduleMcpAutosave(configId);
     return;
   }
 

@@ -12,7 +12,7 @@ import time
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 
-from app.config import SCRIPTS_DIR, delete_script, get_script, list_scripts, upsert_script
+from app.config import SCRIPTS_DIR, delete_script, get_script, is_script_title_enabled, list_scripts, upsert_script
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
 
@@ -210,7 +210,6 @@ class ScriptsMCP(MCPPlugin):
         )
 
     async def call_tool(self, tool_id: str, arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
-        del params
         if tool_id == "create_script":
             return await _create_script(arguments)
         if tool_id == "list_scripts":
@@ -222,6 +221,10 @@ class ScriptsMCP(MCPPlugin):
         if tool_id == "install_script_requirements":
             return await _install_script_requirements_tool(arguments)
         if tool_id == "execute_script":
+            requested_title = _required_script_query(arguments.get("title"))
+            resolved_script = await _resolve_script_for_execution(requested_title)
+            if not is_script_title_enabled(str(getattr(resolved_script, "title", "")), params):
+                raise RuntimeError(f"Script '{getattr(resolved_script, 'title', requested_title)}' is disabled in Scripts MCP settings.")
             return await _execute_script(arguments)
         if tool_id == "remove_script":
             return await _remove_script(arguments)

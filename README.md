@@ -142,6 +142,8 @@ Scripts MCP notes:
 
 - disabled by default
 - tools: `create_script`, `list_scripts`, `edit_script`, `check_script_requirements`, `install_script_requirements`, `execute_script`, `remove_script`
+- each script has an `Enabled` checkbox in the Scripts MCP card
+- disabled scripts are excluded from orchestrator script-catalog context and cannot be executed via `execute_script` (hard block)
 - every script is one Python file under `data/scripts` with required metadata comment rows:
   - `# krill-script-title: ...`
   - `# krill-script-description: ...`
