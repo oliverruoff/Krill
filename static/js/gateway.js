@@ -2047,8 +2047,12 @@ function renderInlineMarkdown(text) {
   output = output.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   output = output.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   output = output.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer"><img src="$2" alt="$1" referrerpolicy="no-referrer" loading="lazy" onerror="handleInlineImageError(this)" /></a>');
+  output = output.replace(/\[([^\]]+)\]\((\/api\/files\/shared\/[A-Za-z0-9_-]{10,200})\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" download>$1</a>');
+  output = output.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+\/api\/files\/shared\/[A-Za-z0-9_-]{10,200})\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" download>$1</a>');
   output = output.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   output = output.replace(/(^|[^"=])(https?:\/\/[^\s<>]+\.(?:png|jpe?g|gif|webp|svg|bmp|ico)(?:\?[^\s<>]*)?)(?=$|[\s,;)\]&])/gi, '$1<a href="$2" target="_blank" rel="noopener noreferrer"><img src="$2" alt="$2" referrerpolicy="no-referrer" loading="lazy" onerror="handleInlineImageError(this)" /></a>');
+  output = output.replace(/(^|[\s(])(\/api\/files\/shared\/[A-Za-z0-9_-]{10,200})(?=$|[\s,;)\]])/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer" download>$2</a>');
+  output = output.replace(/(^|[\s(])(https?:\/\/[^\s)\]]+\/api\/files\/shared\/[A-Za-z0-9_-]{10,200})(?=$|[\s,;)\]])/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer" download>$2</a>');
   return output;
 }
 

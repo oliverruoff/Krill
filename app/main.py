@@ -103,6 +103,7 @@ from .version import APP_VERSION
 from .timed_jobs import get_timed_job_channel_options, start_timed_jobs_worker, stop_timed_jobs_worker
 from .timed_jobs import get_timed_job_auth_alert_provider_ids_for_status
 from .timed_jobs import trigger_timed_job_now
+from .shared_files import get_shared_file_entry
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -131,7 +132,7 @@ async def require_authentication(request: Request, call_next):
     path = request.url.path or "/"
 
     if await is_bootstrap_required():
-        if path == "/auth/setup" or path.startswith("/api/auth/"):
+        if path == "/auth/setup" or path.startswith("/api/auth/") or path.startswith("/api/files/shared/"):
             return await call_next(request)
         if path == "/login":
             return RedirectResponse(url="/auth/setup", status_code=307)
@@ -139,7 +140,7 @@ async def require_authentication(request: Request, call_next):
             return JSONResponse(status_code=428, content={"detail": "Authentication bootstrap is required."})
         return RedirectResponse(url="/auth/setup", status_code=307)
 
-    if path in {"/login", "/favicon.ico"} or path.startswith("/api/auth/"):
+    if path in {"/login", "/favicon.ico"} or path.startswith("/api/auth/") or path.startswith("/api/files/shared/"):
         return await call_next(request)
 
     session = await resolve_session_from_request(request)
@@ -490,6 +491,21 @@ async def serve_tts_audio(filename: str):
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="Audio file not found or expired.")
     return FileResponse(resolved, media_type="audio/mpeg", filename=filename)
+
+
+@app.get("/api/files/shared/{token}")
+async def serve_shared_file(token: str):
+    entry = await get_shared_file_entry(token)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Shared file link is invalid or expired.")
+
+    file_path = Path(str(entry.get("path", ""))).expanduser().resolve()
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Shared file is no longer available.")
+
+    media_type = str(entry.get("media_type", "") or "application/octet-stream")
+    filename = str(entry.get("filename", "") or file_path.name)
+    return FileResponse(file_path, media_type=media_type, filename=filename)
 
 
 @app.get("/api/settings", response_model=Settings)

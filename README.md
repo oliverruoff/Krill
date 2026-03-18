@@ -23,7 +23,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Use built-in tools ("MCPs") for real actions:
   - Brave Search (web search)
   - Git Operations (clone, status, branch, commit, pull/push, PR via `gh`)
-  - Local Files (directory listing, glob/grep/search, file reads/writes/edits, copy/move/delete, command execution)
+  - Local Files (directory listing, glob/grep/search, file reads/writes/edits, copy/move/delete, command execution, and temporary shared download links)
 - Use integrations for chat ingress channels:
   - Telegram (bot token based Telegram chat ingress)
   - WhatsApp Web (allowlisted inbound messages bridged into Gateway automation chats)
@@ -115,7 +115,8 @@ Current tools:
 - `git_ops`
 - `home_assistant` (token-based Home Assistant access; defaults base URL to `http://homeassistant.local:8123`)
 - `google_services` (disabled by default, OAuth login, read-only/read-write modes for Gmail, Calendar, and Drive)
-- `local_files` (enabled by default)
+- `local_files` (enabled by default, includes `share_file` for temporary signed download links)
+  - set Local Files `Public Base URL` to your reachable host:port (for example `http://192.168.1.126:8055`) so absolute links use the correct endpoint
 - `memory_access` (enabled by default)
 - `opencode` (disabled by default, delegates coding work to `npx opencode run`)
 - `scripts` (disabled by default, creates DB-backed Python scripts with metadata comments in `data/scripts`)
@@ -283,6 +284,7 @@ Telegram integration notes:
 - Telegram replies include a context-window warning when usage reaches 75% of model limit (suggesting `/new`)
 - Telegram supports `/usage` (shows session context fill vs model window) and `/compaction` (manual chat compaction into a fresh chat)
 - Telegram accepts image messages (photo/image document) and emits an "Image analysis" assistant message before the final reply
+- Telegram converts `/api/files/shared/<token>` links in assistant output into native Telegram document attachments when possible
 
 ### 4) Orchestrator (reason + act loop)
 
@@ -494,6 +496,7 @@ The script builds the image, starts fresh containers, configures setup with Gemi
 - `POST /api/braindump/import` -> full state import
 - `GET /api/braindump/download` -> download full state
 - `GET /api/braindump/view` -> inspect SQLite tables/columns/rows
+- `GET /api/files/shared/{token}` -> public temporary signed download for files shared via `local_files.share_file`
 - `POST /api/memory/user-message` -> increment global user message counter and trigger extraction checks
 - `POST /api/memory/turn-complete` -> register completed user+assistant turn for extraction context
 - `GET /api/memory/short-term` -> list pending short-term memory suggestions

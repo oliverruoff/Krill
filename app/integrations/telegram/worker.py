@@ -13,10 +13,12 @@ from app.providers import get_provider, get_provider_model_limit
 from app.providers.resilience import generate_with_retries
 from app.providers.vision import analyze_image
 from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
+from app.shared_files import get_shared_file_entry
 from app.usage import add_daily_usage, get_today_token_usage
 
 from .client import (
     telegram_download_file_bytes,
+    telegram_send_document,
     telegram_get_file_path,
     telegram_get_me,
     telegram_get_updates,
@@ -199,12 +201,36 @@ class TelegramBridgeWorker:
         if response_text:
             # Extract TTS audio URLs before sending text
             tts_audio_files = _extract_tts_audio_files(response_text)
+            shared_file_tokens = _extract_shared_file_tokens(response_text)
             clean_text = _strip_tts_audio_urls(response_text)
+            clean_text = _strip_shared_file_urls(clean_text)
             if clean_text.strip():
                 for chunk in chunk_telegram_text(clean_text):
                     # LLM responses: convert markdown to HTML
                     html_chunk = markdown_to_html(chunk)
                     await asyncio.to_thread(telegram_send_message, token, chat_id, html_chunk, "HTML")
+            for shared_token in shared_file_tokens:
+                try:
+                    shared_payload = await _read_shared_file_payload(shared_token)
+                    if shared_payload is None:
+                        continue
+                    payload_bytes = shared_payload.get("content_bytes")
+                    payload_filename = str(shared_payload.get("filename", "file.bin") or "file.bin")
+                    payload_mime = str(shared_payload.get("mime_type", "application/octet-stream") or "application/octet-stream")
+                    if not isinstance(payload_bytes, bytes):
+                        continue
+                    await asyncio.to_thread(
+                        telegram_send_document,
+                        token,
+                        chat_id,
+                        payload_bytes,
+                        payload_filename,
+                        None,
+                        None,
+                        payload_mime,
+                    )
+                except Exception:
+                    pass
             # Send any TTS audio files as Telegram audio messages
             for audio_filename in tts_audio_files:
                 try:
@@ -529,12 +555,26 @@ def _escape_markdown_v2(text: str) -> str:
 
 
 _TTS_URL_PATTERN = r"/api/tts/audio/([a-f0-9\-]+\.mp3)"
+_SHARED_FILE_URL_PATTERN = r"(?:https?://[^\s)\]]+)?/api/files/shared/([A-Za-z0-9_-]{10,200})"
 
 
 def _extract_tts_audio_files(text: str) -> list[str]:
     """Return list of TTS audio filenames found in the response text."""
     import re
     return re.findall(_TTS_URL_PATTERN, text)
+
+
+def _extract_shared_file_tokens(text: str) -> list[str]:
+    import re
+
+    matches = re.findall(_SHARED_FILE_URL_PATTERN, text)
+    deduped: list[str] = []
+    for token in matches:
+        normalized = str(token or "").strip()
+        if not normalized or normalized in deduped:
+            continue
+        deduped.append(normalized)
+    return deduped
 
 
 def _strip_tts_audio_urls(text: str) -> str:
@@ -553,6 +593,48 @@ def _strip_tts_audio_urls(text: str) -> str:
         cleaned,
     )
     return cleaned.strip()
+
+
+def _strip_shared_file_urls(text: str) -> str:
+    import re
+
+    cleaned = re.sub(
+        r"(?:^|\n)\s*(?:\[[^\]]*\]\()?(?:https?://[^\s)\]]+)?/api/files/shared/[A-Za-z0-9_-]{10,200}\)?\s*(?:\n|$)",
+        "\n",
+        text,
+    )
+    cleaned = re.sub(
+        r"(?:\[[^\]]*\]\()?(?:https?://[^\s)\]]+)?/api/files/shared/[A-Za-z0-9_-]{10,200}\)?",
+        "",
+        cleaned,
+    )
+    return cleaned.strip()
+
+
+async def _read_shared_file_payload(token: str) -> dict[str, object] | None:
+    entry = await get_shared_file_entry(token)
+    if entry is None:
+        return None
+
+    from pathlib import Path
+
+    resolved = Path(str(entry.get("path", ""))).expanduser().resolve()
+    if not resolved.exists() or not resolved.is_file():
+        return None
+
+    try:
+        content_bytes = await asyncio.to_thread(resolved.read_bytes)
+    except Exception:
+        return None
+
+    if not content_bytes:
+        return None
+
+    return {
+        "content_bytes": content_bytes,
+        "filename": str(entry.get("filename", resolved.name) or resolved.name),
+        "mime_type": str(entry.get("media_type", "application/octet-stream") or "application/octet-stream"),
+    }
 
 
 def _read_tts_audio_file(filename: str) -> bytes | None:
