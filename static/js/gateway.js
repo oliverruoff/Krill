@@ -5838,6 +5838,19 @@ function ensureVisibleActiveChat() {
   state.activeChatId = nextVisibleChat?.id ?? "";
 }
 
+function findReusableNewChatDraft(chats) {
+  const entries = Array.isArray(chats) ? chats : [];
+  return entries.find((chat) => {
+    if (!chat || isHiddenTimedJobDebugChat(chat)) {
+      return false;
+    }
+    if (normalizeChatTitle(chat.title).toLowerCase() !== "new chat") {
+      return false;
+    }
+    return !Array.isArray(chat.messages) || chat.messages.length === 0;
+  }) ?? null;
+}
+
 async function loadGatewayMeta() {
   try {
     loadAppVersion();
@@ -5897,12 +5910,24 @@ async function loadGatewayMeta() {
     state.modelLabel = activeProvider?.models?.find((model) => model.id === activeConfig?.model)?.label ?? activeConfig?.model ?? "";
     state.modelTokenLimit = getModelTokenLimit(state.activeProviderId, state.activeModelId);
 
-    const sortedChats = sortChatsByLatestMessage(state.chats);
-    const persistedActiveChatId = typeof settings.active_chat_id === "string" ? settings.active_chat_id : "";
-    state.activeChatId = state.chats.some((chat) => chat.id === persistedActiveChatId)
-      ? persistedActiveChatId
-      : (sortedChats[0]?.id ?? "");
+    const reusableNewChatDraft = findReusableNewChatDraft(state.chats);
+    let createdNewChatDraft = false;
+    if (reusableNewChatDraft) {
+      state.activeChatId = reusableNewChatDraft.id;
+    } else {
+      const freshChat = createChatEntry("");
+      freshChat.title = "New chat";
+      state.chats.push(freshChat);
+      state.activeChatId = freshChat.id;
+      createdNewChatDraft = true;
+    }
     ensureVisibleActiveChat();
+    if (createdNewChatDraft) {
+      try {
+        await persistChatsToSettings();
+      } catch (error) {
+      }
+    }
 
     syncSwitcherControls();
     updateMetaIndicators();
