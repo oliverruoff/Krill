@@ -337,6 +337,8 @@ class TimedJobWriteRequest(BaseModel):
     enabled: bool = False
     output_decision_enabled: bool = False
     channels: list[str] = Field(default_factory=lambda: ["gateway"])
+    provider_id: str = ""
+    model: str = ""
 
 
 class TimedJobsResponse(BaseModel):
@@ -348,6 +350,20 @@ class TimedJobAuthAlertStatusResponse(BaseModel):
     active: bool
     provider_ids: list[str] = Field(default_factory=list)
     detail: str = ""
+
+
+async def _validate_timed_job_provider_model_payload(payload: TimedJobWriteRequest) -> None:
+    provider_id = payload.provider_id.strip().lower()
+    model = payload.model.strip()
+    if model and not provider_id:
+        raise HTTPException(status_code=422, detail="Timed job model requires a provider selection.")
+    if not provider_id:
+        return
+
+    settings = await load_settings()
+    provider_config = settings.provider_configs.get(provider_id)
+    if provider_config is None:
+        raise HTTPException(status_code=422, detail="Timed job provider is not configured.")
 
 
 _gateway_chat_lock = asyncio.Lock()
@@ -1068,6 +1084,7 @@ async def create_timed_job(payload: TimedJobWriteRequest) -> TimedJob:
         raise HTTPException(status_code=422, detail="Timed job prompt is required.")
     if not payload.channels:
         raise HTTPException(status_code=422, detail="At least one output channel is required.")
+    await _validate_timed_job_provider_model_payload(payload)
     return await upsert_timed_job(payload.model_dump())
 
 
@@ -1079,6 +1096,7 @@ async def update_timed_job(timed_job_id: str, payload: TimedJobWriteRequest) -> 
         raise HTTPException(status_code=422, detail="Timed job prompt is required.")
     if not payload.channels:
         raise HTTPException(status_code=422, detail="At least one output channel is required.")
+    await _validate_timed_job_provider_model_payload(payload)
     return await upsert_timed_job(payload.model_dump(), timed_job_id=timed_job_id)
 
 

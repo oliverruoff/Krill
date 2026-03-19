@@ -87,17 +87,28 @@ async def _dispatch_hidden_empty_output_debug(
 
 
 def _is_setup_ready(settings: Settings) -> bool:
-    if not settings.setup_completed:
-        return False
-    provider_id = settings.active_provider_id.strip()
+    return bool(settings.setup_completed)
+
+
+def _resolve_timed_job_provider_context(settings: Settings, job: TimedJob) -> tuple[str, str, str]:
+    custom_provider_id = job.provider_id.strip().lower()
+    provider_id = custom_provider_id or settings.active_provider_id.strip().lower()
     if not provider_id:
-        return False
-    provider = settings.provider_configs.get(provider_id)
-    if provider is None:
-        return False
-    if not provider.api_key.strip() or not provider.model.strip():
-        return False
-    return True
+        raise RuntimeError("Timed job skipped: provider is not configured.")
+
+    provider_config = settings.provider_configs.get(provider_id)
+    if provider_config is None:
+        raise RuntimeError(f"Timed job skipped: provider '{provider_id}' is not configured.")
+
+    model_id = (job.model.strip() if custom_provider_id else "") or provider_config.model.strip()
+    if not model_id:
+        raise RuntimeError(f"Timed job skipped: model is not configured for provider '{provider_id}'.")
+
+    api_key = provider_config.api_key.strip()
+    if not api_key:
+        raise RuntimeError(f"Timed job skipped: provider '{provider_id}' credentials are missing.")
+
+    return provider_id, model_id, api_key
 
 
 def get_timed_job_channel_options(settings: Settings) -> list[dict[str, object]]:
@@ -183,16 +194,18 @@ async def trigger_timed_job_now(timed_job_id: str) -> bool:
 
 async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
     executed_at = datetime.now(timezone.utc)
+    settings = Settings()
     output_text = ""
     used_tokens: int | None = None
     used_tools: list[dict[str, str]] = []
     trace_messages: list[dict[str, str]] = []
     provider_id = ""
+    provider_model = ""
+    provider_api_key = ""
     generated_assistant_output = False
 
     try:
         settings = await load_settings()
-        provider_id = settings.active_provider_id.strip()
         if not _is_setup_ready(settings):
             output_text = "Timed job skipped: setup is not complete."
         else:
@@ -200,58 +213,70 @@ async def _execute_timed_job(job: TimedJob, *, mark_as_executed: bool) -> None:
             if not prompt:
                 output_text = "Timed job skipped: prompt is empty."
             else:
-                scratch_chat = ChatSession(
-                    id=str(uuid4()),
-                    title=_derive_chat_title(job),
-                    type="normal",
-                    messages=[],
-                    memory_block="",
-                    total_tokens_used=0,
-                    collapse_system_trace=True,
-                )
-                ensure_runtime_context_seed(scratch_chat, settings)
-                model_history = build_model_history(scratch_chat)
+                try:
+                    provider_id, provider_model, provider_api_key = _resolve_timed_job_provider_context(settings, job)
+                except RuntimeError as exc:
+                    output_text = str(exc)
+                    provider_id = ""
 
-                result, _ = await generate_chat_response(
-                    settings=settings,
-                    message=prompt,
-                    history=model_history,
-                    memory_block="",
-                    source_channel="timed_job",
-                    source_chat_id=job.id,
-                )
-                output_text = result["text"]
-                used_tokens = result["used_tokens"]
-                generated_assistant_output = True
-                used_tools = [
-                    {
-                        "mcp_id": str(entry.get("mcp_id", "") if isinstance(entry, dict) else ""),
-                        "mcp_label": str(entry.get("mcp_label", "") if isinstance(entry, dict) else ""),
-                        "tool_id": str(entry.get("tool_id", "") if isinstance(entry, dict) else ""),
-                        "tool_label": str(entry.get("tool_label", "") if isinstance(entry, dict) else ""),
-                    }
-                    for entry in result["used_mcp_tools"]
-                ]
-                trace_messages = [
-                    {
-                        "system_type": str(
-                            entry.get("system_type", "orchestrator") if isinstance(entry, dict) else "orchestrator"
-                        ),
-                        "content": str(entry.get("content", "") if isinstance(entry, dict) else ""),
-                    }
-                    for entry in result["system_trace_messages"]
-                ]
+                if not output_text:
+                    scratch_chat = ChatSession(
+                        id=str(uuid4()),
+                        title=_derive_chat_title(job),
+                        type="normal",
+                        messages=[],
+                        memory_block="",
+                        total_tokens_used=0,
+                        collapse_system_trace=True,
+                    )
+                    ensure_runtime_context_seed(scratch_chat, settings)
+                    model_history = build_model_history(scratch_chat)
 
-                if provider_id:
-                    await clear_timed_job_auth_alert_provider_id(provider_id)
+                    result, _ = await generate_chat_response(
+                        settings=settings,
+                        message=prompt,
+                        history=model_history,
+                        memory_block="",
+                        provider_id=provider_id,
+                        model=provider_model,
+                        api_key=provider_api_key,
+                        source_channel="timed_job",
+                        source_chat_id=job.id,
+                    )
+                    output_text = result["text"]
+                    used_tokens = result["used_tokens"]
+                    generated_assistant_output = True
+                    used_tools = [
+                        {
+                            "mcp_id": str(entry.get("mcp_id", "") if isinstance(entry, dict) else ""),
+                            "mcp_label": str(entry.get("mcp_label", "") if isinstance(entry, dict) else ""),
+                            "tool_id": str(entry.get("tool_id", "") if isinstance(entry, dict) else ""),
+                            "tool_label": str(entry.get("tool_label", "") if isinstance(entry, dict) else ""),
+                        }
+                        for entry in result["used_mcp_tools"]
+                    ]
+                    trace_messages = [
+                        {
+                            "system_type": str(
+                                entry.get("system_type", "orchestrator") if isinstance(entry, dict) else "orchestrator"
+                            ),
+                            "content": str(entry.get("content", "") if isinstance(entry, dict) else ""),
+                        }
+                        for entry in result["system_trace_messages"]
+                    ]
+
+                    if provider_id:
+                        await clear_timed_job_auth_alert_provider_id(provider_id)
 
         safe_output = output_text.strip() or "(No response text returned.)"
         should_dispatch = True
         if job.output_decision_enabled and generated_assistant_output:
             should_dispatch, decision_trace = await _should_dispatch_timed_job_output(
-                settings=settings,
                 job=job,
                 assistant_output=safe_output,
+                provider_id=provider_id,
+                model=provider_model,
+                api_key=provider_api_key,
             )
             trace_messages.append(decision_trace)
 
@@ -508,16 +533,16 @@ async def get_timed_job_auth_alert_provider_ids_for_status() -> list[str]:
 
 async def _should_dispatch_timed_job_output(
     *,
-    settings: Settings,
     job: TimedJob,
     assistant_output: str,
+    provider_id: str,
+    model: str,
+    api_key: str,
 ) -> tuple[bool, dict[str, str]]:
-    provider_id = settings.active_provider_id.strip()
-    provider_config = settings.provider_configs.get(provider_id)
-    if not provider_id or provider_config is None:
+    if not provider_id or not model or not api_key:
         return True, {
             "system_type": TIMED_JOB_OUTPUT_DECISION_TRACE_TYPE,
-            "content": "Output decision fallback: active provider unavailable; dispatching output.",
+            "content": "Output decision fallback: provider context unavailable; dispatching output.",
         }
 
     provider = get_provider(provider_id)
@@ -535,8 +560,8 @@ async def _should_dispatch_timed_job_output(
                 "You are a strict JSON classifier for timed-job notification policy. "
                 "Return only JSON."
             ),
-            model=provider_config.model,
-            api_key=provider_config.api_key,
+            model=model,
+            api_key=api_key,
             history=[],
             max_attempts=2,
         )

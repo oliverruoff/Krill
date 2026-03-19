@@ -33,6 +33,8 @@ _UPDATABLE_FIELDS = {
     "enabled",
     "output_decision_enabled",
     "channels",
+    "provider_id",
+    "model",
 }
 
 
@@ -74,6 +76,14 @@ class TimedJobsMCP(MCPPlugin):
                 "type": "array",
                 "items": {"type": "string"},
                 "minItems": 1,
+            },
+            "provider_id": {
+                "type": "string",
+                "description": "Optional. Leave empty to use active provider/model at runtime.",
+            },
+            "model": {
+                "type": "string",
+                "description": "Optional model for provider_id. Ignored when provider_id is empty.",
             },
         }
 
@@ -185,6 +195,13 @@ class TimedJobsMCP(MCPPlugin):
 async def _tool_list_options() -> dict[str, object]:
     settings = await load_settings()
     channels = _get_channel_options(settings)
+    provider_options = [
+        {
+            "id": provider_id,
+            "default_model": config.model,
+        }
+        for provider_id, config in settings.provider_configs.items()
+    ]
     timezone_name, timezone_offset_minutes = _server_timezone_defaults()
     return {
         "ok": True,
@@ -201,9 +218,12 @@ async def _tool_list_options() -> dict[str, object]:
             "every_5_min",
         ],
         "channel_options": channels,
+        "provider_options": provider_options,
         "defaults": {
             "timezone": timezone_name,
             "timezone_offset_minutes": timezone_offset_minutes,
+            "provider_id": settings.active_provider_id,
+            "model": settings.active_model_id,
         },
     }
 
@@ -251,6 +271,8 @@ async def _tool_create(arguments: dict[str, object]) -> dict[str, object]:
     start_date = _optional_str(arguments, "start_date", "")
     time_of_day = _optional_str(arguments, "time_of_day", "")
     channels_raw = arguments.get("channels")
+    provider_id = _optional_str(arguments, "provider_id", "").lower()
+    model = _optional_str(arguments, "model", "")
 
     if not prompt:
         missing_fields.append("prompt")
@@ -296,6 +318,24 @@ async def _tool_create(arguments: dict[str, object]) -> dict[str, object]:
             }
         )
 
+    if model and not provider_id:
+        invalid_fields.append(
+            {
+                "field": "model",
+                "reason": "Model requires provider_id.",
+            }
+        )
+    if provider_id and provider_id not in settings.provider_configs:
+        invalid_fields.append(
+            {
+                "field": "provider_id",
+                "reason": f"Provider '{provider_id}' is not configured.",
+            }
+        )
+    if provider_id and not model:
+        configured_provider = settings.provider_configs.get(provider_id)
+        model = configured_provider.model.strip() if configured_provider is not None else ""
+
     if missing_fields or invalid_fields or unavailable_channels:
         return _validation_error(
             tool_id="timed_jobs_create",
@@ -317,6 +357,8 @@ async def _tool_create(arguments: dict[str, object]) -> dict[str, object]:
     payload["enabled"] = bool(arguments.get("enabled", True))
     payload["output_decision_enabled"] = False
     payload["channels"] = normalized_channels
+    payload["provider_id"] = provider_id
+    payload["model"] = model
 
     created = await upsert_timed_job(payload)
     job_payload = _job_result_payload(created)
@@ -353,6 +395,8 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
         "enabled": selected.enabled,
         "output_decision_enabled": selected.output_decision_enabled,
         "channels": list(selected.channels),
+        "provider_id": selected.provider_id,
+        "model": selected.model,
         "created_at": selected.created_at,
         "last_run_at": selected.last_run_at,
     }
@@ -366,7 +410,7 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
             invalid_fields=[
                 {
                     "field": "payload",
-                    "reason": "Provide one or more of title, prompt, interval, start_date, time_of_day, enabled, output_decision_enabled, channels.",
+                    "reason": "Provide one or more of title, prompt, interval, start_date, time_of_day, enabled, output_decision_enabled, channels, provider_id, model.",
                 }
             ],
         )
@@ -408,6 +452,28 @@ async def _tool_update(arguments: dict[str, object]) -> dict[str, object]:
         update_payload["enabled"] = bool(arguments.get("enabled", False))
     if "output_decision_enabled" in arguments:
         update_payload["output_decision_enabled"] = bool(arguments.get("output_decision_enabled", False))
+    if "provider_id" in arguments:
+        update_payload["provider_id"] = _optional_str(arguments, "provider_id", "").lower()
+    if "model" in arguments:
+        update_payload["model"] = _optional_str(arguments, "model", "")
+
+    candidate_provider_id = str(update_payload.get("provider_id", "")).strip().lower()
+    candidate_model = str(update_payload.get("model", "")).strip()
+    if candidate_model and not candidate_provider_id:
+        invalid_fields.append({"field": "model", "reason": "Model requires provider_id."})
+    if candidate_provider_id and candidate_provider_id not in settings.provider_configs:
+        invalid_fields.append(
+            {
+                "field": "provider_id",
+                "reason": f"Provider '{candidate_provider_id}' is not configured.",
+            }
+        )
+    if candidate_provider_id and not candidate_model:
+        configured_provider = settings.provider_configs.get(candidate_provider_id)
+        candidate_model = configured_provider.model.strip() if configured_provider is not None else ""
+
+    update_payload["provider_id"] = candidate_provider_id
+    update_payload["model"] = candidate_model
 
     timezone_name, timezone_offset_minutes = _server_timezone_defaults()
     update_payload["timezone"] = timezone_name

@@ -106,6 +106,8 @@ const timedJobPromptInput = document.getElementById("timed-job-prompt");
 const timedJobIntervalSelect = document.getElementById("timed-job-interval");
 const timedJobStartDateInput = document.getElementById("timed-job-start-date");
 const timedJobTimeInput = document.getElementById("timed-job-time");
+const timedJobProviderSelect = document.getElementById("timed-job-provider");
+const timedJobModelSelect = document.getElementById("timed-job-model");
 const timedJobEnabledInput = document.getElementById("timed-job-enabled");
 const timedJobOutputDecisionEnabledInput = document.getElementById("timed-job-output-decision-enabled");
 const timedJobChannelsNode = document.getElementById("timed-job-channels");
@@ -3708,6 +3710,8 @@ function normalizeIncomingTimedJobs(rawJobs) {
       enabled: Boolean(entry.enabled),
       output_decision_enabled: Boolean(entry.output_decision_enabled),
       channels: Array.isArray(entry.channels) ? entry.channels.map((channel) => String(channel)) : ["gateway"],
+      provider_id: typeof entry.provider_id === "string" ? entry.provider_id : "",
+      model: typeof entry.model === "string" ? entry.model : "",
       next_run_at: typeof entry.next_run_at === "string" ? entry.next_run_at : "",
       last_run_at: typeof entry.last_run_at === "string" ? entry.last_run_at : "",
       updated_at: typeof entry.updated_at === "string" ? entry.updated_at : "",
@@ -3729,6 +3733,75 @@ function normalizeTimedJobChannels(rawChannels) {
       default: Boolean(entry.default),
     }))
     .filter((entry) => Boolean(entry.id));
+}
+
+function renderTimedJobProviderOptions(selectedProviderId = "") {
+  if (!(timedJobProviderSelect instanceof HTMLSelectElement)) {
+    return "";
+  }
+
+  const configuredProviderIds = getConfiguredProviderIds();
+  timedJobProviderSelect.innerHTML = "";
+
+  const useActiveOption = document.createElement("option");
+  useActiveOption.value = "";
+  useActiveOption.textContent = "Use active provider/model";
+  timedJobProviderSelect.appendChild(useActiveOption);
+
+  configuredProviderIds.forEach((providerId) => {
+    const provider = getProviderById(providerId);
+    const option = document.createElement("option");
+    option.value = providerId;
+    option.textContent = provider?.label ?? providerId;
+    timedJobProviderSelect.appendChild(option);
+  });
+
+  const normalizedSelected = configuredProviderIds.includes(selectedProviderId) ? selectedProviderId : "";
+  timedJobProviderSelect.value = normalizedSelected;
+  return normalizedSelected;
+}
+
+function renderTimedJobModelOptions(providerId, selectedModel = "") {
+  if (!(timedJobModelSelect instanceof HTMLSelectElement)) {
+    return "";
+  }
+
+  timedJobModelSelect.innerHTML = "";
+  const normalizedProviderId = String(providerId || "").trim();
+  if (!normalizedProviderId) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Use active provider model";
+    timedJobModelSelect.appendChild(option);
+    timedJobModelSelect.disabled = true;
+    timedJobModelSelect.value = "";
+    return "";
+  }
+
+  const provider = getProviderById(normalizedProviderId);
+  const configuredModel = state.settings?.provider_configs?.[normalizedProviderId]?.model ?? "";
+  const modelCandidates = provider?.models ?? [];
+  const normalizedSelected = selectedModel || configuredModel || modelCandidates[0]?.id || "";
+
+  modelCandidates.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = model.label;
+    timedJobModelSelect.appendChild(option);
+  });
+
+  if (normalizedSelected && !modelCandidates.some((model) => model.id === normalizedSelected)) {
+    const customOption = document.createElement("option");
+    customOption.value = normalizedSelected;
+    customOption.textContent = normalizedSelected;
+    timedJobModelSelect.appendChild(customOption);
+  }
+
+  timedJobModelSelect.disabled = false;
+  if (normalizedSelected) {
+    timedJobModelSelect.value = normalizedSelected;
+  }
+  return (timedJobModelSelect.value || normalizedSelected || "").trim();
 }
 
 function resetTimedJobEditor() {
@@ -3758,6 +3831,8 @@ function resetTimedJobEditor() {
   if (timedJobOutputDecisionEnabledInput instanceof HTMLInputElement) {
     timedJobOutputDecisionEnabledInput.checked = false;
   }
+  renderTimedJobProviderOptions("");
+  renderTimedJobModelOptions("", "");
   renderTimedJobChannelOptions(["gateway"]);
 }
 
@@ -3827,6 +3902,8 @@ function populateTimedJobEditor(job) {
   if (timedJobOutputDecisionEnabledInput instanceof HTMLInputElement) {
     timedJobOutputDecisionEnabledInput.checked = Boolean(job.output_decision_enabled);
   }
+  const selectedProviderId = renderTimedJobProviderOptions(typeof job.provider_id === "string" ? job.provider_id : "");
+  renderTimedJobModelOptions(selectedProviderId, typeof job.model === "string" ? job.model : "");
   renderTimedJobChannelOptions(Array.isArray(job.channels) ? job.channels : ["gateway"]);
 }
 
@@ -3840,7 +3917,10 @@ function formatTimedJobMeta(job) {
     : "gateway";
   const status = job.enabled ? "enabled" : "disabled";
   const outputMode = job.output_decision_enabled ? "output: AI decision" : "output: always";
-  return `${interval} | ${status} | next: ${nextRun} | channels: ${channels} | ${outputMode}`;
+  const providerModel = job.provider_id
+    ? `${job.provider_id}${job.model ? `/${job.model}` : ""}`
+    : "active provider/model";
+  return `${interval} | ${status} | next: ${nextRun} | channels: ${channels} | run: ${providerModel} | ${outputMode}`;
 }
 
 function isTimedJobExpanded(jobId) {
@@ -3956,6 +4036,8 @@ function collectTimedJobPayload() {
   const interval = timedJobIntervalSelect instanceof HTMLSelectElement ? timedJobIntervalSelect.value : "daily";
   const startDate = timedJobStartDateInput instanceof HTMLInputElement ? timedJobStartDateInput.value : "";
   const timeOfDay = timedJobTimeInput instanceof HTMLInputElement ? timedJobTimeInput.value : "";
+  const providerId = timedJobProviderSelect instanceof HTMLSelectElement ? timedJobProviderSelect.value.trim() : "";
+  const model = timedJobModelSelect instanceof HTMLSelectElement ? timedJobModelSelect.value.trim() : "";
   const enabled = timedJobEnabledInput instanceof HTMLInputElement ? timedJobEnabledInput.checked : false;
   const outputDecisionEnabled =
     timedJobOutputDecisionEnabledInput instanceof HTMLInputElement ? timedJobOutputDecisionEnabledInput.checked : false;
@@ -3982,6 +4064,8 @@ function collectTimedJobPayload() {
     enabled,
     output_decision_enabled: outputDecisionEnabled,
     channels,
+    provider_id: providerId,
+    model: providerId ? model : "",
   };
 }
 
@@ -7631,6 +7715,12 @@ if (timedJobResetButton instanceof HTMLButtonElement) {
   timedJobResetButton.addEventListener("click", () => {
     resetTimedJobEditor();
     setStatus("New timed job form ready.");
+  });
+}
+
+if (timedJobProviderSelect instanceof HTMLSelectElement) {
+  timedJobProviderSelect.addEventListener("change", () => {
+    renderTimedJobModelOptions(timedJobProviderSelect.value, "");
   });
 }
 
