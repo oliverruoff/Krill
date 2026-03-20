@@ -14,3 +14,4 @@ braindump.json.bak
 data/tts_audio/*
 You
 run_Claude_Code.bat
+settings.local.json
