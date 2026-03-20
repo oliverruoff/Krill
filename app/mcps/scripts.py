@@ -9,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 from app.config import SCRIPTS_DIR, delete_script, get_script, is_script_title_enabled, list_scripts, upsert_script
@@ -77,18 +76,6 @@ class ScriptsMCP(MCPPlugin):
                 },
             ),
             McpToolSpec(
-                id="check_script_requirements",
-                label="Check Script Requirements",
-                description="Checks whether python_requirements are currently installed.",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string", "minLength": 1, "maxLength": 120},
-                    },
-                    "required": ["title"],
-                },
-            ),
-            McpToolSpec(
                 id="install_script_requirements",
                 label="Install Script Requirements",
                 description="Installs python_requirements for a stored script using pip.",
@@ -142,7 +129,6 @@ class ScriptsMCP(MCPPlugin):
             "create_script",
             "list_scripts",
             "edit_script",
-            "check_script_requirements",
             "install_script_requirements",
             "execute_script",
             "remove_script",
@@ -216,8 +202,6 @@ class ScriptsMCP(MCPPlugin):
             return await _list_scripts_tool()
         if tool_id == "edit_script":
             return await _edit_script(arguments)
-        if tool_id == "check_script_requirements":
-            return await _check_script_requirements_tool(arguments)
         if tool_id == "install_script_requirements":
             return await _install_script_requirements_tool(arguments)
         if tool_id == "execute_script":
@@ -329,41 +313,31 @@ async def _edit_script(arguments: dict[str, object]) -> dict[str, object]:
     return _script_payload(saved, "updated")
 
 
-async def _check_script_requirements_tool(arguments: dict[str, object]) -> dict[str, object]:
-    title = _required_script_query(arguments.get("title"))
-    script = await _resolve_script_for_execution(title)
-    return await _evaluate_script_requirements(script)
-
-
 async def _install_script_requirements_tool(arguments: dict[str, object]) -> dict[str, object]:
     title = _required_script_query(arguments.get("title"))
     timeout_ms = _optional_timeout_ms(arguments.get("timeout_ms"), default_ms=180000, max_ms=300000)
-    only_missing = bool(arguments.get("only_missing", True))
 
     script = await _resolve_script_for_execution(title)
+    parsed = _parse_python_requirements(str(getattr(script, "python_requirements", "") or ""))
+    requirements = [item["raw"] for item in parsed]
 
-    check = await _evaluate_script_requirements(script)
-    all_requirements = _as_string_list(check.get("python_requirements_list"))
-    missing = _as_string_list(check.get("missing_requirements"))
-    targets = missing if only_missing else all_requirements
-    if len(targets) == 0:
+    if not requirements:
         return {
             "status": "up_to_date",
             "title": script.title,
             "path": str(_resolve_script_path(script.file_name)),
-            "installed": [],
+            "requirements": [],
             "stdout": "",
             "stderr": "",
             "exit_code": 0,
-            "requirements_check": check,
         }
 
-    install_result = await _run_pip_install(targets, timeout_ms=timeout_ms)
+    install_result = await _run_pip_install(requirements, timeout_ms=timeout_ms)
     return {
         "status": "installed" if install_result["exit_code"] == 0 else "error",
         "title": script.title,
         "path": str(_resolve_script_path(script.file_name)),
-        "installed": targets,
+        "requirements": requirements,
         "stdout": install_result["stdout"],
         "stderr": install_result["stderr"],
         "exit_code": install_result["exit_code"],
@@ -396,36 +370,26 @@ async def _execute_script_inner(arguments: dict[str, object]) -> dict[str, objec
     execution_path = temp_path
     logger.info("execute_script using temp file at %s", execution_path)
 
-    before_check = await _evaluate_script_requirements(script)
+    # Always run pip install for all requirements — fast "already satisfied" when up to date,
+    # correct install when missing. Avoids fragile in-process name-matching checks.
+    parsed_reqs = _parse_python_requirements(str(getattr(script, "python_requirements", "") or ""))
+    requirements = [item["raw"] for item in parsed_reqs]
     install_result: dict[str, object] | None = None
-    missing_before = _as_string_list(before_check.get("missing_requirements"))
-    if missing_before:
+    if requirements:
         # Cap pip install timeout to leave room for actual script execution within the
         # orchestrator's overall tool_timeout_seconds (typically 90s).
         pip_timeout = min(timeout_ms, 60000)
-        logger.info("execute_script installing missing requirements: %s (pip timeout=%dms)", missing_before, pip_timeout)
-        install_result = await _run_pip_install(missing_before, timeout_ms=pip_timeout)
+        logger.info("execute_script installing requirements: %s (pip timeout=%dms)", requirements, pip_timeout)
+        install_result = await _run_pip_install(requirements, timeout_ms=pip_timeout)
         if install_result["exit_code"] != 0:
             await _cleanup_temp_script(temp_path)
             return {
                 "status": "dependency_install_failed",
                 "title": script.title,
                 "path": str(_resolve_script_path(script.file_name)),
-                "missing_requirements": missing_before,
+                "requirements": requirements,
                 "pip": install_result,
             }
-
-    after_check = await _evaluate_script_requirements(script)
-    missing_after = _as_string_list(after_check.get("missing_requirements"))
-    if missing_after:
-        await _cleanup_temp_script(temp_path)
-        return {
-            "status": "requirements_missing",
-            "title": script.title,
-            "path": str(_resolve_script_path(script.file_name)),
-            "missing_requirements": missing_after,
-            "detail": "Some python requirements are still missing after install attempt.",
-        }
 
     stdin_text = json.dumps(input_json, ensure_ascii=True)
     named_args = _build_named_args_from_input(input_json)
@@ -454,7 +418,6 @@ async def _execute_script_inner(arguments: dict[str, object]) -> dict[str, objec
             "stdout": "",
             "stderr": f"Script execution exceeded timeout of {timeout_ms} ms.",
             "exit_code": None,
-            "requirements_check": after_check,
             "pip": install_result,
         }
 
@@ -478,7 +441,6 @@ async def _execute_script_inner(arguments: dict[str, object]) -> dict[str, objec
         "stdout": stdout_text,
         "stderr": stderr_text,
         "exit_code": exit_code,
-        "requirements_check": after_check,
         "pip": install_result,
         "execution_mode": str(execution_result.get("mode", "unknown")),
     }
@@ -727,26 +689,6 @@ async def _run_script_process_attempts(
     return last_result
 
 
-async def _evaluate_script_requirements(script: object) -> dict[str, object]:
-    raw_value = str(getattr(script, "python_requirements", "") or "")
-    parsed = _parse_python_requirements(raw_value)
-    missing: list[str] = []
-    installed: list[str] = []
-    for item in parsed:
-        if _is_requirement_installed(item):
-            installed.append(item["raw"])
-        else:
-            missing.append(item["raw"])
-    return {
-        "title": str(getattr(script, "title", "")),
-        "python_requirements": _stringify_requirements(parsed),
-        "python_requirements_list": [item["raw"] for item in parsed],
-        "installed_requirements": installed,
-        "missing_requirements": missing,
-        "ready": len(missing) == 0,
-    }
-
-
 async def _run_pip_install(requirements: list[str], *, timeout_ms: int) -> dict[str, object]:
     """Install pip requirements using subprocess.run in a thread.
 
@@ -788,15 +730,6 @@ async def _run_pip_install(requirements: list[str], *, timeout_ms: int) -> dict[
             }
 
     return await asyncio.to_thread(_run)
-
-
-def _is_requirement_installed(item: dict[str, str]) -> bool:
-    package_name = item["name"]
-    try:
-        importlib_metadata.version(package_name)
-        return True
-    except importlib_metadata.PackageNotFoundError:
-        return False
 
 
 def _script_payload(saved: object, status: str) -> dict[str, object]:
@@ -1013,18 +946,6 @@ def _stringify_requirements(parsed: list[dict[str, str]]) -> str:
     if len(parsed) == 0:
         return ""
     return ", ".join(item["raw"] for item in parsed)
-
-
-def _as_string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    result: list[str] = []
-    for item in value:
-        if isinstance(item, str):
-            text = item.strip()
-            if text:
-                result.append(text)
-    return result
 
 
 def _optional_text(value: object) -> str:
