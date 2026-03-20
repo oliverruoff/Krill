@@ -1526,7 +1526,10 @@ function addMessage(role, text = "", timestamp = "", status = "") {
   const title = document.createElement("p");
   title.className = "chat-role";
   const roleLabel = role === "user" ? "You" : role === "system" ? "System" : state.botName || "Krill";
-  title.textContent = `${roleLabel} - ${formatMessageTimestamp(timestamp)}`;
+  const timeStr = (timestamp && status !== "queued" && status !== "processing")
+    ? ` - ${formatMessageTimestamp(timestamp)}`
+    : "";
+  title.textContent = `${roleLabel}${timeStr}`;
 
   const bubble = document.createElement("div");
   bubble.className = "chat-bubble";
@@ -6776,7 +6779,7 @@ async function sendMessage(event) {
   const optimisticAssistantMessage = {
     role: "assistant",
     content: "",
-    timestamp: queuedTimestamp,
+    timestamp: "",
     system_type: "",
     tool_usage: [],
     request_id: localRequestId,
