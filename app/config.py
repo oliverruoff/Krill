@@ -807,6 +807,27 @@ async def save_chat_state(
         return normalized
 
 
+async def update_chat_title(chat_id: str, title: str) -> bool:
+    """Update the title of a single chat without rewriting all tables."""
+    clean_id = str(chat_id or "").strip()
+    clean_title = str(title or "").strip()[:120]
+    if not clean_id or not clean_title:
+        return False
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_update_chat_title_sync, clean_id, clean_title)
+
+
+def _update_chat_title_sync(chat_id: str, title: str) -> bool:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        cursor = conn.execute("UPDATE chats SET title = ? WHERE id = ?", (title, chat_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 def _save_settings_sync(settings: Settings) -> None:
     conn = _get_conn(BRAINDUMP_PATH)
     try:

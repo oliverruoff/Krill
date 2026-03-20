@@ -43,6 +43,7 @@ from .config import (
     resolve_short_term_memories,
     save_chat_state,
     save_settings,
+    update_chat_title,
     upsert_script,
     upsert_timed_job,
     view_braindump,
@@ -1336,6 +1337,38 @@ async def _process_gateway_chat_queue(chat_id: str) -> None:
             _gateway_chat_active_request_ids.pop(chat_id, None)
 
 
+async def _generate_and_save_chat_title(
+    chat_id: str,
+    first_user_message: str,
+    provider_id: str,
+    model: str,
+    api_key: str,
+) -> None:
+    """Ask the LLM for a short chat title and persist it. Fire-and-forget background task."""
+    try:
+        provider = get_provider(provider_id)
+        prompt = (
+            "Write a short 3-5 word title for a chat that starts with this message. "
+            "Reply with only the title, no quotes, no punctuation at the end:\n\n"
+            f"{first_user_message[:300]}"
+        )
+        text, _ = await provider.generate(
+            prompt=prompt,
+            system_prompt="",
+            model=model,
+            api_key=api_key,
+            history=[],
+        )
+        title = text.strip().strip("\"'").strip()
+        if not title:
+            return
+        if len(title) > 60:
+            title = title[:60].rsplit(" ", 1)[0].strip()
+        await update_chat_title(chat_id, title)
+    except Exception:
+        pass  # Silently ignore — the truncated first-message title stays as fallback
+
+
 async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
     request_id = str(job.get("request_id", "")).strip()
     message = str(job.get("message", "")).strip()
@@ -1499,6 +1532,18 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
         add_daily_usage(settings, used_tokens)
 
     await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage, preserve_active_chat_id=True)
+
+    # After the first user message, generate a fitting chat title in the background.
+    # The 5-second client poll will pick it up automatically.
+    user_messages = [m for m in chat.messages if m.role == "user" and m.content.strip()]
+    if len(user_messages) == 1:
+        asyncio.create_task(_generate_and_save_chat_title(
+            chat_id=chat_id,
+            first_user_message=message,
+            provider_id=resolved_provider_id,
+            model=resolved_model,
+            api_key=resolved_api_key,
+        ))
 
     try:
         await register_completed_turn(
