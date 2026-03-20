@@ -27,6 +27,8 @@ from ..mcps.google_services import (
     SCOPES_PARAM,
     TOKEN_EXPIRY_PARAM,
     build_google_oauth_authorize_url,
+    _ensure_valid_access_token,
+    _persist_google_params,
     exchange_google_oauth_code,
     fetch_google_account_email,
     google_oauth_scopes_for_mode,
@@ -46,9 +48,11 @@ _PUBLIC_BASE_URL_ENV = "KRILL_PUBLIC_BASE_URL"
 
 class GoogleOAuthStatusResponse(BaseModel):
     connected: bool
+    needs_relogin: bool
     access_mode: str
     email: str
     has_refresh_token: bool
+    detail: str = ""
     scopes: list[str] = Field(default_factory=list)
 
 
@@ -62,12 +66,31 @@ async def get_google_oauth_status() -> GoogleOAuthStatusResponse:
     refresh_token = str(params.get(REFRESH_TOKEN_PARAM, "")).strip()
     scope_value = str(params.get(SCOPES_PARAM, "")).strip()
     scopes = [scope for scope in scope_value.split(" ") if scope.strip()] if scope_value else []
-    connected = bool(refresh_token or str(params.get(ACCESS_TOKEN_PARAM, "")).strip())
+    token_present = bool(refresh_token or str(params.get(ACCESS_TOKEN_PARAM, "")).strip())
+    connected = False
+    needs_relogin = False
+    detail = ""
+
+    if token_present:
+        try:
+            resolve_google_client_credentials(params)
+            access_token = await _ensure_valid_access_token(params, persist_updates=_persist_google_params)
+            resolved_email = await asyncio.to_thread(fetch_google_account_email, access_token=access_token)
+            if resolved_email and resolved_email != email_value:
+                await _persist_google_params({CONNECTED_EMAIL_PARAM: resolved_email})
+                email_value = resolved_email
+            connected = True
+        except Exception as exc:
+            needs_relogin = True
+            detail = str(exc).strip() or "Google connection is no longer valid."
+
     return GoogleOAuthStatusResponse(
         connected=connected,
+        needs_relogin=needs_relogin,
         access_mode=access_mode,
         email=email_value,
         has_refresh_token=bool(refresh_token),
+        detail=detail,
         scopes=scopes,
     )
 
@@ -218,9 +241,11 @@ async def disconnect_google_oauth() -> GoogleOAuthStatusResponse:
 
     return GoogleOAuthStatusResponse(
         connected=False,
+        needs_relogin=False,
         access_mode=params[ACCESS_MODE_PARAM],
         email="",
         has_refresh_token=False,
+        detail="",
         scopes=[],
     )
 

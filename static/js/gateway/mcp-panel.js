@@ -458,7 +458,9 @@ function renderConfigPanel(container, items, getConfig, options) {
       const loginButton = document.createElement("button");
       loginButton.type = "button";
       loginButton.className = "mcp-link-btn";
-      loginButton.textContent = Boolean(state.googleOauthStatus?.connected) ? "Relogin" : "Login Google";
+      loginButton.textContent = (Boolean(state.googleOauthStatus?.connected) || Boolean(state.googleOauthStatus?.needs_relogin))
+        ? "Relogin"
+        : "Login Google";
       loginButton.dataset.action = "google-login";
       loginButton.dataset.configKind = options.kind;
       loginButton.dataset.configId = item.id;

@@ -240,6 +240,7 @@ Google Services MCP notes:
   - unchecked **Add write access**: read Gmail, Calendar, and Drive files
   - checked **Add write access**: also send emails, create/update calendar events, and upload files to Drive
 - click **Login Google** to complete OAuth consent
+- if the tool card shows `Google: relogin required`, the stored Google token was expired or revoked; click **Relogin** to restore access
 - Gmail tools support attachments: list/download/save attachments from messages, and send email with base64 or local-file attachments (write mode required for sending)
 - Drive local uploads (`drive_upload_local_file`) now allow `max_bytes` up to 1GB
 - Drive document reading now supports `drive_read_file` for Google Docs, Google Sheets, PDFs, DOCX files, and text-like files so the model can pull file contents into context without passing raw base64 blobs through the prompt

@@ -49,6 +49,15 @@ export function getGoogleOauthStatusLabel() {
     return "Google: not connected";
   }
 
+  if (state.googleOauthStatus.needs_relogin) {
+    const emailValue = typeof state.googleOauthStatus.email === "string" ? state.googleOauthStatus.email.trim() : "";
+    const detailValue = typeof state.googleOauthStatus.detail === "string" ? state.googleOauthStatus.detail.trim() : "";
+    const baseLabel = emailValue
+      ? `Google: relogin required for ${emailValue}`
+      : "Google: relogin required";
+    return detailValue ? `${baseLabel} - ${detailValue}` : baseLabel;
+  }
+
   if (!state.googleOauthStatus.connected) {
     return "Google: not connected";
   }

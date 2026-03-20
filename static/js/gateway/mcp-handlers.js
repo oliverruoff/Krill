@@ -520,7 +520,14 @@ export async function handleMcpActionClick(event) {
     if (action === "google-login") {
       const { startGoogleOauthLogin } = await import("./google-oauth.js");
       await startGoogleOauthLogin();
-      setStatus(Boolean(state.googleOauthStatus?.connected) ? "Google account connected." : "Google login was closed.");
+      if (Boolean(state.googleOauthStatus?.connected)) {
+        setStatus("Google account connected.");
+      } else if (Boolean(state.googleOauthStatus?.needs_relogin)) {
+        const detail = typeof state.googleOauthStatus?.detail === "string" ? state.googleOauthStatus.detail.trim() : "";
+        setStatus(detail || "Google relogin is required.", true);
+      } else {
+        setStatus("Google login was closed.");
+      }
       return;
     }
 
