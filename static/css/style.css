@@ -3189,6 +3189,9 @@ button:disabled {
     bottom: 0;
     z-index: 3;
     padding-top: 0.2rem;
+    padding-right: max(0.55rem, env(safe-area-inset-right));
+    padding-bottom: calc(0.55rem + env(safe-area-inset-bottom));
+    padding-left: max(0.55rem, env(safe-area-inset-left));
     background: var(--surface);
   }
 
