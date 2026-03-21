@@ -6,12 +6,20 @@ import asyncio
 import random
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, TypedDict
 
 from .base import LLMProvider
 
 
-ProviderRetryCallback = Callable[[int, int, float, str], Awaitable[None]]
+
+
+class ProviderRetryMetadata(TypedDict):
+    retry_class: str
+    delay_source: str
+    next_retry_at: str
+
+
+ProviderRetryCallback = Callable[[int, int, float, str, ProviderRetryMetadata], Awaitable[None]]
 
 _DEFAULT_MAX_ATTEMPTS = 3
 _BASE_DELAY_SECONDS = 0.6
@@ -46,8 +54,15 @@ async def generate_with_retries(
                 raise
 
             delay = _compute_retry_delay_seconds(exc, attempt)
+            delay_source = "retry-after" if _retry_after_seconds_from_exception(exc) is not None else "backoff"
+            now = datetime.now().astimezone()
+            metadata: ProviderRetryMetadata = {
+                "retry_class": _classify_retryable_provider_error(exc),
+                "delay_source": delay_source,
+                "next_retry_at": datetime.fromtimestamp(now.timestamp() + delay, tz=now.tzinfo).isoformat(),
+            }
             if on_retry is not None:
-                await on_retry(attempt, attempts, delay, _error_message(exc))
+                await on_retry(attempt, attempts, delay, _error_message(exc), metadata)
             await asyncio.sleep(delay)
 
     raise RuntimeError("Provider retry loop failed unexpectedly.")
@@ -82,6 +97,24 @@ def _is_retryable_provider_error(exc: Exception) -> bool:
         "overloaded",
     )
     return any(marker in message for marker in retryable_markers)
+
+
+def _classify_retryable_provider_error(exc: Exception) -> str:
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+
+    message = _error_message(exc).lower()
+    if not message:
+        return "unknown"
+    if "429" in message or "too many requests" in message or "rate limit" in message:
+        return "rate_limit"
+    if any(marker in message for marker in ("timeout", "timed out")):
+        return "timeout"
+    if any(marker in message for marker in ("network error", "connection reset", "connection refused", "connection aborted")):
+        return "network"
+    if any(marker in message for marker in ("(500)", "(502)", "(503)", "(504)", "service unavailable", "temporarily unavailable", "overloaded")):
+        return "server_error"
+    return "transient"
 
 
 def _compute_retry_delay_seconds(exc: Exception, attempt: int) -> float:

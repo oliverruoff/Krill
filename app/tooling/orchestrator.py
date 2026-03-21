@@ -15,7 +15,7 @@ from app.config import McpConfig, SCRIPTS_DIR, Settings, is_script_title_enabled
 from app.mcps.base import MCPPlugin, McpConfigField
 from app.mcps.registry import get_all_mcps
 from app.providers.base import LLMProvider
-from app.providers.resilience import generate_with_retries
+from app.providers.resilience import ProviderRetryMetadata, generate_with_retries
 
 
 class ToolUsageEntry(TypedDict):
@@ -59,6 +59,7 @@ _MAX_SCRIPT_CATALOG_ENTRIES = 100
 _MAX_SCRIPT_DESCRIPTION_CHARS = 300
 _MAX_SCRIPT_INSTRUCTIONS_CHARS = 220
 _MAX_INVALID_PLANNER_RESPONSES = 3
+_DOOM_LOOP_THRESHOLD = 3
 _SCRIPT_CATALOG_NOISE_TOKENS = {
     "action",
     "arguments",
@@ -134,12 +135,25 @@ async def generate_with_tools(
         system_prompt_text: str,
         phase_label: str,
     ) -> tuple[str, int | None]:
-        async def on_retry(attempt: int, max_attempts: int, delay_seconds: float, reason: str) -> None:
+        async def on_retry(
+            attempt: int,
+            max_attempts: int,
+            delay_seconds: float,
+            reason: str,
+            metadata: ProviderRetryMetadata,
+        ) -> None:
             await trace(
                 "provider_retry",
-                (
-                    f"{phase_label}: retry {attempt + 1}/{max_attempts} in {delay_seconds:.1f}s"
-                    f" after provider error: {reason or 'unknown error'}"
+                json.dumps(
+                    {
+                        "phase_label": phase_label,
+                        "attempt": attempt + 1,
+                        "max_attempts": max_attempts,
+                        "delay_seconds": round(delay_seconds, 3),
+                        "reason": reason or "unknown error",
+                        **metadata,
+                    },
+                    ensure_ascii=True,
                 ),
             )
 
@@ -173,6 +187,7 @@ async def generate_with_tools(
     interaction_log: list[dict[str, object]] = []
     successful_tool_call_signatures: set[str] = set()
     tool_call_attempts_by_signature: dict[str, int] = {}
+    tool_call_failures_by_signature: dict[str, int] = {}
     consecutive_invalid_planner_responses = 0
     normalized_recursion = max(1, min(20, int(max_tool_recursion)))
     timeout_seconds = max(5, min(300, int(tool_timeout_seconds)))
@@ -564,6 +579,12 @@ async def generate_with_tools(
         )
         tool_call_payload["arguments"] = _redact_sensitive_payload(tool_arguments)
 
+        tool_call_signature = _build_tool_call_signature(mcp_id, tool_id, tool_arguments)
+        signature_attempts = tool_call_attempts_by_signature.get(tool_call_signature, 0)
+        failure_attempts = tool_call_failures_by_signature.get(tool_call_signature, 0)
+        tool_call_id = _build_tool_call_id(step_index, mcp_id, tool_id, signature_attempts + 1)
+        tool_call_payload["call_id"] = tool_call_id
+
         missing_required_arguments = _missing_required_arguments(
             cast(dict[str, object], tool_entry.get("input_schema", {})),
             tool_arguments,
@@ -598,16 +619,83 @@ async def generate_with_tools(
             )
             continue
 
-        tool_call_signature = _build_tool_call_signature(mcp_id, tool_id, tool_arguments)
-        signature_attempts = tool_call_attempts_by_signature.get(tool_call_signature, 0)
-        if tool_call_signature in successful_tool_call_signatures or signature_attempts >= _MAX_RETRIES_PER_TOOL_SIGNATURE:
+        argument_validation_errors = _validate_tool_arguments(
+            cast(dict[str, object], tool_entry.get("input_schema", {})),
+            tool_arguments,
+        )
+        if argument_validation_errors:
+            logger.debug(
+                "Tool argument validation failed at step=%s mcp=%s tool=%s errors=%s",
+                step_index,
+                mcp_id,
+                tool_id,
+                argument_validation_errors,
+            )
+            validation_payload = {
+                "mcp_id": mcp_id,
+                "tool_id": tool_id,
+                "call_id": tool_call_id,
+                "arguments": _redact_sensitive_payload(tool_arguments),
+                "step": step_index,
+                "error": "tool_argument_validation_failed",
+                "validation_errors": argument_validation_errors,
+            }
+            await trace("tool_error", json.dumps(validation_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_call": tool_call_payload,
+                    "tool_error": {
+                        "type": "tool_argument_validation_failed",
+                        "message": "Tool arguments did not satisfy the tool schema.",
+                        "validation_errors": argument_validation_errors,
+                    },
+                    "planner_feedback": {
+                        "type": "tool_argument_validation_failed",
+                        "message": "Rewrite the same tool call so the arguments satisfy the schema.",
+                        "validation_errors": argument_validation_errors,
+                    },
+                }
+            )
+            continue
+
+        if failure_attempts >= _DOOM_LOOP_THRESHOLD:
+            doom_payload = {
+                "mcp_id": mcp_id,
+                "tool_id": tool_id,
+                "call_id": tool_call_id,
+                "arguments": _redact_sensitive_payload(tool_arguments),
+                "step": step_index,
+                "error": "doom_loop_detected",
+                "attempts": failure_attempts,
+            }
+            await trace("tool_error", json.dumps(doom_payload, ensure_ascii=True))
+            await trace("tool_blocked", json.dumps(doom_payload, ensure_ascii=True))
+            logger.warning(
+                "Doom loop detected at step=%s mcp=%s tool=%s failures=%s",
+                step_index,
+                mcp_id,
+                tool_id,
+                failure_attempts,
+            )
+            return {
+                "text": (
+                    f"Repeated identical failing tool call detected for {mcp_id}.{tool_id}. "
+                    "Please confirm if you want me to retry the exact same call, or rephrase the task."
+                ),
+                "used_tokens": _sum_tokens(*token_values),
+                "used_mcp_tools": used_tools,
+                "system_trace_messages": system_trace_messages,
+            }
+
+        if tool_call_signature in successful_tool_call_signatures:
             logger.debug(
                 "Blocked duplicate tool call at step=%s mcp=%s tool=%s prior_attempts=%s already_succeeded=%s",
                 step_index,
                 mcp_id,
                 tool_id,
                 signature_attempts,
-                tool_call_signature in successful_tool_call_signatures,
+                True,
             )
             duplicate_payload = {
                 "mcp_id": mcp_id,
@@ -615,11 +703,7 @@ async def generate_with_tools(
                 "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "duplicate_tool_call_blocked",
-                "detail": (
-                    "Blocked duplicate MCP tool call with identical arguments in this orchestration run."
-                    if tool_call_signature in successful_tool_call_signatures
-                    else f"Blocked after {signature_attempts} failed attempt(s) with identical arguments."
-                ),
+                "detail": "Blocked duplicate MCP tool call with identical arguments in this orchestration run.",
             }
             await trace("tool_error", json.dumps(duplicate_payload, ensure_ascii=True))
             interaction_log.append(
@@ -643,6 +727,18 @@ async def generate_with_tools(
             tool_id,
             _safe_json_dumps(tool_call_payload.get("arguments")),
         )
+        await trace(
+            "tool_call_started",
+            json.dumps(
+                {
+                    "call_id": tool_call_id,
+                    "mcp_id": mcp_id,
+                    "tool_id": tool_id,
+                    "step": step_index,
+                },
+                ensure_ascii=True,
+            ),
+        )
         await trace("tool_call", json.dumps(tool_call_payload, ensure_ascii=True))
 
         try:
@@ -661,11 +757,14 @@ async def generate_with_tools(
             tool_error_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
+                "call_id": tool_call_id,
                 "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "tool_execution_timeout",
                 "detail": f"{plugin.display_name} ({tool_id}) exceeded timeout of {timeout_seconds}s.",
             }
+            tool_call_failures_by_signature[tool_call_signature] = failure_attempts + 1
+            await trace("tool_call_failed", json.dumps(tool_error_payload, ensure_ascii=True))
             await trace("tool_error", json.dumps(tool_error_payload, ensure_ascii=True))
             interaction_log.append(
                 {
@@ -689,11 +788,14 @@ async def generate_with_tools(
             tool_error_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
+                "call_id": tool_call_id,
                 "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "tool_execution_failed",
                 "detail": exc_detail,
             }
+            tool_call_failures_by_signature[tool_call_signature] = failure_attempts + 1
+            await trace("tool_call_failed", json.dumps(tool_error_payload, ensure_ascii=True))
             await trace("tool_error", json.dumps(tool_error_payload, ensure_ascii=True))
             interaction_log.append(
                 {
@@ -708,6 +810,7 @@ async def generate_with_tools(
             continue
 
         successful_tool_call_signatures.add(tool_call_signature)
+        tool_call_failures_by_signature.pop(tool_call_signature, None)
         used_tools.append(tool_usage)
         logger.debug(
             "Tool execution succeeded at step=%s mcp=%s tool=%s used_tools=%s",
@@ -719,6 +822,18 @@ async def generate_with_tools(
 
         redacted_tool_result = _redact_sensitive_payload(tool_result)
         compact_tool_result = _compact_payload_for_prompt(redacted_tool_result)
+        await trace(
+            "tool_call_completed",
+            json.dumps(
+                {
+                    "call_id": tool_call_id,
+                    "mcp_id": mcp_id,
+                    "tool_id": tool_id,
+                    "step": step_index,
+                },
+                ensure_ascii=True,
+            ),
+        )
         await trace("tool_result", json.dumps(compact_tool_result, ensure_ascii=True))
         interaction_log.append({
             "step": step_index,
@@ -1153,7 +1268,7 @@ async def _apply_tool_call_reminder(
     )
 
     parsed = _parse_planner_response(response_text)
-    maybe_args = parsed.get("arguments")
+    maybe_args = parsed["plan"].get("arguments")
     if isinstance(maybe_args, dict):
         return cast(dict[str, object], maybe_args), used_tokens if isinstance(used_tokens, int) else None
 
@@ -1209,6 +1324,12 @@ def _normalize_tool_call_arguments(arguments: dict[str, object]) -> str:
         return json.dumps(str(arguments), ensure_ascii=True)
 
 
+def _build_tool_call_id(step_index: int, mcp_id: str, tool_id: str, attempt_number: int) -> str:
+    safe_mcp_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", mcp_id).strip("_") or "mcp"
+    safe_tool_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", tool_id).strip("_") or "tool"
+    return f"step{step_index}-{safe_mcp_id}-{safe_tool_id}-a{attempt_number}"
+
+
 def _align_tool_timeout_argument(
     *,
     arguments: dict[str, object],
@@ -1251,6 +1372,109 @@ def _safe_int(value: object) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _validate_tool_arguments(input_schema: dict[str, object], arguments: dict[str, object]) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    properties = input_schema.get("properties") if isinstance(input_schema, dict) else None
+    if not isinstance(properties, dict):
+        return errors
+
+    for name, value in arguments.items():
+        schema = properties.get(name)
+        if not isinstance(schema, dict):
+            continue
+        errors.extend(_validate_schema_value(schema, value, path=name))
+    return errors
+
+
+def _validate_schema_value(schema: dict[str, object], value: object, *, path: str) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    expected_types = _schema_type_names(schema)
+    if expected_types and not _matches_schema_types(expected_types, value):
+        errors.append(
+            {
+                "field": path,
+                "expected": "|".join(expected_types),
+                "actual": _schema_value_type_name(value),
+            }
+        )
+        return errors
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and enum_values and value not in enum_values:
+        errors.append(
+            {
+                "field": path,
+                "expected": "enum",
+                "actual": _safe_json_dumps(value),
+            }
+        )
+        return errors
+
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for child_name, child_value in value.items():
+                child_schema = properties.get(child_name)
+                if isinstance(child_schema, dict):
+                    errors.extend(_validate_schema_value(child_schema, child_value, path=f"{path}.{child_name}"))
+        return errors
+
+    if isinstance(value, list):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                errors.extend(_validate_schema_value(item_schema, item, path=f"{path}[{index}]"))
+        return errors
+
+    return errors
+
+
+def _schema_type_names(schema: dict[str, object]) -> list[str]:
+    raw_type = schema.get("type")
+    if isinstance(raw_type, str):
+        return [raw_type]
+    if isinstance(raw_type, list):
+        return [item for item in raw_type if isinstance(item, str)]
+    return []
+
+
+def _matches_schema_types(expected_types: list[str], value: object) -> bool:
+    for expected in expected_types:
+        if expected == "string" and isinstance(value, str):
+            return True
+        if expected == "boolean" and isinstance(value, bool):
+            return True
+        if expected == "integer" and isinstance(value, int) and not isinstance(value, bool):
+            return True
+        if expected == "number" and isinstance(value, (int, float)) and not isinstance(value, bool):
+            return True
+        if expected == "object" and isinstance(value, dict):
+            return True
+        if expected == "array" and isinstance(value, list):
+            return True
+        if expected == "null" and value is None:
+            return True
+    return False
+
+
+def _schema_value_type_name(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    return type(value).__name__
 
 
 def _looks_like_tool_avoidance_response(text: str) -> bool:
