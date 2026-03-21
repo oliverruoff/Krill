@@ -51,6 +51,7 @@ _BULKY_BINARY_FIELD_NAMES = {"content_base64"}
 _MAX_SCRIPT_CATALOG_ENTRIES = 100
 _MAX_SCRIPT_DESCRIPTION_CHARS = 300
 _MAX_SCRIPT_INSTRUCTIONS_CHARS = 220
+_MAX_INVALID_PLANNER_RESPONSES = 3
 _SCRIPT_CATALOG_NOISE_TOKENS = {
     "action",
     "arguments",
@@ -165,6 +166,7 @@ async def generate_with_tools(
     interaction_log: list[dict[str, object]] = []
     successful_tool_call_signatures: set[str] = set()
     tool_call_attempts_by_signature: dict[str, int] = {}
+    consecutive_invalid_planner_responses = 0
     normalized_recursion = max(1, min(20, int(max_tool_recursion)))
     timeout_seconds = max(5, min(300, int(tool_timeout_seconds)))
     current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
@@ -209,6 +211,59 @@ async def generate_with_tools(
             str(plan.get("action", "")),
             _safe_json_dumps(_redact_sensitive_payload(plan)),
         )
+        invalid_planner_reason = _invalid_planner_reason(plan)
+        if invalid_planner_reason:
+            consecutive_invalid_planner_responses += 1
+            response_preview = planner_response.strip().replace("\n", " ")[:300]
+            logger.warning(
+                "Planner returned invalid response at step=%s reason=%s consecutive_invalid=%s preview=%r",
+                step_index,
+                invalid_planner_reason,
+                consecutive_invalid_planner_responses,
+                response_preview,
+            )
+            invalid_payload = {
+                "step": step_index,
+                "error": "planner_invalid_response",
+                "detail": invalid_planner_reason,
+                "raw_preview": response_preview,
+                "consecutive_invalid": consecutive_invalid_planner_responses,
+            }
+            await trace("tool_error", json.dumps(invalid_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "planner_feedback": {
+                        "type": "planner_invalid_response",
+                        "message": (
+                            "Previous planner output was invalid. Return JSON only and choose a real tool call, "
+                            "a non-empty final answer, or a blocked response."
+                        ),
+                        "detail": invalid_planner_reason,
+                    },
+                }
+            )
+            if consecutive_invalid_planner_responses < _MAX_INVALID_PLANNER_RESPONSES and step_index < normalized_recursion:
+                continue
+
+            fallback_message = (
+                "I could not produce a valid tool-selection plan after multiple attempts. "
+                "Please retry or simplify the request."
+            )
+            logger.info(
+                "Orchestration aborted after repeated invalid planner responses: steps=%s tools_used=%s duration_seconds=%.2f",
+                step_index,
+                len(used_tools),
+                monotonic() - started_at,
+            )
+            return {
+                "text": fallback_message,
+                "used_tokens": _sum_tokens(*token_values),
+                "used_mcp_tools": used_tools,
+                "system_trace_messages": system_trace_messages,
+            }
+
+        consecutive_invalid_planner_responses = 0
         action = plan.get("action")
 
         if action == "respond":
@@ -877,6 +932,35 @@ def _sanitize_script_catalog_text(text: str) -> str:
         seen.add(token)
         filtered.append(token)
     return " ".join(filtered)
+
+
+def _invalid_planner_reason(plan: dict[str, object]) -> str:
+    action = str(plan.get("action", "")).strip()
+    if not action:
+        return "Planner response is missing an action."
+
+    if action == "call_tool":
+        tool_id = plan.get("tool_id")
+        if not isinstance(tool_id, str) or not tool_id.strip():
+            return "Planner tool call is missing a valid tool_id."
+        return ""
+
+    if action == "respond":
+        final_answer = plan.get("final_answer")
+        if not isinstance(final_answer, str) or not final_answer.strip():
+            return "Planner respond action is missing a non-empty final_answer."
+        return ""
+
+    if action == "blocked":
+        blocking_reason = plan.get("blocking_reason")
+        required_user_input = plan.get("required_user_input")
+        if isinstance(blocking_reason, str) and blocking_reason.strip():
+            return ""
+        if isinstance(required_user_input, str) and required_user_input.strip():
+            return ""
+        return "Planner blocked action is missing blocking details."
+
+    return f"Planner returned unsupported action {action!r}."
 
 
 def _parse_planner_response(response_text: str) -> dict[str, object]:
