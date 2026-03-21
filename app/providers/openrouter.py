@@ -14,6 +14,7 @@ class OpenRouterProvider(LLMProvider):
     available_models = [
         {"id": "free", "label": "Free", "token_limit": 200000, "supports_images": False},
         {"id": "minimax/minimax-m2.5", "label": "MiniMax M2.5", "token_limit": 197000, "supports_images": False},
+        {"id": "minimax/minimax-m2.7", "label": "MiniMax M2.7", "token_limit": 204800, "supports_images": False},
         {"id": "qwen/qwen3.5-flash-02-23", "label": "Qwen 3.5 Flash", "token_limit": 1000000, "supports_images": False},
         {"id": "moonshotai/kimi-k2.5", "label": "Kimi K2.5", "token_limit": 262144, "supports_images": False},
         {"id": "z-ai/glm-5", "label": "GLM 5", "token_limit": 204800, "supports_images": False},
