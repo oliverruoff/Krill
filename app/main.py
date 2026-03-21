@@ -31,6 +31,33 @@ from .routers.timed_jobs import router as timed_jobs_router
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
+_DEFAULT_LOG_LEVEL = "INFO"
+_LOG_LEVEL_ENV = "KRILL_LOG_LEVEL"
+
+
+def _resolve_log_level(raw_value: str) -> int | None:
+    normalized = raw_value.strip().upper()
+    if not normalized:
+        return None
+    level = getattr(logging, normalized, None)
+    return level if isinstance(level, int) else None
+
+
+def _configure_logging() -> tuple[str, int]:
+    raw_level = os.getenv(_LOG_LEVEL_ENV, _DEFAULT_LOG_LEVEL)
+    resolved_level = _resolve_log_level(raw_level)
+    if resolved_level is None:
+        raw_level = _DEFAULT_LOG_LEVEL
+        resolved_level = logging.INFO
+
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=resolved_level,
+            format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+        )
+
+    logging.getLogger("app").setLevel(resolved_level)
+    return raw_level.upper(), resolved_level
 
 if os.name == "nt":
     try:
@@ -62,6 +89,7 @@ app.include_router(integrations_router)
 app.include_router(timed_jobs_router)
 
 logger = logging.getLogger(__name__)
+_CONFIGURED_LOG_LEVEL_NAME, _ = _configure_logging()
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +129,7 @@ async def require_authentication(request: Request, call_next):
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    logger.info("Application logging configured at %s via %s", _CONFIGURED_LOG_LEVEL_NAME, _LOG_LEVEL_ENV)
     await ensure_settings_file()
     await rehydrate_git_ssh_material()
     await start_memory_extraction_worker()

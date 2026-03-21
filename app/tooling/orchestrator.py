@@ -6,6 +6,7 @@ import logging
 import re
 import traceback
 from datetime import datetime
+from time import monotonic
 from typing import Any, Awaitable, Callable, Sequence, TypedDict, cast
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ async def generate_with_tools(
     system_trace_messages: list[SystemTraceEntry] = []
     used_tools: list[ToolUsageEntry] = []
     token_values: list[int] = []
+    started_at = monotonic()
 
     async def trace(system_type: str, content: str) -> None:
         entry: SystemTraceEntry = {"system_type": system_type, "content": content}
@@ -77,6 +79,14 @@ async def generate_with_tools(
     await trace("runtime_system_prompt", system_prompt)
     enabled_tools = _collect_enabled_tools(settings)
     scripts_catalog = await _collect_script_catalog(settings)
+    logger.debug(
+        "Starting orchestration: prompt_chars=%s enabled_tools=%s scripts=%s max_steps=%s timeout_seconds=%s",
+        len(prompt),
+        len(enabled_tools),
+        len(scripts_catalog),
+        max_tool_recursion,
+        tool_timeout_seconds,
+    )
 
     async def provider_generate(
         *,
@@ -104,6 +114,7 @@ async def generate_with_tools(
         )
 
     if not enabled_tools:
+        logger.info("No enabled tools available; using direct provider response")
         text, used_tokens = await provider_generate(
             prompt_text=prompt,
             system_prompt_text=system_prompt,
@@ -150,6 +161,11 @@ async def generate_with_tools(
             )
             if direct_plan is not None:
                 is_direct_routed = True
+                logger.debug(
+                    "Direct script route selected at step=%s: %s",
+                    step_index,
+                    _safe_json_dumps(_redact_sensitive_payload(direct_plan)),
+                )
                 await trace("tool_direct_route", json.dumps(_redact_sensitive_payload(direct_plan), ensure_ascii=True))
 
         if direct_plan is not None:
@@ -176,6 +192,12 @@ async def generate_with_tools(
             await trace("tool_planner_result", planner_response)
 
             plan = _parse_planner_response(planner_response)
+            logger.debug(
+                "Planner step=%s returned action=%s payload=%s",
+                step_index,
+                str(plan.get("action", "")),
+                _safe_json_dumps(_redact_sensitive_payload(plan)),
+            )
         action = plan.get("action")
 
         if action == "respond":
@@ -192,6 +214,11 @@ async def generate_with_tools(
                 plan = forced_call
                 action = "call_tool"
                 is_direct_routed = True
+                logger.debug(
+                    "Fallback script routing replaced planner respond at step=%s with %s",
+                    step_index,
+                    _safe_json_dumps(_redact_sensitive_payload(forced_call)),
+                )
                 await trace("tool_fallback", json.dumps(_redact_sensitive_payload(forced_call), ensure_ascii=True))
 
         if action == "respond":
@@ -201,6 +228,11 @@ async def generate_with_tools(
                 goal_status = _normalize_goal_status(plan.get("goal_status"))
 
                 if goal_status != "complete" and step_index < normalized_recursion:
+                    logger.debug(
+                        "Planner responded early at step=%s with goal_status=%s; continuing",
+                        step_index,
+                        goal_status,
+                    )
                     incomplete_payload = {
                         "step": step_index,
                         "error": "planner_marked_incomplete",
@@ -221,7 +253,13 @@ async def generate_with_tools(
                     )
                     continue
 
-                if not used_tools and _looks_like_tool_avoidance_response(normalized_answer):
+                avoidance_pattern = _match_tool_avoidance_pattern(normalized_answer)
+                if not used_tools and avoidance_pattern:
+                    logger.debug(
+                        "Tool avoidance detected at step=%s via pattern=%r",
+                        step_index,
+                        avoidance_pattern,
+                    )
                     skip_payload = {
                         "step": step_index,
                         "error": "planner_skipped_tools",
@@ -240,6 +278,12 @@ async def generate_with_tools(
                     )
                     continue
 
+                logger.info(
+                    "Orchestration completed via planner response: steps=%s tools_used=%s duration_seconds=%.2f",
+                    step_index,
+                    len(used_tools),
+                    monotonic() - started_at,
+                )
                 return {
                     "text": normalized_answer,
                     "used_tokens": _sum_tokens(*token_values),
@@ -266,6 +310,13 @@ async def generate_with_tools(
             blocked_message = "\n\n".join(blocked_message_parts).strip() or (
                 "I am blocked by a required external step and need user input to continue."
             )
+            logger.info(
+                "Orchestration blocked at step=%s reason=%r required_input=%r duration_seconds=%.2f",
+                step_index,
+                blocking_reason,
+                required_user_input,
+                monotonic() - started_at,
+            )
             return {
                 "text": blocked_message,
                 "used_tokens": _sum_tokens(*token_values),
@@ -274,6 +325,7 @@ async def generate_with_tools(
             }
 
         if action != "call_tool":
+            logger.debug("Planner returned unsupported action=%r at step=%s", action, step_index)
             break
 
         mcp_id = plan.get("mcp_id")
@@ -281,6 +333,7 @@ async def generate_with_tools(
         arguments = plan.get("arguments")
 
         if not isinstance(tool_id, str) or not tool_id.strip():
+            logger.debug("Planner returned invalid tool payload at step=%s: %s", step_index, _safe_json_dumps(_redact_sensitive_payload(plan)))
             invalid_payload = {
                 "step": step_index,
                 "error": "planner_invalid_call_payload",
@@ -313,7 +366,19 @@ async def generate_with_tools(
             )
             if len(candidate_mcps) == 1:
                 resolved_mcp_id = candidate_mcps[0]
+                logger.debug(
+                    "Resolved missing mcp_id for tool=%s to %s at step=%s",
+                    resolved_tool_id,
+                    resolved_mcp_id,
+                    step_index,
+                )
             else:
+                logger.debug(
+                    "Planner returned ambiguous mcp_id for tool=%s at step=%s candidates=%s",
+                    resolved_tool_id,
+                    step_index,
+                    candidate_mcps,
+                )
                 invalid_payload = {
                     "step": step_index,
                     "error": "planner_invalid_call_payload",
@@ -357,6 +422,13 @@ async def generate_with_tools(
                 "error": "planner_selected_unavailable_tool",
                 "available_tool_ids_for_mcp": available_for_mcp,
             }
+            logger.debug(
+                "Planner selected unavailable tool at step=%s mcp=%s tool=%s available=%s",
+                step_index,
+                mcp_id,
+                tool_id,
+                available_for_mcp,
+            )
             await trace("tool_error", json.dumps(unavailable_payload, ensure_ascii=True))
             interaction_log.append(
                 {
@@ -394,6 +466,7 @@ async def generate_with_tools(
 
         reminder_text = await _get_mcp_tool_call_reminder(plugin, tool_id, config.params, arguments=tool_arguments)
         if reminder_text and (not is_direct_routed or mcp_id == "scripts"):
+            logger.debug("Applying tool call reminder for mcp=%s tool=%s at step=%s", mcp_id, tool_id, step_index)
             await trace("mcp_tool_call_reminder", reminder_text)
             tool_arguments, reminder_tokens = await _apply_tool_call_reminder(
                 provider=provider,
@@ -422,6 +495,13 @@ async def generate_with_tools(
             tool_arguments,
         )
         if missing_required_arguments:
+            logger.debug(
+                "Missing required arguments for mcp=%s tool=%s at step=%s missing=%s",
+                mcp_id,
+                tool_id,
+                step_index,
+                missing_required_arguments,
+            )
             missing_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
@@ -447,6 +527,14 @@ async def generate_with_tools(
         tool_call_signature = _build_tool_call_signature(mcp_id, tool_id, tool_arguments)
         signature_attempts = tool_call_attempts_by_signature.get(tool_call_signature, 0)
         if tool_call_signature in successful_tool_call_signatures or signature_attempts >= _MAX_RETRIES_PER_TOOL_SIGNATURE:
+            logger.debug(
+                "Blocked duplicate tool call at step=%s mcp=%s tool=%s prior_attempts=%s already_succeeded=%s",
+                step_index,
+                mcp_id,
+                tool_id,
+                signature_attempts,
+                tool_call_signature in successful_tool_call_signatures,
+            )
             duplicate_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
@@ -474,6 +562,13 @@ async def generate_with_tools(
 
         tool_call_attempts_by_signature[tool_call_signature] = signature_attempts + 1
 
+        logger.debug(
+            "Executing tool call at step=%s mcp=%s tool=%s arguments=%s",
+            step_index,
+            mcp_id,
+            tool_id,
+            _safe_json_dumps(tool_call_payload.get("arguments")),
+        )
         await trace("tool_call", json.dumps(tool_call_payload, ensure_ascii=True))
 
         try:
@@ -482,6 +577,13 @@ async def generate_with_tools(
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
+            logger.warning(
+                "Tool execution timeout at step=%s mcp=%s tool=%s timeout_seconds=%s",
+                step_index,
+                mcp_id,
+                tool_id,
+                timeout_seconds,
+            )
             tool_error_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
@@ -533,6 +635,13 @@ async def generate_with_tools(
 
         successful_tool_call_signatures.add(tool_call_signature)
         used_tools.append(tool_usage)
+        logger.debug(
+            "Tool execution succeeded at step=%s mcp=%s tool=%s used_tools=%s",
+            step_index,
+            mcp_id,
+            tool_id,
+            len(used_tools),
+        )
 
         redacted_tool_result = _redact_sensitive_payload(tool_result)
         compact_tool_result = _compact_payload_for_prompt(redacted_tool_result)
@@ -553,6 +662,13 @@ async def generate_with_tools(
     if isinstance(final_tokens, int):
         token_values.append(final_tokens)
 
+    logger.info(
+        "Orchestration completed via final response: steps=%s tools_used=%s duration_seconds=%.2f",
+        len(interaction_log),
+        len(used_tools),
+        monotonic() - started_at,
+    )
+
     return {
         "text": final_response,
         "used_tokens": _sum_tokens(*token_values),
@@ -571,6 +687,7 @@ def _sum_tokens(*token_values: int | None) -> int | None:
 def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     all_mcps = get_all_mcps()
+    tool_counts_by_mcp: dict[str, int] = {}
 
     for mcp_id, plugin in all_mcps.items():
         raw_config = settings.mcp_configs.get(mcp_id)
@@ -580,9 +697,12 @@ def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
             config = raw_config
 
         if not config.enabled:
+            logger.debug("Skipping MCP %s because it is disabled", mcp_id)
             continue
 
-        if _missing_required_params(plugin.config_fields, config):
+        missing_required = _missing_required_param_ids(plugin.config_fields, config)
+        if missing_required:
+            logger.debug("Skipping MCP %s because required params are missing: %s", mcp_id, missing_required)
             continue
 
         tool_specs = plugin.tool_specs()
@@ -594,6 +714,7 @@ def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
             except Exception:
                 tool_specs = plugin.tool_specs()
 
+        tool_counts_by_mcp[mcp_id] = len(tool_specs)
         for tool in tool_specs:
             entries.append(
                 {
@@ -608,19 +729,30 @@ def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
                 }
             )
 
+    logger.debug(
+        "Collected %s enabled tools across %s MCPs: %s",
+        len(entries),
+        len(tool_counts_by_mcp),
+        ", ".join(f"{mcp_id}={count}" for mcp_id, count in sorted(tool_counts_by_mcp.items())) or "none",
+    )
     return entries
 
 
 def _missing_required_params(config_fields: Sequence[McpConfigField], config: McpConfig) -> bool:
+    return bool(_missing_required_param_ids(config_fields, config))
+
+
+def _missing_required_param_ids(config_fields: Sequence[McpConfigField], config: McpConfig) -> list[str]:
+    missing: list[str] = []
     for field in config_fields:
         if not field.required:
             continue
 
         value = config.params.get(field.id, "")
         if not isinstance(value, str) or not value.strip():
-            return True
+            missing.append(field.id)
 
-    return False
+    return missing
 
 
 def _build_recursive_planner_prompt(
@@ -752,10 +884,12 @@ def _maybe_force_script_execution_call(
         for entry in enabled_tools
     )
     if not has_execute_tool:
+        logger.debug("Script direct routing unavailable because scripts.execute_script is not enabled")
         return None
 
     selected = _select_script_title_from_message(user_message, scripts_catalog)
     if not selected:
+        logger.debug("Script direct routing did not find a matching script")
         return None
 
     args: dict[str, object] = {"title": selected}
@@ -770,6 +904,8 @@ def _maybe_force_script_execution_call(
             "max": value,
             "iterations": value,
         }
+
+    logger.debug("Script direct routing selected title=%r arguments=%s", selected, _safe_json_dumps(_redact_sensitive_payload(args)))
 
     return {
         "action": "call_tool",
@@ -808,6 +944,13 @@ def _select_script_title_from_message(user_message: str, scripts_catalog: list[d
     has_script_keyword = any(keyword in lowered for keyword in script_keywords)
     has_action_keyword = any(keyword in lowered for keyword in action_keywords)
     run_hint = has_script_keyword and has_action_keyword
+    logger.debug(
+        "Evaluating script selection: run_hint=%s has_script_keyword=%s has_action_keyword=%s catalog_size=%s",
+        run_hint,
+        has_script_keyword,
+        has_action_keyword,
+        len(scripts_catalog),
+    )
 
     best_title = ""
     best_score = -1
@@ -820,27 +963,41 @@ def _select_script_title_from_message(user_message: str, scripts_catalog: list[d
         title_words = [token for token in re.findall(r"[a-z0-9]+", title.lower()) if token and token != "script"]
         exact_phrase = title.lower() in lowered or title.lower().replace("-", " ") in lowered
         words_match = bool(title_words) and all(token in word_tokens for token in title_words)
-        semantic_match = run_hint and any(
-            token in word_tokens
+        semantic_tokens = [
+            token
             for token in re.findall(r"[a-z0-9]+", f"{description} {instructions}")
-            if len(token) > 3
-        )
+            if len(token) > 3 and token in word_tokens
+        ]
+        semantic_match = run_hint and bool(semantic_tokens)
         if not exact_phrase and not words_match and not semantic_match:
+            logger.debug("Script candidate rejected title=%r exact_phrase=%s words_match=%s semantic_tokens=%s", title, exact_phrase, words_match, semantic_tokens[:8])
             continue
         score = len(title_words)
         if exact_phrase:
             score += 100
         if semantic_match:
             score += 10
+        logger.debug(
+            "Script candidate title=%r score=%s exact_phrase=%s words_match=%s semantic_tokens=%s",
+            title,
+            score,
+            exact_phrase,
+            words_match,
+            semantic_tokens[:8],
+        )
         if score > best_score:
             best_score = score
             best_title = title
 
     if best_title:
+        logger.debug("Selected script title=%r score=%s", best_title, best_score)
         return best_title
 
     if run_hint and len(scripts_catalog) == 1:
-        return str(scripts_catalog[0].get("title", "")).strip()
+        fallback_title = str(scripts_catalog[0].get("title", "")).strip()
+        logger.debug("Selected only available script via run hint fallback: %r", fallback_title)
+        return fallback_title
+    logger.debug("No script title matched for current message")
     return ""
 
 
@@ -1036,6 +1193,10 @@ def _safe_int(value: object) -> int | None:
 
 
 def _looks_like_tool_avoidance_response(text: str) -> bool:
+    return bool(_match_tool_avoidance_pattern(text))
+
+
+def _match_tool_avoidance_pattern(text: str) -> str:
     normalized = (
         text.strip()
         .lower()
@@ -1047,7 +1208,7 @@ def _looks_like_tool_avoidance_response(text: str) -> bool:
         .replace("ß", "ss")
     )
     if not normalized:
-        return False
+        return ""
     patterns = (
         "i don't have access",
         "i do not have access",
@@ -1078,7 +1239,11 @@ def _looks_like_tool_avoidance_response(text: str) -> bool:
         "keine werkzeuge verfugbar",
         "nicht verfugbar",
     )
-    return any(pattern in normalized for pattern in patterns)
+    for pattern in patterns:
+        if pattern in normalized:
+            logger.debug("Matched tool avoidance pattern=%r", pattern)
+            return pattern
+    return ""
 
 
 def _normalize_goal_status(raw_value: object) -> str:
