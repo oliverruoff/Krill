@@ -31,7 +31,7 @@ from .routers.timed_jobs import router as timed_jobs_router
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
-_DEFAULT_LOG_LEVEL = "INFO"
+_DEFAULT_LOG_LEVEL = "DEBUG"
 _LOG_LEVEL_ENV = "KRILL_LOG_LEVEL"
 
 
@@ -48,7 +48,7 @@ def _configure_logging() -> tuple[str, int]:
     resolved_level = _resolve_log_level(raw_level)
     if resolved_level is None:
         raw_level = _DEFAULT_LOG_LEVEL
-        resolved_level = logging.INFO
+        resolved_level = logging.DEBUG
 
     if not logging.getLogger().handlers:
         logging.basicConfig(
