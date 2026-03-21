@@ -1,10 +1,12 @@
 """Helpers for building the runtime system prompt injected into model calls."""
 
 from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from app.config import McpConfig, Settings
-from app.mcps.base import McpConfigField
-from app.mcps.registry import get_all_mcps
+
+if TYPE_CHECKING:
+    from app.mcps.base import McpConfigField
 
 
 def compose_runtime_system_prompt(
@@ -33,6 +35,8 @@ def compose_runtime_system_prompt(
 
 
 def _build_enabled_capability_summary(settings: Settings) -> str:
+    from app.mcps.registry import get_all_mcps
+
     entries: list[str] = []
 
     for mcp_id, plugin in get_all_mcps().items():
@@ -66,7 +70,7 @@ def _build_enabled_capability_summary(settings: Settings) -> str:
     return "\n".join(entries)
 
 
-def _missing_required_params(config_fields: list[McpConfigField], config: McpConfig) -> bool:
+def _missing_required_params(config_fields: list[Any], config: McpConfig) -> bool:
     for field in config_fields:
         if not field.required:
             continue
