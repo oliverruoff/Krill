@@ -51,6 +51,37 @@ _BULKY_BINARY_FIELD_NAMES = {"content_base64"}
 _MAX_SCRIPT_CATALOG_ENTRIES = 100
 _MAX_SCRIPT_DESCRIPTION_CHARS = 300
 _MAX_SCRIPT_INSTRUCTIONS_CHARS = 220
+_SCRIPT_CATALOG_NOISE_TOKENS = {
+    "action",
+    "arguments",
+    "automation",
+    "automatisierung",
+    "bool",
+    "call",
+    "execute",
+    "execute_script",
+    "input",
+    "input_json",
+    "invoke",
+    "job",
+    "json",
+    "keys",
+    "mcp",
+    "optional",
+    "return",
+    "returns",
+    "run",
+    "script",
+    "scripts",
+    "server",
+    "start",
+    "title",
+    "tool",
+    "tools",
+    "use",
+    "via",
+    "workflow",
+}
 
 
 async def generate_with_tools(
@@ -87,6 +118,7 @@ async def generate_with_tools(
         max_tool_recursion,
         tool_timeout_seconds,
     )
+    logger.debug("Scripts compete through planner selection only; no pre-routing is applied")
 
     async def provider_generate(
         *,
@@ -150,76 +182,34 @@ async def generate_with_tools(
 
     for step_index in range(1, normalized_recursion + 1):
         await trace("tool_step_status", f"Step {step_index}/{normalized_recursion}")
+        planner_prompt = _build_recursive_planner_prompt(
+            prompt,
+            enabled_tools,
+            scripts_catalog,
+            _planner_interaction_context(interaction_log),
+            step_index,
+            normalized_recursion,
+            current_local_time,
+        )
+        await trace("tool_planner_prompt", planner_prompt)
 
-        direct_plan = None
-        is_direct_routed = False
-        if step_index == 1 and not interaction_log:
-            direct_plan = _maybe_force_script_execution_call(
-                user_message=prompt,
-                scripts_catalog=scripts_catalog,
-                enabled_tools=enabled_tools,
-            )
-            if direct_plan is not None:
-                is_direct_routed = True
-                logger.debug(
-                    "Direct script route selected at step=%s: %s",
-                    step_index,
-                    _safe_json_dumps(_redact_sensitive_payload(direct_plan)),
-                )
-                await trace("tool_direct_route", json.dumps(_redact_sensitive_payload(direct_plan), ensure_ascii=True))
+        planner_response, planner_tokens = await provider_generate(
+            prompt_text=planner_prompt,
+            system_prompt_text=planner_system,
+            phase_label=f"planner_step_{step_index}",
+        )
+        if isinstance(planner_tokens, int):
+            token_values.append(planner_tokens)
+        await trace("tool_planner_result", planner_response)
 
-        if direct_plan is not None:
-            plan = direct_plan
-        else:
-            planner_prompt = _build_recursive_planner_prompt(
-                prompt,
-                enabled_tools,
-                scripts_catalog,
-                _planner_interaction_context(interaction_log),
-                step_index,
-                normalized_recursion,
-                current_local_time,
-            )
-            await trace("tool_planner_prompt", planner_prompt)
-
-            planner_response, planner_tokens = await provider_generate(
-                prompt_text=planner_prompt,
-                system_prompt_text=planner_system,
-                phase_label=f"planner_step_{step_index}",
-            )
-            if isinstance(planner_tokens, int):
-                token_values.append(planner_tokens)
-            await trace("tool_planner_result", planner_response)
-
-            plan = _parse_planner_response(planner_response)
-            logger.debug(
-                "Planner step=%s returned action=%s payload=%s",
-                step_index,
-                str(plan.get("action", "")),
-                _safe_json_dumps(_redact_sensitive_payload(plan)),
-            )
+        plan = _parse_planner_response(planner_response)
+        logger.debug(
+            "Planner step=%s returned action=%s payload=%s",
+            step_index,
+            str(plan.get("action", "")),
+            _safe_json_dumps(_redact_sensitive_payload(plan)),
+        )
         action = plan.get("action")
-
-        if action == "respond":
-            has_successful_script_execute = any(
-                entry.get("mcp_id") == "scripts" and entry.get("tool_id") == "execute_script"
-                for entry in used_tools
-            )
-            forced_call = _maybe_force_script_execution_call(
-                user_message=prompt,
-                scripts_catalog=scripts_catalog,
-                enabled_tools=enabled_tools,
-            )
-            if forced_call is not None and not has_successful_script_execute:
-                plan = forced_call
-                action = "call_tool"
-                is_direct_routed = True
-                logger.debug(
-                    "Fallback script routing replaced planner respond at step=%s with %s",
-                    step_index,
-                    _safe_json_dumps(_redact_sensitive_payload(forced_call)),
-                )
-                await trace("tool_fallback", json.dumps(_redact_sensitive_payload(forced_call), ensure_ascii=True))
 
         if action == "respond":
             final_answer = plan.get("final_answer")
@@ -465,7 +455,7 @@ async def generate_with_tools(
         }
 
         reminder_text = await _get_mcp_tool_call_reminder(plugin, tool_id, config.params, arguments=tool_arguments)
-        if reminder_text and (not is_direct_routed or mcp_id == "scripts"):
+        if reminder_text:
             logger.debug("Applying tool call reminder for mcp=%s tool=%s at step=%s", mcp_id, tool_id, step_index)
             await trace("mcp_tool_call_reminder", reminder_text)
             tool_arguments, reminder_tokens = await _apply_tool_call_reminder(
@@ -848,11 +838,13 @@ async def _collect_script_catalog(settings: Settings) -> list[dict[str, str]]:
         if path.parent != SCRIPTS_DIR:
             continue
         compact_description = description[:_MAX_SCRIPT_DESCRIPTION_CHARS]
+        semantic_terms = _sanitize_script_catalog_text(f"{description} {instructions}")
         entries.append(
             {
                 "title": title,
-                "description": compact_description,
-                "instructions": instructions[:_MAX_SCRIPT_INSTRUCTIONS_CHARS],
+                "description": _sanitize_script_catalog_text(compact_description),
+                "instructions": _sanitize_script_catalog_text(instructions[:_MAX_SCRIPT_INSTRUCTIONS_CHARS]),
+                "semantic_terms": semantic_terms,
                 "path": str(path),
             }
         )
@@ -873,132 +865,18 @@ def _build_final_prompt_with_interactions(user_message: str, interaction_log: li
     )
 
 
-def _maybe_force_script_execution_call(
-    *,
-    user_message: str,
-    scripts_catalog: list[dict[str, str]],
-    enabled_tools: list[dict[str, Any]],
-) -> dict[str, object] | None:
-    has_execute_tool = any(
-        str(entry.get("mcp_id", "")) == "scripts" and str(entry.get("tool_id", "")) == "execute_script"
-        for entry in enabled_tools
-    )
-    if not has_execute_tool:
-        logger.debug("Script direct routing unavailable because scripts.execute_script is not enabled")
-        return None
-
-    selected = _select_script_title_from_message(user_message, scripts_catalog)
-    if not selected:
-        logger.debug("Script direct routing did not find a matching script")
-        return None
-
-    args: dict[str, object] = {"title": selected}
-    number_match = re.search(r"\b(\d{1,7})\b", user_message)
-    if number_match is not None:
-        value = int(number_match.group(1))
-        args["input_json"] = {
-            "limit": value,
-            "count": value,
-            "n": value,
-            "number": value,
-            "max": value,
-            "iterations": value,
-        }
-
-    logger.debug("Script direct routing selected title=%r arguments=%s", selected, _safe_json_dumps(_redact_sensitive_payload(args)))
-
-    return {
-        "action": "call_tool",
-        "mcp_id": "scripts",
-        "tool_id": "execute_script",
-        "arguments": args,
-    }
-
-
-def _select_script_title_from_message(user_message: str, scripts_catalog: list[dict[str, str]]) -> str:
-    lowered = user_message.lower()
-    word_tokens = {token for token in re.findall(r"[a-z0-9]+", lowered)}
-    script_keywords = (
-        "script",
-        "skript",
-        "workflow",
-        "automation",
-        "automatisierung",
-        "routine",
-        "job",
-    )
-    action_keywords = (
-        "run",
-        "execute",
-        "start",
-        "launch",
-        "use",
-        "invoke",
-        "call",
-        "runne",
-        "starte",
-        "ausf",
-        "nutze",
-        "verwende",
-    )
-    has_script_keyword = any(keyword in lowered for keyword in script_keywords)
-    has_action_keyword = any(keyword in lowered for keyword in action_keywords)
-    run_hint = has_script_keyword and has_action_keyword
-    logger.debug(
-        "Evaluating script selection: run_hint=%s has_script_keyword=%s has_action_keyword=%s catalog_size=%s",
-        run_hint,
-        has_script_keyword,
-        has_action_keyword,
-        len(scripts_catalog),
-    )
-
-    best_title = ""
-    best_score = -1
-    for entry in scripts_catalog:
-        title = str(entry.get("title", "")).strip()
-        description = str(entry.get("description", "")).strip().lower()
-        instructions = str(entry.get("instructions", "")).strip().lower()
-        if not title:
+def _sanitize_script_catalog_text(text: str) -> str:
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if len(token) <= 2 or token in _SCRIPT_CATALOG_NOISE_TOKENS:
             continue
-        title_words = [token for token in re.findall(r"[a-z0-9]+", title.lower()) if token and token != "script"]
-        exact_phrase = title.lower() in lowered or title.lower().replace("-", " ") in lowered
-        words_match = bool(title_words) and all(token in word_tokens for token in title_words)
-        semantic_tokens = [
-            token
-            for token in re.findall(r"[a-z0-9]+", f"{description} {instructions}")
-            if len(token) > 3 and token in word_tokens
-        ]
-        semantic_match = run_hint and bool(semantic_tokens)
-        if not exact_phrase and not words_match and not semantic_match:
-            logger.debug("Script candidate rejected title=%r exact_phrase=%s words_match=%s semantic_tokens=%s", title, exact_phrase, words_match, semantic_tokens[:8])
+        if token in seen:
             continue
-        score = len(title_words)
-        if exact_phrase:
-            score += 100
-        if semantic_match:
-            score += 10
-        logger.debug(
-            "Script candidate title=%r score=%s exact_phrase=%s words_match=%s semantic_tokens=%s",
-            title,
-            score,
-            exact_phrase,
-            words_match,
-            semantic_tokens[:8],
-        )
-        if score > best_score:
-            best_score = score
-            best_title = title
-
-    if best_title:
-        logger.debug("Selected script title=%r score=%s", best_title, best_score)
-        return best_title
-
-    if run_hint and len(scripts_catalog) == 1:
-        fallback_title = str(scripts_catalog[0].get("title", "")).strip()
-        logger.debug("Selected only available script via run hint fallback: %r", fallback_title)
-        return fallback_title
-    logger.debug("No script title matched for current message")
-    return ""
+        seen.add(token)
+        filtered.append(token)
+    return " ".join(filtered)
 
 
 def _parse_planner_response(response_text: str) -> dict[str, object]:
