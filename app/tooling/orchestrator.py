@@ -782,7 +782,32 @@ def _maybe_force_script_execution_call(
 def _select_script_title_from_message(user_message: str, scripts_catalog: list[dict[str, str]]) -> str:
     lowered = user_message.lower()
     word_tokens = {token for token in re.findall(r"[a-z0-9]+", lowered)}
-    run_hint = any(keyword in lowered for keyword in ("run", "execute", "start", "launch")) and "script" in lowered
+    script_keywords = (
+        "script",
+        "skript",
+        "workflow",
+        "automation",
+        "automatisierung",
+        "routine",
+        "job",
+    )
+    action_keywords = (
+        "run",
+        "execute",
+        "start",
+        "launch",
+        "use",
+        "invoke",
+        "call",
+        "runne",
+        "starte",
+        "ausf",
+        "nutze",
+        "verwende",
+    )
+    has_script_keyword = any(keyword in lowered for keyword in script_keywords)
+    has_action_keyword = any(keyword in lowered for keyword in action_keywords)
+    run_hint = has_script_keyword and has_action_keyword
 
     best_title = ""
     best_score = -1
@@ -795,7 +820,7 @@ def _select_script_title_from_message(user_message: str, scripts_catalog: list[d
         title_words = [token for token in re.findall(r"[a-z0-9]+", title.lower()) if token and token != "script"]
         exact_phrase = title.lower() in lowered or title.lower().replace("-", " ") in lowered
         words_match = bool(title_words) and all(token in word_tokens for token in title_words)
-        semantic_match = any(
+        semantic_match = run_hint and any(
             token in word_tokens
             for token in re.findall(r"[a-z0-9]+", f"{description} {instructions}")
             if len(token) > 3
@@ -1011,7 +1036,16 @@ def _safe_int(value: object) -> int | None:
 
 
 def _looks_like_tool_avoidance_response(text: str) -> bool:
-    normalized = text.strip().lower().replace("’", "'").replace("`", "'")
+    normalized = (
+        text.strip()
+        .lower()
+        .replace("’", "'")
+        .replace("`", "'")
+        .replace("ä", "a")
+        .replace("ö", "o")
+        .replace("ü", "u")
+        .replace("ß", "ss")
+    )
     if not normalized:
         return False
     patterns = (
@@ -1026,6 +1060,23 @@ def _looks_like_tool_avoidance_response(text: str) -> bool:
         "no access to",
         "don't have browsing",
         "do not have browsing",
+        "no tools available",
+        "tool is not available",
+        "tools are not available",
+        "browser tool is not available",
+        "kein zugriff auf",
+        "keinen zugriff auf",
+        "habe keinen zugriff auf",
+        "habe hier keinen zugriff",
+        "kein browser-zugriff",
+        "keinen browser-zugriff",
+        "browser tool nicht verfugbar",
+        "browser-tool nicht verfugbar",
+        "tool nicht verfugbar",
+        "tools nicht verfugbar",
+        "keine tools verfugbar",
+        "keine werkzeuge verfugbar",
+        "nicht verfugbar",
     )
     return any(pattern in normalized for pattern in patterns)
 

@@ -64,6 +64,7 @@ async def generate_chat_response(
     api_key_value = api_key if api_key.strip() else provider_config.api_key
     used_stored_provider_api_key = not api_key.strip()
     runtime_system_prompt = compose_runtime_system_prompt(
+        settings=settings,
         memory_block=memory_block,
     )
     token_limit = get_provider_model_limit(active_provider_id, model_id)

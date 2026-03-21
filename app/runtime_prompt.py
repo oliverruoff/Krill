@@ -2,7 +2,13 @@
 
 from datetime import datetime
 
+from app.config import McpConfig, Settings
+from app.mcps.base import McpConfigField
+from app.mcps.registry import get_all_mcps
+
+
 def compose_runtime_system_prompt(
+    settings: Settings,
     memory_block: str = "",
 ) -> str:
     current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
@@ -11,7 +17,62 @@ def compose_runtime_system_prompt(
         "Use time context only when relevant; do not mention it unless needed."
     )
 
+    capability_summary = _build_enabled_capability_summary(settings)
+    if capability_summary:
+        invisible_context = (
+            f"{invisible_context}\n\n"
+            "Enabled tools and capabilities are available in this runtime. "
+            "Use them whenever they are relevant instead of claiming no access.\n"
+            f"{capability_summary}"
+        )
+
     if memory_block.strip():
         invisible_context = f"{invisible_context}\n\nCompacted conversation memory:\n{memory_block.strip()}"
 
     return invisible_context
+
+
+def _build_enabled_capability_summary(settings: Settings) -> str:
+    entries: list[str] = []
+
+    for mcp_id, plugin in get_all_mcps().items():
+        raw_config = settings.mcp_configs.get(mcp_id)
+        if raw_config is None:
+            config = McpConfig(enabled=bool(getattr(plugin, "default_enabled", False)), params={})
+        else:
+            config = raw_config
+
+        if not config.enabled or _missing_required_params(plugin.config_fields, config):
+            continue
+
+        tool_specs = plugin.tool_specs()
+        if hasattr(plugin, "tool_specs_for_config"):
+            try:
+                maybe_specs = getattr(plugin, "tool_specs_for_config")(config.params)
+                if isinstance(maybe_specs, list):
+                    tool_specs = maybe_specs
+            except Exception:
+                tool_specs = plugin.tool_specs()
+
+        tool_labels = [tool.label.strip() for tool in tool_specs if tool.label.strip()]
+        if not tool_labels:
+            continue
+
+        preview = ", ".join(tool_labels[:4])
+        if len(tool_labels) > 4:
+            preview = f"{preview}, +{len(tool_labels) - 4} more"
+        entries.append(f"- {plugin.display_name} (`{mcp_id}`): {preview}")
+
+    return "\n".join(entries)
+
+
+def _missing_required_params(config_fields: list[McpConfigField], config: McpConfig) -> bool:
+    for field in config_fields:
+        if not field.required:
+            continue
+
+        value = config.params.get(field.id, "")
+        if not isinstance(value, str) or not value.strip():
+            return True
+
+    return False
