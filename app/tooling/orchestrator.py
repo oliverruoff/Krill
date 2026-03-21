@@ -37,6 +37,13 @@ class OrchestrationResult(TypedDict):
     system_trace_messages: list[SystemTraceEntry]
 
 
+class PlannerParseResult(TypedDict):
+    plan: dict[str, object]
+    object_count: int
+    selected_index: int
+    recovery_mode: str
+
+
 ToolStepCallback = Callable[[SystemTraceEntry], Awaitable[None]]
 
 
@@ -204,13 +211,35 @@ async def generate_with_tools(
             token_values.append(planner_tokens)
         await trace("tool_planner_result", planner_response)
 
-        plan = _parse_planner_response(planner_response)
+        parse_result = _parse_planner_response(planner_response)
+        plan = parse_result["plan"]
         logger.debug(
             "Planner step=%s returned action=%s payload=%s",
             step_index,
             str(plan.get("action", "")),
             _safe_json_dumps(_redact_sensitive_payload(plan)),
         )
+        if parse_result["object_count"] > 1:
+            logger.warning(
+                "Planner multi-JSON recovery at step=%s objects=%s selected_index=%s mode=%s",
+                step_index,
+                parse_result["object_count"],
+                parse_result["selected_index"],
+                parse_result["recovery_mode"],
+            )
+            await trace(
+                "tool_warning",
+                json.dumps(
+                    {
+                        "step": step_index,
+                        "warning": "planner_multi_json_detected",
+                        "object_count": parse_result["object_count"],
+                        "selected_index": parse_result["selected_index"],
+                        "recovery_mode": parse_result["recovery_mode"],
+                    },
+                    ensure_ascii=True,
+                ),
+            )
         invalid_planner_reason = _invalid_planner_reason(plan)
         if invalid_planner_reason:
             consecutive_invalid_planner_responses += 1
@@ -963,28 +992,98 @@ def _invalid_planner_reason(plan: dict[str, object]) -> str:
     return f"Planner returned unsupported action {action!r}."
 
 
-def _parse_planner_response(response_text: str) -> dict[str, object]:
+def _parse_planner_response(response_text: str) -> PlannerParseResult:
     try:
         payload = json.loads(response_text)
         if isinstance(payload, dict):
-            return payload
+            return {
+                "plan": payload,
+                "object_count": 1,
+                "selected_index": 0,
+                "recovery_mode": "full_json",
+            }
     except Exception:
         pass
+
+    parsed_objects = _extract_planner_json_objects(response_text)
+    if parsed_objects:
+        selected_index, selected_payload, recovery_mode = _select_planner_payload(parsed_objects)
+        return {
+            "plan": selected_payload,
+            "object_count": len(parsed_objects),
+            "selected_index": selected_index,
+            "recovery_mode": recovery_mode,
+        }
 
     start = response_text.find("{")
     end = response_text.rfind("}")
     if start == -1 or end == -1 or end <= start:
-        return {"action": "respond", "final_answer": ""}
+        return {
+            "plan": {"action": "respond", "final_answer": ""},
+            "object_count": 0,
+            "selected_index": -1,
+            "recovery_mode": "no_json_found",
+        }
 
     candidate = response_text[start : end + 1]
     try:
         payload = json.loads(candidate)
         if isinstance(payload, dict):
-            return payload
+            return {
+                "plan": payload,
+                "object_count": 1,
+                "selected_index": 0,
+                "recovery_mode": "trimmed_json",
+            }
     except Exception:
-        return {"action": "respond", "final_answer": ""}
+        return {
+            "plan": {"action": "respond", "final_answer": ""},
+            "object_count": 0,
+            "selected_index": -1,
+            "recovery_mode": "invalid_json",
+        }
 
-    return {"action": "respond", "final_answer": ""}
+    return {
+        "plan": {"action": "respond", "final_answer": ""},
+        "object_count": 0,
+        "selected_index": -1,
+        "recovery_mode": "invalid_json",
+    }
+
+
+def _extract_planner_json_objects(response_text: str) -> list[dict[str, object]]:
+    decoder = json.JSONDecoder()
+    objects: list[dict[str, object]] = []
+    index = 0
+    length = len(response_text)
+
+    while index < length:
+        next_brace = response_text.find("{", index)
+        if next_brace == -1:
+            break
+        try:
+            payload, end_index = decoder.raw_decode(response_text, next_brace)
+        except json.JSONDecodeError:
+            index = next_brace + 1
+            continue
+        if isinstance(payload, dict):
+            objects.append(payload)
+        index = max(end_index, next_brace + 1)
+
+    return objects
+
+
+def _select_planner_payload(parsed_objects: list[dict[str, object]]) -> tuple[int, dict[str, object], str]:
+    for index, payload in enumerate(parsed_objects):
+        if str(payload.get("action", "")).strip() == "call_tool":
+            return index, payload, "first_call_tool"
+    for index, payload in enumerate(parsed_objects):
+        if str(payload.get("action", "")).strip() == "blocked":
+            return index, payload, "first_blocked"
+    for index, payload in enumerate(parsed_objects):
+        if str(payload.get("action", "")).strip() == "respond":
+            return index, payload, "first_respond"
+    return 0, parsed_objects[0], "first_object"
 
 
 async def _get_mcp_tool_call_reminder(
