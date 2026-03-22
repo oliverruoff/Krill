@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
+import os
 import re
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,9 @@ from app.version import APP_VERSION
 DEBUG_CHAT_PREFIX = "[HIDDEN] [DEBUG]"
 DEBUG_DUMPS_DIR = (DATA_DIR / "debug_dumps").resolve()
 DEBUG_DUMP_TTL_SECONDS = 24 * 60 * 60
+_PUBLIC_BASE_URL_ENV = "KRILL_PUBLIC_BASE_URL"
+_PUBLIC_PORT_ENV = "KRILL_PUBLIC_PORT"
+_DEFAULT_PUBLIC_PORT = 8055
 
 
 def is_debug_command(text: str) -> bool:
@@ -163,6 +169,7 @@ async def _write_debug_dump_file(
     return {
         "path": str(file_path),
         "download_url": str(shared.get("download_url", "")),
+        "download_url_absolute": build_absolute_debug_download_url(str(shared.get("download_url", ""))),
         "filename": file_name,
         "expires_at": str(shared.get("expires_at", "")),
     }
@@ -208,3 +215,66 @@ def _compact_timestamp(value: str) -> str:
         return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     compact = re.sub(r"[^0-9A-Za-z]+", "", text)
     return compact[:32] or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def build_absolute_debug_download_url(download_url: str) -> str:
+    path = str(download_url or "").strip()
+    if not path.startswith("/"):
+        return ""
+
+    override = os.getenv(_PUBLIC_BASE_URL_ENV, "").strip().rstrip("/")
+    if override:
+        if override.startswith("http://") or override.startswith("https://"):
+            return f"{override}{path}"
+        return ""
+
+    host = _detect_local_ip_address()
+    if not host:
+        return ""
+    port = _public_port()
+    return f"http://{host}:{port}{path}"
+
+
+def _public_port() -> int:
+    raw_value = os.getenv(_PUBLIC_PORT_ENV, "").strip()
+    if raw_value:
+        try:
+            port = int(raw_value)
+        except ValueError:
+            return _DEFAULT_PUBLIC_PORT
+        if 1 <= port <= 65535:
+            return port
+    return _DEFAULT_PUBLIC_PORT
+
+
+def _detect_local_ip_address() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("10.255.255.255", 1))
+            address = str(sock.getsockname()[0]).strip()
+            if _is_lan_ipv4_address(address):
+                return address
+    except OSError:
+        pass
+
+    try:
+        hostname = socket.gethostname()
+        candidates = socket.gethostbyname_ex(hostname)[2]
+    except OSError:
+        return ""
+
+    for candidate in candidates:
+        if _is_lan_ipv4_address(candidate):
+            return candidate
+    return ""
+
+
+def _is_lan_ipv4_address(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return bool(address.version == 4 and address.is_private and not address.is_loopback)

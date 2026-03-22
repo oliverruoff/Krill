@@ -2,8 +2,9 @@
 
 import asyncio
 import contextlib
+import html
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypedDict, cast
 from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
@@ -37,6 +38,27 @@ TELEGRAM_CONTEXT_WINDOW_WARNING = (
     "Heads up: this chat is above 75% of the model context window. "
     "Consider /new to start a fresh chat."
 )
+
+
+class TelegramCommandResponse(TypedDict, total=False):
+    text: str
+    parse_mode: str
+    document_token: str
+    document_caption: str
+    document_filename: str
+    document_mime_type: str
+
+
+def _markdown_command_response(text: str) -> TelegramCommandResponse:
+    return {
+        "text": _escape_markdown_v2(text),
+        "parse_mode": "MarkdownV2",
+    }
+
+
+def _extract_shared_file_token(text: str) -> str:
+    tokens = _extract_shared_file_tokens(text)
+    return tokens[0] if tokens else ""
 
 
 class TelegramBridgeWorker:
@@ -191,11 +213,33 @@ class TelegramBridgeWorker:
 
         command, command_arg = _parse_command(prompt_text, bot_username)
         if command:
-            response_text = await self._handle_command(command, command_arg, settings)
+            response_payload = await self._handle_command(command, command_arg, settings)
+            response_text = str(response_payload.get("text", "")).strip()
+            response_parse_mode = str(response_payload.get("parse_mode", "MarkdownV2")).strip()
             if response_text:
-                # Command responses: escape for MarkdownV2 (plain text, no markdown)
-                escaped_response = _escape_markdown_v2(response_text)
-                await asyncio.to_thread(telegram_send_message, token, chat_id, escaped_response, "MarkdownV2")
+                await asyncio.to_thread(telegram_send_message, token, chat_id, response_text, response_parse_mode or None)
+            document_token = str(response_payload.get("document_token", "")).strip()
+            if document_token:
+                try:
+                    shared_payload = await _read_shared_file_payload(document_token)
+                    if shared_payload is not None:
+                        payload_bytes = shared_payload.get("content_bytes")
+                        payload_filename = str(response_payload.get("document_filename", "") or shared_payload.get("filename", "file.bin") or "file.bin")
+                        payload_mime = str(response_payload.get("document_mime_type", "") or shared_payload.get("mime_type", "application/octet-stream") or "application/octet-stream")
+                        payload_caption = str(response_payload.get("document_caption", "")).strip() or None
+                        if isinstance(payload_bytes, bytes):
+                            await asyncio.to_thread(
+                                telegram_send_document,
+                                token,
+                                chat_id,
+                                payload_bytes,
+                                payload_filename,
+                                payload_caption,
+                                None,
+                                payload_mime,
+                            )
+                except Exception:
+                    pass
             return
 
         response_text = await self._handle_user_message(settings, prompt_text, image=image_payload)
@@ -290,20 +334,22 @@ class TelegramBridgeWorker:
             "telegram_file_id": selected_file_id,
         }
 
-    async def _handle_command(self, command: str, argument: str, settings: Settings) -> str:
+    async def _handle_command(self, command: str, argument: str, settings: Settings) -> TelegramCommandResponse:
         if command == "new":
             chat = _create_chat_entry("New chat")
             self._telegram_chats.append(chat)
             self._active_chat_id = chat.id
-            return f"Started new chat: {chat.title}"
+            return _markdown_command_response(f"Started new chat: {chat.title}")
 
         if command in {"status", "where"}:
             active = _get_active_chat(self._telegram_chats, self._active_chat_id)
             self._active_chat_id = active.id if active is not None else ""
             owner_bound = "yes" if settings.telegram_state.owner_user_id.strip() else "no"
             if active is None:
-                return f"Status\nOwner bound: {owner_bound}\nActive chat: none"
-            return f"Status\nOwner bound: {owner_bound}\nActive chat: {active.title} ({_short_chat_id(active.id)})"
+                return _markdown_command_response(f"Status\nOwner bound: {owner_bound}\nActive chat: none")
+            return _markdown_command_response(
+                f"Status\nOwner bound: {owner_bound}\nActive chat: {active.title} ({_short_chat_id(active.id)})"
+            )
 
         if command == "usage":
             active = _get_active_chat(self._telegram_chats, self._active_chat_id)
@@ -320,10 +366,10 @@ class TelegramBridgeWorker:
                     used_percent = 1
                 usage_line = f"Session context: {context_tokens} / {token_limit} ({used_percent}%)"
             daily_tokens = get_today_token_usage(settings)
-            return f"Usage\n{usage_line}\nToday tokens: {daily_tokens}"
+            return _markdown_command_response(f"Usage\n{usage_line}\nToday tokens: {daily_tokens}")
 
         if command == "help":
-            return (
+            return _markdown_command_response(
                 "Available commands:\n"
                 "/new - Create and switch to a new chat\n"
                 "/chats - List recent Telegram chats\n"
@@ -340,7 +386,7 @@ class TelegramBridgeWorker:
             active = _get_active_chat(self._telegram_chats, self._active_chat_id)
             self._active_chat_id = active.id if active is not None else ""
             if active is None:
-                return "No active chat available to debug."
+                return _markdown_command_response("No active chat available to debug.")
 
             result = await create_hidden_debug_chat(
                 snapshot_chat=active.model_copy(deep=True),
@@ -348,30 +394,40 @@ class TelegramBridgeWorker:
                 settings=settings,
                 triggered_by="telegram_command",
             )
-            file_info = result["file_info"] if isinstance(result, dict) else {}
-            download_url = str(file_info.get("download_url", "")).strip()
+            file_info = cast(dict[str, object], result.get("file_info") or {}) if isinstance(result, dict) else {}
+            absolute_download_url = str(file_info.get("download_url_absolute", "")).strip()
+            relative_download_url = str(file_info.get("download_url", "")).strip()
+            download_url = absolute_download_url or relative_download_url
             response = [
-                f"Debug dump created for: {active.title}",
-                "A hidden Gateway debug chat was added.",
+                f"<b>Debug dump created</b>",
+                f"Source chat: {html.escape(active.title)}",
+                "Hidden Gateway debug chat created. Enable hidden chats in Gateway to view it.",
             ]
-            if download_url:
-                response.append(download_url)
-            return "\n".join(response)
+            if absolute_download_url:
+                escaped_url = html.escape(absolute_download_url, quote=True)
+                response.append(f'<a href="{escaped_url}">Download debug dump</a>')
+            return {
+                "text": "\n".join(response),
+                "parse_mode": "HTML",
+                "document_token": _extract_shared_file_token(download_url),
+                "document_filename": str(file_info.get("filename", "debug-dump.json")),
+                "document_mime_type": "application/json",
+            }
 
         if command == "compaction":
             active = _get_active_chat(self._telegram_chats, self._active_chat_id)
             self._active_chat_id = active.id if active is not None else ""
             if active is None:
-                return "No active chat available to compact."
+                return _markdown_command_response("No active chat available to compact.")
 
             try:
                 compacted_memory, used_tokens = await _compact_telegram_chat(settings, active)
             except Exception as exc:
-                return f"Compaction failed: {exc}"
+                return _markdown_command_response(f"Compaction failed: {exc}")
 
             compacted_text = compacted_memory.strip()
             if not compacted_text:
-                return "Compaction failed: Provider returned empty compact memory."
+                return _markdown_command_response("Compaction failed: Provider returned empty compact memory.")
 
             new_chat = _create_chat_entry(f"{active.title} compacted")
             new_chat.memory_block = compacted_text
@@ -388,7 +444,7 @@ class TelegramBridgeWorker:
             self._active_chat_id = new_chat.id
 
             used_suffix = f"\nCompaction tokens used: {used_tokens}" if isinstance(used_tokens, int) and used_tokens > 0 else ""
-            return (
+            return _markdown_command_response(
                 f"Compaction complete.\n"
                 f"New active chat: {new_chat.title} ({_short_chat_id(new_chat.id)})"
                 f"{used_suffix}"
@@ -396,26 +452,26 @@ class TelegramBridgeWorker:
 
         if command == "chats":
             if not self._telegram_chats:
-                return "No Telegram chats yet."
+                return _markdown_command_response("No Telegram chats yet.")
             lines = ["Recent Telegram chats:"]
             sorted_chats = sorted(self._telegram_chats, key=_latest_timestamp_or_empty, reverse=True)
             for index, chat in enumerate(sorted_chats[:10], start=1):
                 active_marker = " *" if chat.id == self._active_chat_id else ""
                 lines.append(f"{index}. {chat.title} ({_short_chat_id(chat.id)}){active_marker}")
             lines.append("Use /use <number> to switch.")
-            return "\n".join(lines)
+            return _markdown_command_response("\n".join(lines))
 
         if command == "use":
             if not self._telegram_chats:
-                return "No Telegram chats available."
+                return _markdown_command_response("No Telegram chats available.")
 
             selected = _select_chat_by_argument(self._telegram_chats, argument)
             if selected is None:
-                return "Invalid chat selector. Use /chats first."
+                return _markdown_command_response("Invalid chat selector. Use /chats first.")
             self._active_chat_id = selected.id
-            return f"Switched active chat to: {selected.title}"
+            return _markdown_command_response(f"Switched active chat to: {selected.title}")
 
-        return "Unknown command. Use /help for available commands."
+        return _markdown_command_response("Unknown command. Use /help for available commands.")
 
     async def _handle_user_message(self, settings: Settings, text: str, *, image: dict[str, object] | None = None) -> str:
         prompt = text.strip()
@@ -599,8 +655,6 @@ def _extract_shared_file_tokens(text: str) -> list[str]:
             continue
         deduped.append(normalized)
     return deduped
-
-
 def _strip_tts_audio_urls(text: str) -> str:
     """Remove TTS audio URL lines from text so Telegram gets clean prose."""
     import re

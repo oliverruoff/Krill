@@ -119,6 +119,7 @@ Current tools:
 - `google_services` (disabled by default, OAuth login, read-only/read-write modes for Gmail, Calendar, and Drive)
 - `local_files` (enabled by default, includes `share_file` for temporary signed download links)
   - set Local Files `Public Base URL` to your reachable host:port (for example `http://192.168.1.126:8055`) so absolute links use the correct endpoint
+  - Telegram `/debug` links auto-use `KRILL_PUBLIC_BASE_URL` when set; otherwise Krill falls back to a detected LAN IP with optional `KRILL_PUBLIC_PORT` override (default `8055`)
 - `memory_access` (enabled by default)
 - `opencode` (disabled by default, delegates coding work to `npx opencode run`)
 - `scripts` (disabled by default, creates DB-backed Python scripts with metadata comments in `data/scripts`)
@@ -286,6 +287,7 @@ Telegram integration notes:
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway
 - Telegram replies include a context-window warning when usage reaches 75% of model limit (suggesting `/new`)
 - Telegram supports `/usage` (shows session context fill vs model window), `/compaction` (manual chat compaction into a fresh chat), and `/debug` (creates a hidden persisted debug dump + downloadable JSON)
+- Telegram `/debug` sends the JSON as a native document and, when reachable, also includes a clickable LAN download link built from `KRILL_PUBLIC_BASE_URL` or the detected local network IP
 - Telegram accepts image messages (photo/image document) and emits an "Image analysis" assistant message before the final reply
 - Telegram converts `/api/files/shared/<token>` links in assistant output into native Telegram document attachments when possible
 
