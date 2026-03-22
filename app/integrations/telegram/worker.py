@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
 from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, load_settings, save_settings
+from app.debug_dumps import create_hidden_debug_chat
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed, is_over_context_threshold
 from app.providers import get_provider, get_provider_model_limit
 from app.providers.resilience import generate_with_retries
@@ -330,9 +331,32 @@ class TelegramBridgeWorker:
                 "/status - Show Telegram chat status\n"
                 "/where - Alias for /status\n"
                 "/usage - Show chat and daily token usage\n"
+                "/debug - Create a hidden full debug dump\n"
                 "/compaction - Compact active chat and start fresh\n"
                 "/help - Show this help"
             )
+
+        if command == "debug":
+            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
+            self._active_chat_id = active.id if active is not None else ""
+            if active is None:
+                return "No active chat available to debug."
+
+            result = await create_hidden_debug_chat(
+                snapshot_chat=active.model_copy(deep=True),
+                source_channel="telegram",
+                settings=settings,
+                triggered_by="telegram_command",
+            )
+            file_info = result["file_info"] if isinstance(result, dict) else {}
+            download_url = str(file_info.get("download_url", "")).strip()
+            response = [
+                f"Debug dump created for: {active.title}",
+                "A hidden Gateway debug chat was added.",
+            ]
+            if download_url:
+                response.append(download_url)
+            return "\n".join(response)
 
         if command == "compaction":
             active = _get_active_chat(self._telegram_chats, self._active_chat_id)

@@ -49,7 +49,7 @@ class MemoryEntry(BaseModel):
 
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
-    content: str = Field(default="", max_length=200000)
+    content: str = Field(default="", max_length=1000000)
     timestamp: str = ""
     system_type: str = ""
     tool_usage: list[dict[str, str]] = Field(default_factory=list)

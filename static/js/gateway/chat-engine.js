@@ -294,6 +294,24 @@ function findMessageByRequestId(chat, requestId) {
   return chat.messages.find((message) => message.request_id === requestId) ?? null;
 }
 
+async function createDebugDump(chat) {
+  const response = await fetch("/api/chat/debug", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chat.id,
+      chat,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await buildHttpErrorDetail(response, "Failed to create debug dump.");
+    throw new Error(detail);
+  }
+
+  return response.json();
+}
+
 async function executeQueuedJob(chat, job, runtime) {
   const assistantMessage = findMessageByRequestId(chat, job.requestId);
   if (!assistantMessage) {
@@ -502,6 +520,28 @@ async function sendMessage(event) {
 
   const { getActiveChat } = await import("./chat-history.js");
   let chat = getActiveChat();
+  const isDebugCommand = !pendingImage && message.toLowerCase() === "/debug";
+  if (isDebugCommand) {
+    if (!chat) {
+      setStatus("No active chat available to debug.", true);
+      return;
+    }
+
+    try {
+      const payload = await createDebugDump(chat);
+      chatInput.value = "";
+      clearPendingImageAttachment();
+      syncChatInputHeight();
+      const { syncRemoteChatState } = await import("./chat-sync.js");
+      await syncRemoteChatState();
+      setStatus(typeof payload?.detail === "string" ? payload.detail : "Debug dump created.");
+      chatInput.focus();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to create debug dump."), true);
+    }
+    return;
+  }
+
   if (!chat) {
     const { createChatEntry } = await import("./chat-history.js");
     chat = createChatEntry(message);

@@ -29,7 +29,7 @@ function doesChatMatchSearch(chat, normalizedSearch) {
 
 function isHiddenTimedJobDebugChat(chat) {
   const title = typeof chat?.title === "string" ? chat.title.trim() : "";
-  return title.startsWith("[Hidden]");
+  return title.toUpperCase().startsWith("[HIDDEN]");
 }
 
 function getFilteredChats(chats, searchTerm) {

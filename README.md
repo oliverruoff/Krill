@@ -36,6 +36,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Let Krill orchestrate multi-step tool flows automatically (sequential recursive tool calls)
 - See live tool/system trace messages while execution runs
 - Stop running tool chains and clear queued work for the active chat
+- Create hidden `/debug` snapshots from Gateway or Telegram that capture the full live chat state, including system/tool traces, into a persisted hidden chat plus a downloadable JSON file
 - Attach one image in Gateway/Telegram messages for transient vision analysis (no image file persistence)
 - Track token usage per chat and per day
 - Manage core/normal memories with per-type compaction in Memory Management (timestamp-preserving, lossless-oriented summarization)
@@ -281,10 +282,10 @@ Telegram integration notes:
 - in group chats, Krill responds only to explicit mentions/replies to the bot
 - non-owner messages are silently ignored
 - Telegram chat sessions are ephemeral and isolated from Gateway chats
-- Telegram chat history is not written to `braindump.db`
+- Telegram chat history is not written to `braindump.db`, except when `/debug` is used to snapshot the active Telegram chat into a hidden persisted debug chat
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway
 - Telegram replies include a context-window warning when usage reaches 75% of model limit (suggesting `/new`)
-- Telegram supports `/usage` (shows session context fill vs model window) and `/compaction` (manual chat compaction into a fresh chat)
+- Telegram supports `/usage` (shows session context fill vs model window), `/compaction` (manual chat compaction into a fresh chat), and `/debug` (creates a hidden persisted debug dump + downloadable JSON)
 - Telegram accepts image messages (photo/image document) and emits an "Image analysis" assistant message before the final reply
 - Telegram converts `/api/files/shared/<token>` links in assistant output into native Telegram document attachments when possible
 

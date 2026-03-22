@@ -27,6 +27,7 @@ from ..config import (
     save_chat_state,
     update_chat_title,
 )
+from ..debug_dumps import create_hidden_debug_chat, is_debug_command
 from ..integrations.chat_runtime import ensure_runtime_context_seed
 from ..memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from ..providers import get_provider
@@ -75,6 +76,11 @@ class ChatEnqueueRequest(BaseModel):
 
 class ChatStopRequest(BaseModel):
     chat_id: str = Field(min_length=1)
+
+
+class ChatDebugRequest(BaseModel):
+    chat_id: str = Field(min_length=1)
+    chat: ChatSession
 
 
 class CompactChatRequest(BaseModel):
@@ -141,9 +147,6 @@ async def update_chat_state(payload: ChatStateWriteRequest) -> ChatStateResponse
 @router.post("/api/chat/enqueue")
 async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
     settings = await load_settings()
-    if not _is_setup_complete(settings):
-        raise HTTPException(status_code=422, detail="Setup is not complete.")
-
     chat_id = payload.chat_id.strip()
     target_chat = next((chat for chat in settings.chats if chat.id == chat_id), None)
     if target_chat is None:
@@ -151,6 +154,26 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
 
     message_text = payload.message.strip()
     image_payload = _normalize_enqueued_image(payload.image)
+    if is_debug_command(message_text) and image_payload is None:
+        result = await create_hidden_debug_chat(
+            snapshot_chat=target_chat.model_copy(deep=True),
+            source_channel="gateway",
+            settings=settings,
+            triggered_by="gateway_enqueue_command",
+        )
+        file_info = result["file_info"] if isinstance(result, dict) else {}
+        debug_chat = result["debug_chat"] if isinstance(result, dict) else None
+        return {
+            "ok": True,
+            "debug_command": True,
+            "detail": "Debug dump created.",
+            "debug_chat_id": debug_chat.id if isinstance(debug_chat, ChatSession) else "",
+            "download_url": str(file_info.get("download_url", "")),
+        }
+
+    if not _is_setup_complete(settings):
+        raise HTTPException(status_code=422, detail="Setup is not complete.")
+
     if not message_text and image_payload is None:
         raise HTTPException(status_code=422, detail="Either message text or one image is required.")
 
@@ -217,6 +240,31 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
         }
     )
     return {"ok": True, "request_id": request_id}
+
+
+@router.post("/api/chat/debug")
+async def debug_chat(payload: ChatDebugRequest) -> dict[str, object]:
+    chat_id = payload.chat_id.strip()
+    if payload.chat.id != chat_id:
+        raise HTTPException(status_code=422, detail="Chat payload does not match chat_id.")
+
+    settings = await load_settings()
+    result = await create_hidden_debug_chat(
+        snapshot_chat=payload.chat,
+        source_channel="gateway",
+        settings=settings,
+        triggered_by="gateway_command",
+    )
+    file_info = result["file_info"] if isinstance(result, dict) else {}
+    debug_chat = result["debug_chat"] if isinstance(result, dict) else None
+    return {
+        "ok": True,
+        "detail": "Debug dump created.",
+        "debug_chat_id": debug_chat.id if isinstance(debug_chat, ChatSession) else "",
+        "debug_chat_title": debug_chat.title if isinstance(debug_chat, ChatSession) else "",
+        "download_url": str(file_info.get("download_url", "")),
+        "file_path": str(file_info.get("path", "")),
+    }
 
 
 @router.post("/api/chat/stop")
