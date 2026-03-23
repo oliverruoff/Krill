@@ -54,6 +54,7 @@ _MAX_RECURSIVE_VALUE_DEPTH = 5
 _MAX_RECURSIVE_LIST_ITEMS = 20
 _MAX_RECURSIVE_DICT_ITEMS = 40
 _MAX_RETRIES_PER_TOOL_SIGNATURE = 2
+_MAX_RETRIES_PER_MCP_TOOL = 3
 _BULKY_BINARY_FIELD_NAMES = {"content_base64"}
 _MAX_SCRIPT_CATALOG_ENTRIES = 100
 _MAX_SCRIPT_DESCRIPTION_CHARS = 300
@@ -188,6 +189,8 @@ async def generate_with_tools(
     successful_tool_call_signatures: set[str] = set()
     tool_call_attempts_by_signature: dict[str, int] = {}
     tool_call_failures_by_signature: dict[str, int] = {}
+    tool_failures_by_mcp_tool: dict[str, int] = {}
+    tool_last_error_class_by_mcp_tool: dict[str, str] = {}
     consecutive_invalid_planner_responses = 0
     normalized_recursion = max(1, min(20, int(max_tool_recursion)))
     timeout_seconds = max(5, min(300, int(tool_timeout_seconds)))
@@ -688,6 +691,52 @@ async def generate_with_tools(
                 "system_trace_messages": system_trace_messages,
             }
 
+        mcp_tool_key = f"{mcp_id}.{tool_id}"
+        mcp_tool_failure_count = tool_failures_by_mcp_tool.get(mcp_tool_key, 0)
+        if mcp_tool_failure_count >= _MAX_RETRIES_PER_MCP_TOOL:
+            last_error_class = tool_last_error_class_by_mcp_tool.get(mcp_tool_key, "hard")
+            hard_stop_msg = (
+                f"TOOL BLOCKED after {mcp_tool_failure_count} failures: {mcp_id}.{tool_id} will not be called again. "
+                "Your ONLY valid next action is 'respond'. "
+                "Tell the user clearly: (1) what you were trying to do, "
+                "(2) which tool/service failed, (3) the last known error. "
+                "Do NOT attempt this tool again."
+            )
+            stop_payload = {
+                "mcp_id": mcp_id,
+                "tool_id": tool_id,
+                "call_id": tool_call_id,
+                "step": step_index,
+                "error": "mcp_tool_max_retries_reached",
+                "attempts": mcp_tool_failure_count,
+                "last_error_class": last_error_class,
+            }
+            logger.warning(
+                "Max retries reached for mcp=%s tool=%s total_failures=%s last_error_class=%s",
+                mcp_id,
+                tool_id,
+                mcp_tool_failure_count,
+                last_error_class,
+            )
+            await trace("tool_error", json.dumps(stop_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_call": tool_call_payload,
+                    "tool_error": {
+                        "type": "mcp_tool_max_retries_reached",
+                        "message": hard_stop_msg,
+                        "attempts": mcp_tool_failure_count,
+                        "last_error_class": last_error_class,
+                    },
+                    "planner_feedback": {
+                        "type": "mcp_tool_hard_stop",
+                        "message": hard_stop_msg,
+                    },
+                }
+            )
+            continue
+
         if tool_call_signature in successful_tool_call_signatures:
             logger.debug(
                 "Blocked duplicate tool call at step=%s mcp=%s tool=%s prior_attempts=%s already_succeeded=%s",
@@ -781,10 +830,16 @@ async def generate_with_tools(
             exc_type = type(exc).__name__
             exc_message = str(exc).strip() or "(no message)"
             exc_detail = f"{exc_type}: {exc_message}"
+            error_class = _classify_tool_error(exc_detail)
             logger.error(
-                "Tool execution failed: mcp=%s tool=%s error=%s\n%s",
-                mcp_id, tool_id, exc_detail, traceback.format_exc(),
+                "Tool execution failed: mcp=%s tool=%s error_class=%s error=%s\n%s",
+                mcp_id, tool_id, error_class, exc_detail, traceback.format_exc(),
             )
+            # Update per-(mcp, tool) failure tracking
+            updated_mcp_tool_failures = tool_failures_by_mcp_tool.get(mcp_tool_key, 0) + 1
+            tool_failures_by_mcp_tool[mcp_tool_key] = updated_mcp_tool_failures
+            tool_last_error_class_by_mcp_tool[mcp_tool_key] = error_class
+            retry_hint = _build_retry_hint(error_class, mcp_id, tool_id, updated_mcp_tool_failures)
             tool_error_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
@@ -792,7 +847,9 @@ async def generate_with_tools(
                 "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "tool_execution_failed",
+                "error_class": error_class,
                 "detail": exc_detail,
+                "mcp_tool_attempt": updated_mcp_tool_failures,
             }
             tool_call_failures_by_signature[tool_call_signature] = failure_attempts + 1
             await trace("tool_call_failed", json.dumps(tool_error_payload, ensure_ascii=True))
@@ -804,6 +861,9 @@ async def generate_with_tools(
                     "tool_error": {
                         "type": "tool_execution_failed",
                         "message": exc_detail,
+                        "error_class": error_class,
+                        "mcp_tool_attempt": updated_mcp_tool_failures,
+                        "retry_hint": retry_hint,
                     },
                 }
             )
@@ -1670,3 +1730,68 @@ def _safe_json_dumps(value: object) -> str:
         return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
     except TypeError:
         return json.dumps(str(value), ensure_ascii=True)
+
+
+_HARD_ERROR_SIGNALS = (
+    "500",
+    "502",
+    "503",
+    "504",
+    "authentication failed",
+    "auth failed",
+    "unauthorized",
+    "403",
+    "unable to connect",
+    "connection refused",
+    "no valid connections",
+    "timed out",
+    "timeout",
+    "internal server error",
+    "server got itself in trouble",
+    "network error",
+    "name or service not known",
+    "temporary failure in name resolution",
+)
+
+
+def _classify_tool_error(exc_detail: str) -> str:
+    """Classify a tool exception as 'hard' (infrastructure/unavailable) or 'soft' (bad parameters).
+
+    Hard errors indicate the external service is down or unreachable.
+    Soft errors indicate the call was malformed and a different approach may succeed.
+    """
+    lowered = exc_detail.lower()
+    if any(signal in lowered for signal in _HARD_ERROR_SIGNALS):
+        return "hard"
+    return "soft"
+
+
+def _build_retry_hint(error_class: str, mcp_id: str, tool_id: str, attempt: int) -> str:
+    """Return a human-readable instruction for the planner after a tool failure."""
+    remaining = max(0, _MAX_RETRIES_PER_MCP_TOOL - attempt)
+    if error_class == "hard":
+        if remaining <= 0:
+            return (
+                f"HARD ERROR — {mcp_id}.{tool_id} is unavailable (attempt {attempt}/{_MAX_RETRIES_PER_MCP_TOOL}). "
+                "No more retries will be allowed. "
+                "Report to the user: what you tried, which service failed, and the exact error."
+            )
+        return (
+            f"HARD ERROR — {mcp_id}.{tool_id} returned an infrastructure/service-unavailable error "
+            f"(attempt {attempt}/{_MAX_RETRIES_PER_MCP_TOOL}, {remaining} remaining). "
+            "Do NOT retry with the same approach. "
+            "Consider whether an alternative tool can fulfil the request, otherwise report the failure to the user."
+        )
+    if remaining <= 0:
+        return (
+            f"SOFT ERROR — {mcp_id}.{tool_id} rejected the request due to invalid parameters "
+            f"(attempt {attempt}/{_MAX_RETRIES_PER_MCP_TOOL}). "
+            "No more retries will be allowed. "
+            "Report to the user: what you tried, what parameters were used, and what the error was."
+        )
+    return (
+        f"SOFT ERROR — {mcp_id}.{tool_id} rejected the request due to invalid parameters "
+        f"(attempt {attempt}/{_MAX_RETRIES_PER_MCP_TOOL}, {remaining} remaining). "
+        "Try a different approach: use corrected arguments, a different tool, "
+        "or ask the user for clarification if the correct parameters are unknown."
+    )

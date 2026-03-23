@@ -113,7 +113,14 @@ class HomeAssistantMCP(MCPPlugin):
             McpToolSpec(
                 id="call_service",
                 label="Call Service",
-                description="Calls any Home Assistant service with optional service_data and target, then verifies target entity state when possible.",
+                description=(
+                    "Calls any Home Assistant service with optional service_data and target, "
+                    "then verifies target entity state when possible. "
+                    "Set return_response=true for services that return data (e.g. todo.get_items, "
+                    "calendar.get_events); omit it for fire-and-forget services. "
+                    "If HA responds with '400: Bad Request', check that service_data fields match "
+                    "the expected schema for that domain/service."
+                ),
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -474,7 +481,20 @@ def _list_entities(base_url: str, token: str, arguments: dict[str, object]) -> d
     domain = _optional_str(arguments, "domain", "")
     include_attributes = bool(arguments.get("include_attributes", False))
     limit = _optional_int(arguments, "limit", 500, 1, 2000)
-    payload = _ha_request_json("GET", f"{base_url}/api/states", token, None)
+    try:
+        payload = _ha_request_json("GET", f"{base_url}/api/states", token, None)
+    except error.HTTPError as exc:
+        if exc.code in {500, 502, 503, 504}:
+            detail = _read_http_error(exc)
+            return {
+                "error": True,
+                "error_code": exc.code,
+                "error_message": f"Home Assistant temporarily unavailable ({exc.code}): {detail}. Try again later.",
+                "count": 0,
+                "domain_filter": domain,
+                "entities": [],
+            }
+        raise
 
     states = payload if isinstance(payload, list) else []
     entities: list[dict[str, object]] = []
@@ -512,7 +532,25 @@ def _list_entities(base_url: str, token: str, arguments: dict[str, object]) -> d
 def _get_entity_state(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
     entity_id = _required_str(arguments, "entity_id")
     encoded_id = parse.quote(entity_id, safe="")
-    payload = _ha_request_json("GET", f"{base_url}/api/states/{encoded_id}", token, None)
+    try:
+        payload = _ha_request_json("GET", f"{base_url}/api/states/{encoded_id}", token, None)
+    except error.HTTPError as exc:
+        if exc.code == 404:
+            return {
+                "entity_id": entity_id,
+                "error": True,
+                "error_code": 404,
+                "error_message": f"Entity '{entity_id}' not found in Home Assistant. Check the entity_id.",
+            }
+        if exc.code in {500, 502, 503, 504}:
+            detail = _read_http_error(exc)
+            return {
+                "entity_id": entity_id,
+                "error": True,
+                "error_code": exc.code,
+                "error_message": f"Home Assistant temporarily unavailable ({exc.code}): {detail}. Try again later.",
+            }
+        raise
     if not isinstance(payload, dict):
         raise RuntimeError("Home Assistant returned invalid state payload.")
     return {
@@ -576,6 +614,9 @@ def _trigger_entity(base_url: str, token: str, arguments: dict[str, object]) -> 
 
 
 def _call_service(base_url: str, token: str, arguments: dict[str, object]) -> dict[str, object]:
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     domain = _required_str(arguments, "domain")
     service = _required_str(arguments, "service")
     return_response = bool(arguments.get("return_response", False))
@@ -593,7 +634,25 @@ def _call_service(base_url: str, token: str, arguments: dict[str, object]) -> di
             if key not in payload:
                 payload[key] = value
 
-    result = _ha_service_call(base_url, token, domain, service, payload, return_response=return_response)
+    try:
+        result = _ha_service_call(base_url, token, domain, service, payload, return_response=return_response)
+    except error.HTTPError as exc:
+        detail = _read_http_error(exc)
+        _log.debug(
+            "call_service failed: domain=%s service=%s return_response=%s payload_keys=%s status=%s detail=%r",
+            domain,
+            service,
+            return_response,
+            list(payload.keys()),
+            exc.code,
+            detail,
+        )
+        if exc.code == 400 and "return_response" in detail:
+            raise RuntimeError(
+                f"Home Assistant requires return_response=true for {domain}.{service} "
+                f"because this service returns data. Retry with return_response=true."
+            ) from exc
+        raise
     entity_ids = _extract_entity_ids_from_payload(payload)
     expected_state = "on" if service == "turn_on" else ("off" if service == "turn_off" else "")
     expected_by_entity = {entity_id: expected_state for entity_id in entity_ids} if expected_state else {}
@@ -614,7 +673,20 @@ def _get_todo_items(base_url: str, token: str, arguments: dict[str, object]) -> 
     if status:
         payload["status"] = status
 
-    result = _ha_service_call(base_url, token, "todo", "get_items", payload, return_response=True)
+    try:
+        result = _ha_service_call(base_url, token, "todo", "get_items", payload, return_response=True)
+    except error.HTTPError as exc:
+        if exc.code in {500, 502, 503, 504}:
+            detail = _read_http_error(exc)
+            return {
+                "entity_id": entity_id,
+                "error": True,
+                "error_code": exc.code,
+                "error_message": f"Home Assistant temporarily unavailable ({exc.code}): {detail}. Try again later.",
+                "items": [],
+                "count": 0,
+            }
+        raise
     items = _extract_todo_items_from_service_response(result, entity_id)
     return {
         "entity_id": entity_id,
@@ -999,7 +1071,19 @@ def _list_automations(base_url: str, token: str, arguments: dict[str, object]) -
     include_disabled = bool(arguments.get("include_disabled", True))
     limit = _optional_int(arguments, "limit", 500, 1, 1000)
 
-    payload = _ha_request_json("GET", f"{base_url}/api/states", token, None)
+    try:
+        payload = _ha_request_json("GET", f"{base_url}/api/states", token, None)
+    except error.HTTPError as exc:
+        if exc.code in {500, 502, 503, 504}:
+            detail = _read_http_error(exc)
+            return {
+                "error": True,
+                "error_code": exc.code,
+                "error_message": f"Home Assistant temporarily unavailable ({exc.code}): {detail}. Try again later.",
+                "count": 0,
+                "automations": [],
+            }
+        raise
     states = payload if isinstance(payload, list) else []
     automations: list[dict[str, object]] = []
 
