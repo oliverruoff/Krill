@@ -3661,6 +3661,9 @@ button:disabled {
 
 :root[data-theme="dark"] .script-editor-textarea {
   caret-color: #d4d4d4;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 
 :root[data-theme="dark"] .py-line::before {
