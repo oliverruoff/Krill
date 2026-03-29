@@ -13,6 +13,7 @@ from .auth import is_bootstrap_required, resolve_session_from_request
 from .config import ensure_settings_file
 from .integrations import get_runtime_integrations
 from .memory_extraction import start_memory_extraction_worker, stop_memory_extraction_worker
+from .oauth_refresh import start_oauth_refresh_worker, stop_oauth_refresh_worker
 from .timed_jobs import start_timed_jobs_worker, stop_timed_jobs_worker
 
 from .routers.auth import router as auth_router
@@ -134,6 +135,7 @@ async def startup_event() -> None:
     await rehydrate_git_ssh_material()
     await start_memory_extraction_worker()
     await start_timed_jobs_worker()
+    await start_oauth_refresh_worker()
     for integration in get_runtime_integrations():
         integration.start()
 
@@ -143,5 +145,6 @@ async def shutdown_event() -> None:
     await shutdown_gateway()
     await stop_memory_extraction_worker()
     await stop_timed_jobs_worker()
+    await stop_oauth_refresh_worker()
     for integration in get_runtime_integrations():
         await integration.stop()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +18,8 @@ OPENAI_CODEX_OAUTH_PROVIDER_ID = "openai_codex_oauth"
 OPENAI_CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OPENAI_CODEX_DEFAULT_BASE_URL = "https://chatgpt.com/backend-api"
 OPENAI_CODEX_JWT_CLAIM_PATH = "https://api.openai.com/auth"
+
+_logger = logging.getLogger(__name__)
 OPENAI_CODEX_MODEL_CANDIDATES: list[dict[str, object]] = [
     {"id": "gpt-5.4", "label": "GPT-5.4", "token_limit": 1050000, "supports_images": False},
     {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex", "token_limit": 400000, "supports_images": False},
@@ -53,6 +56,57 @@ class OpenAICodexOAuthCredentials:
 
 _TOKEN_CACHE_BY_REFRESH: dict[str, OpenAICodexOAuthCredentials] = {}
 
+# Flag set to ``True`` by ``resolve_fresh_credentials`` when a token refresh
+# actually happened (i.e. the refresh endpoint was called, not just an
+# in-memory cache hit).  The async callers in ``generate`` / ``verify`` read
+# and reset this flag to trigger immediate persistence.
+_REFRESH_HAPPENED: bool = False
+
+
+async def _persist_credentials_now(credentials: OpenAICodexOAuthCredentials) -> None:
+    """Persist *credentials* to the database immediately.
+
+    Imported lazily to avoid circular imports (config -> providers -> config).
+    """
+    try:
+        from app.config import ProviderConfig, load_settings, save_settings  # pylint: disable=import-outside-toplevel
+
+        settings = await load_settings()
+        existing = settings.provider_configs.get(OPENAI_CODEX_OAUTH_PROVIDER_ID)
+        existing_model = (
+            existing.model.strip() if existing is not None and existing.model.strip() else "gpt-5.3-codex"
+        )
+        bundle = serialize_oauth_bundle(credentials)
+        if existing is None:
+            settings.provider_configs[OPENAI_CODEX_OAUTH_PROVIDER_ID] = ProviderConfig(
+                api_key=bundle, model=existing_model
+            )
+        else:
+            settings.provider_configs[OPENAI_CODEX_OAUTH_PROVIDER_ID] = existing.model_copy(
+                update={"api_key": bundle, "model": existing_model}
+            )
+        await save_settings(settings)
+        _logger.debug("OpenAI OAuth credentials persisted immediately after refresh.")
+    except Exception:
+        _logger.warning("Failed to persist refreshed OpenAI OAuth credentials.", exc_info=True)
+
+
+def _schedule_persist(credentials: OpenAICodexOAuthCredentials) -> None:
+    """Best-effort fire-and-forget persistence from any context.
+
+    Works from both async callers and from sync functions running inside
+    ``asyncio.to_thread`` (which have no running event loop on the current
+    thread).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_persist_credentials_now(credentials))
+    except RuntimeError:
+        # No running loop on the current thread (e.g. inside to_thread).
+        # Nothing to do here — the async caller will handle persistence
+        # after ``resolve_fresh_credentials`` returns.
+        pass
+
 
 class OpenAICodexOAuthProvider(LLMProvider):
     provider_id = OPENAI_CODEX_OAUTH_PROVIDER_ID
@@ -70,13 +124,18 @@ class OpenAICodexOAuthProvider(LLMProvider):
         api_key: str,
         history: list[dict[str, str]],
     ) -> tuple[str, int | None]:
+        global _REFRESH_HAPPENED
         model_id = model.strip()
         if not model_id:
             raise RuntimeError("Model is required.")
 
         try:
             credentials = parse_oauth_bundle(api_key)
+            _REFRESH_HAPPENED = False
             credentials = await asyncio.to_thread(resolve_fresh_credentials, credentials)
+            if _REFRESH_HAPPENED:
+                _REFRESH_HAPPENED = False
+                await _persist_credentials_now(credentials)
         except error.HTTPError as exc:
             response_text = _safe_read_error(exc)
             if exc.code in {401, 403}:
@@ -97,8 +156,26 @@ class OpenAICodexOAuthProvider(LLMProvider):
         try:
             text, used_tokens = await asyncio.to_thread(_post_stream_collect_text_and_usage, payload, credentials)
         except error.HTTPError as exc:
-            response_text = _safe_read_error(exc)
-            raise RuntimeError(f"OpenAI OAuth request failed ({exc.code}): {response_text}") from exc
+            # On 401/403, attempt one refresh + retry before giving up.
+            if exc.code in {401, 403}:
+                try:
+                    _REFRESH_HAPPENED = False
+                    credentials = await asyncio.to_thread(
+                        refresh_access_token, credentials.refresh_token
+                    )
+                    _TOKEN_CACHE_BY_REFRESH[credentials.refresh_token] = credentials
+                    await _persist_credentials_now(credentials)
+                    text, used_tokens = await asyncio.to_thread(
+                        _post_stream_collect_text_and_usage, payload, credentials
+                    )
+                except Exception as retry_exc:
+                    raise RuntimeError(
+                        f"OpenAI OAuth request failed after token refresh retry ({exc.code}): "
+                        f"{_safe_read_error(exc)}"
+                    ) from retry_exc
+            else:
+                response_text = _safe_read_error(exc)
+                raise RuntimeError(f"OpenAI OAuth request failed ({exc.code}): {response_text}") from exc
         except error.URLError as exc:
             raise RuntimeError("Network error while contacting OpenAI OAuth endpoint.") from exc
         except TimeoutError as exc:
@@ -112,13 +189,18 @@ class OpenAICodexOAuthProvider(LLMProvider):
         return text, used_tokens
 
     async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
+        global _REFRESH_HAPPENED
         model_id = model.strip()
         if not model_id:
             return False, "Model is required."
 
         try:
             credentials = parse_oauth_bundle(api_key)
+            _REFRESH_HAPPENED = False
             credentials = await asyncio.to_thread(resolve_fresh_credentials, credentials)
+            if _REFRESH_HAPPENED:
+                _REFRESH_HAPPENED = False
+                await _persist_credentials_now(credentials)
         except error.HTTPError as exc:
             response_text = _safe_read_error(exc)
             if exc.code in {401, 403}:
@@ -219,6 +301,7 @@ def get_refreshed_bundle_for_persistence(raw_bundle: str) -> str | None:
 
 
 def resolve_fresh_credentials(credentials: OpenAICodexOAuthCredentials) -> OpenAICodexOAuthCredentials:
+    global _REFRESH_HAPPENED
     cached = _TOKEN_CACHE_BY_REFRESH.get(credentials.refresh_token)
     if cached is not None and cached.expires_at_unix > int(time.time()) + 30:
         return cached
@@ -232,6 +315,8 @@ def resolve_fresh_credentials(credentials: OpenAICodexOAuthCredentials) -> OpenA
     refreshed = refresh_access_token(original_refresh)
     _TOKEN_CACHE_BY_REFRESH[original_refresh] = refreshed
     _TOKEN_CACHE_BY_REFRESH[refreshed.refresh_token] = refreshed
+    _REFRESH_HAPPENED = True
+    _schedule_persist(refreshed)
     return refreshed
 
 
