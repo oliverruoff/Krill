@@ -57,7 +57,6 @@ _MAX_RETRIES_PER_MCP_TOOL = 3
 _BULKY_BINARY_FIELD_NAMES = {"content_base64"}
 _MAX_SCRIPT_CATALOG_ENTRIES = 100
 _MAX_SCRIPT_DESCRIPTION_CHARS = 300
-_MAX_SCRIPT_INSTRUCTIONS_CHARS = 220
 _MAX_INVALID_PLANNER_RESPONSES = 3
 _DOOM_LOOP_THRESHOLD = 3
 _SCRIPT_CATALOG_NOISE_TOKENS = {
@@ -1127,7 +1126,7 @@ def _build_recursive_planner_prompt(
         "1. Read the tool 'description' to understand what it does.\n"
         "2. Check the tool 'input_schema' for required and optional arguments, their names, and their types.\n"
         "3. Match argument names EXACTLY as listed in the schema (case-sensitive).\n"
-        "4. For scripts, read the 'instructions' field in the scripts catalog to know what keys to pass in 'input_json'.\n"
+        "4. For scripts, use 'description' in the scripts catalog to decide WHICH script to run; the exact input_json keys will be provided after you select the script.\n"
         "5. Never invent argument names that are not in the schema.\n"
         "\n"
         "If you need another tool call, return: "
@@ -1178,13 +1177,11 @@ async def _collect_script_catalog(settings: Settings) -> list[dict[str, str]]:
         if path.parent != SCRIPTS_DIR:
             continue
         compact_description = description[:_MAX_SCRIPT_DESCRIPTION_CHARS]
-        compact_instructions = instructions[:_MAX_SCRIPT_INSTRUCTIONS_CHARS]
         semantic_terms = _sanitize_script_catalog_text(f"{description} {instructions}")
         entries.append(
             {
                 "title": title,
                 "description": compact_description,
-                "instructions": compact_instructions,
                 "semantic_terms": semantic_terms,
                 "path": str(path),
             }
