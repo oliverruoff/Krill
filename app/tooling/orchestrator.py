@@ -53,7 +53,6 @@ _MAX_TOOL_RESULT_CHARS = 4000
 _MAX_RECURSIVE_VALUE_DEPTH = 5
 _MAX_RECURSIVE_LIST_ITEMS = 20
 _MAX_RECURSIVE_DICT_ITEMS = 40
-_MAX_RETRIES_PER_TOOL_SIGNATURE = 2
 _MAX_RETRIES_PER_MCP_TOOL = 3
 _BULKY_BINARY_FIELD_NAMES = {"content_base64"}
 _MAX_SCRIPT_CATALOG_ENTRIES = 100
@@ -194,6 +193,7 @@ async def generate_with_tools(
     consecutive_invalid_planner_responses = 0
     normalized_recursion = max(1, min(20, int(max_tool_recursion)))
     timeout_seconds = max(5, min(300, int(tool_timeout_seconds)))
+    wall_clock_ceiling_seconds = min(normalized_recursion * timeout_seconds, 600)
     current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
     planner_context = system_prompt.strip()
     if len(planner_context) > 4000:
@@ -209,6 +209,46 @@ async def generate_with_tools(
 
     for step_index in range(1, normalized_recursion + 1):
         await trace("tool_step_status", f"Step {step_index}/{normalized_recursion}")
+
+        # Global wall-clock timeout: abort if we've been running too long.
+        elapsed_seconds = monotonic() - started_at
+        if elapsed_seconds >= wall_clock_ceiling_seconds:
+            logger.warning(
+                "Global wall-clock timeout reached at step=%s elapsed=%.1fs ceiling=%ss",
+                step_index,
+                elapsed_seconds,
+                wall_clock_ceiling_seconds,
+            )
+            await trace(
+                "tool_error",
+                json.dumps(
+                    {
+                        "step": step_index,
+                        "error": "global_wall_clock_timeout",
+                        "elapsed_seconds": round(elapsed_seconds, 1),
+                        "ceiling_seconds": wall_clock_ceiling_seconds,
+                    },
+                    ensure_ascii=True,
+                ),
+            )
+            break
+
+        # Compute which tools need full schema on step 2+: tools that
+        # have failed or have never been successfully called yet.
+        if step_index > 1:
+            succeeded_keys = {
+                f"{entry['mcp_id']}.{entry['tool_id']}"
+                for entry in used_tools
+            }
+            failed_keys = set(tool_failures_by_mcp_tool.keys())
+            all_keys = {
+                f"{entry['mcp_id']}.{entry['tool_id']}"
+                for entry in enabled_tools
+            }
+            failed_or_unused = (all_keys - succeeded_keys) | failed_keys
+        else:
+            failed_or_unused = None
+
         planner_prompt = _build_recursive_planner_prompt(
             prompt,
             enabled_tools,
@@ -217,6 +257,7 @@ async def generate_with_tools(
             step_index,
             normalized_recursion,
             current_local_time,
+            failed_or_unused_tool_keys=failed_or_unused,
         )
         await trace("tool_planner_prompt", planner_prompt)
 
@@ -570,6 +611,7 @@ async def generate_with_tools(
                 tool_input_schema=cast(dict[str, object], tool_entry.get("input_schema", {})),
                 reminder_text=reminder_text,
                 current_local_time=current_local_time,
+                original_arguments=tool_arguments,
             )
             if isinstance(reminder_tokens, int):
                 token_values.append(reminder_tokens)
@@ -803,6 +845,12 @@ async def generate_with_tools(
                 tool_id,
                 timeout_seconds,
             )
+            # Count timeouts toward per-(mcp, tool) failure tracking so
+            # consistently-timing-out tools eventually get blocked.
+            timeout_mcp_tool_failures = tool_failures_by_mcp_tool.get(mcp_tool_key, 0) + 1
+            tool_failures_by_mcp_tool[mcp_tool_key] = timeout_mcp_tool_failures
+            tool_last_error_class_by_mcp_tool[mcp_tool_key] = "hard"
+            timeout_retry_hint = _build_retry_hint("hard", mcp_id, tool_id, timeout_mcp_tool_failures)
             tool_error_payload = {
                 "mcp_id": mcp_id,
                 "tool_id": tool_id,
@@ -810,7 +858,9 @@ async def generate_with_tools(
                 "arguments": _redact_sensitive_payload(tool_arguments),
                 "step": step_index,
                 "error": "tool_execution_timeout",
+                "error_class": "hard",
                 "detail": f"{plugin.display_name} ({tool_id}) exceeded timeout of {timeout_seconds}s.",
+                "mcp_tool_attempt": timeout_mcp_tool_failures,
             }
             tool_call_failures_by_signature[tool_call_signature] = failure_attempts + 1
             await trace("tool_call_failed", json.dumps(tool_error_payload, ensure_ascii=True))
@@ -822,6 +872,9 @@ async def generate_with_tools(
                     "tool_error": {
                         "type": "tool_execution_timeout",
                         "message": f"{plugin.display_name} ({tool_id}) exceeded timeout of {timeout_seconds}s.",
+                        "error_class": "hard",
+                        "mcp_tool_attempt": timeout_mcp_tool_failures,
+                        "retry_hint": timeout_retry_hint,
                     },
                 }
             )
@@ -1012,8 +1065,10 @@ def _build_recursive_planner_prompt(
     step_index: int,
     max_steps: int,
     current_local_time: str,
+    failed_or_unused_tool_keys: set[str] | None = None,
 ) -> str:
     if step_index <= 1:
+        # Step 1: full detail for every tool.
         tool_payload = [
             {
                 "mcp_id": entry["mcp_id"],
@@ -1026,14 +1081,31 @@ def _build_recursive_planner_prompt(
             for entry in tools
         ]
     else:
-        tool_payload = [
-            {
-                "mcp_id": entry["mcp_id"],
-                "tool_id": entry["tool_id"],
-                "description": entry["tool_description"],
-            }
-            for entry in tools
-        ]
+        # Steps 2+: full schema for tools that failed or haven't been called;
+        # compact summary for tools that already succeeded.
+        needs_schema = failed_or_unused_tool_keys or set()
+        tool_payload = []
+        for entry in tools:
+            key = f"{entry['mcp_id']}.{entry['tool_id']}"
+            if key in needs_schema:
+                tool_payload.append(
+                    {
+                        "mcp_id": entry["mcp_id"],
+                        "mcp_label": entry["mcp_label"],
+                        "tool_id": entry["tool_id"],
+                        "tool_label": entry["tool_label"],
+                        "description": entry["tool_description"],
+                        "input_schema": entry["input_schema"],
+                    }
+                )
+            else:
+                tool_payload.append(
+                    {
+                        "mcp_id": entry["mcp_id"],
+                        "tool_id": entry["tool_id"],
+                        "description": entry["tool_description"],
+                    }
+                )
 
     compact_separators = (",", ":")
 
@@ -1049,6 +1121,15 @@ def _build_recursive_planner_prompt(
         "Do not claim you cannot access browsing/tools/devices when relevant tools are listed.\n"
         "Only ask the user for help if truly blocked by missing user-only input, explicit approval, or an external challenge that tools cannot resolve.\n"
         "If information can be fetched via enabled tools, fetch it yourself and continue.\n"
+        "\n"
+        "=== TOOL USAGE RULES ===\n"
+        "Before calling a tool, you MUST:\n"
+        "1. Read the tool 'description' to understand what it does.\n"
+        "2. Check the tool 'input_schema' for required and optional arguments, their names, and their types.\n"
+        "3. Match argument names EXACTLY as listed in the schema (case-sensitive).\n"
+        "4. For scripts, read the 'instructions' field in the scripts catalog to know what keys to pass in 'input_json'.\n"
+        "5. Never invent argument names that are not in the schema.\n"
+        "\n"
         "If you need another tool call, return: "
         '{"action":"call_tool","mcp_id":"...","tool_id":"...","arguments":{...}}\n'
         "Do not repeat the same mcp_id + tool_id + identical arguments in this request.\n"
@@ -1097,12 +1178,13 @@ async def _collect_script_catalog(settings: Settings) -> list[dict[str, str]]:
         if path.parent != SCRIPTS_DIR:
             continue
         compact_description = description[:_MAX_SCRIPT_DESCRIPTION_CHARS]
+        compact_instructions = instructions[:_MAX_SCRIPT_INSTRUCTIONS_CHARS]
         semantic_terms = _sanitize_script_catalog_text(f"{description} {instructions}")
         entries.append(
             {
                 "title": title,
-                "description": _sanitize_script_catalog_text(compact_description),
-                "instructions": _sanitize_script_catalog_text(instructions[:_MAX_SCRIPT_INSTRUCTIONS_CHARS]),
+                "description": compact_description,
+                "instructions": compact_instructions,
                 "semantic_terms": semantic_terms,
                 "path": str(path),
             }
@@ -1302,6 +1384,7 @@ async def _apply_tool_call_reminder(
     tool_input_schema: dict[str, object],
     reminder_text: str,
     current_local_time: str,
+    original_arguments: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], int | None]:
     prompt = (
         "You selected an MCP tool call.\n"
@@ -1341,9 +1424,10 @@ async def _apply_tool_call_reminder(
     except Exception:
         pass
 
-    existing_args = tool_call_payload.get("arguments")
-    if isinstance(existing_args, dict):
-        return cast(dict[str, object], existing_args), used_tokens if isinstance(used_tokens, int) else None
+    # Fallback: return the original unredacted arguments so we never leak
+    # "[REDACTED]" placeholder strings into actual tool calls.
+    if isinstance(original_arguments, dict):
+        return original_arguments, used_tokens if isinstance(used_tokens, int) else None
 
     return {}, used_tokens if isinstance(used_tokens, int) else None
 
@@ -1632,10 +1716,39 @@ def _is_sensitive_field_name(field_name: str) -> bool:
     return any(keyword in lowered for keyword in _SENSITIVE_FIELD_KEYWORDS)
 
 
+_PLANNER_RECENT_FULL_INTERACTIONS = 3
+
+
 def _planner_interaction_context(interaction_log: list[dict[str, object]]) -> dict[str, object]:
+    recent = interaction_log[-_MAX_PLANNER_INTERACTIONS:]
+    if len(recent) <= _PLANNER_RECENT_FULL_INTERACTIONS:
+        # Few enough interactions: send them all in full.
+        return {
+            "summary": _interaction_summary(interaction_log),
+            "recent_interactions": recent,
+        }
+
+    # Keep the most recent interactions in full; slim older ones by
+    # replacing verbose tool_result payloads with a brief summary.
+    cutoff = len(recent) - _PLANNER_RECENT_FULL_INTERACTIONS
+    slimmed: list[dict[str, object]] = []
+    for idx, entry in enumerate(recent):
+        if idx < cutoff and "tool_result" in entry:
+            slim_entry = dict(entry)
+            raw_result = entry["tool_result"]
+            result_chars = len(_safe_json_dumps(raw_result))
+            slim_entry["tool_result"] = {
+                "slimmed": True,
+                "original_chars": result_chars,
+                "preview": _safe_json_dumps(raw_result)[:200],
+            }
+            slimmed.append(slim_entry)
+        else:
+            slimmed.append(entry)
+
     return {
         "summary": _interaction_summary(interaction_log),
-        "recent_interactions": interaction_log[-_MAX_PLANNER_INTERACTIONS:],
+        "recent_interactions": slimmed,
     }
 
 
