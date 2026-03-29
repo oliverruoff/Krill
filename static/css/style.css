@@ -3742,3 +3742,383 @@ button:disabled {
     display: none;
   }
 }
+
+/* ═══════════════════════════════════════════════════════
+   BUSINESS THEME — warm, muted, professional dark mode
+   ═══════════════════════════════════════════════════════ */
+
+:root[data-theme="business"] {
+  --bg: #1C1917;
+  --surface: #262220;
+  --surface-soft: #2E2A27;
+  --text: #E8E0D8;
+  --muted: #A89E94;
+  --muted-strong: #C0B6AC;
+  --border: #3D3733;
+  --accent: #C8956C;
+  --accent-strong: #C8956C;
+  --accent-gradient: linear-gradient(120deg, #C8956C 0%, #D4A880 100%);
+  --chat-user-tint: #2A2521;
+  --chat-user-border: #4A3F38;
+  --chat-assistant-tint: #23201D;
+  --chat-assistant-border: #3D3733;
+  --chat-assistant-text: #E0D8D0;
+  --bg-gradient: #1C1917;
+  --input-bg: #211E1B;
+  --secondary-bg: #332E2A;
+  --secondary-hover: #3D3834;
+  --text-inverse: #1C1917;
+  --menu-surface: #262220;
+  --error: #D4675A;
+  --ok: #6BAF7B;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
+}
+
+:root[data-theme="business"] body {
+  background: var(--bg);
+}
+
+:root[data-theme="business"] .card,
+:root[data-theme="business"] .gateway-topbar,
+:root[data-theme="business"] .chat-history-panel,
+:root[data-theme="business"] .chat-panel,
+:root[data-theme="business"] .mcp-side-panel,
+:root[data-theme="business"] .memory-modal-card,
+:root[data-theme="business"] .brain-modal-card,
+:root[data-theme="business"] .menu-popover,
+:root[data-theme="business"] .mcp-card,
+:root[data-theme="business"] .timed-job-item,
+:root[data-theme="business"] .token-usage-chart,
+:root[data-theme="business"] .chat-bubble {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow);
+}
+
+:root[data-theme="business"] .setup-choice-card,
+:root[data-theme="business"] .memory-section,
+:root[data-theme="business"] .advanced-settings,
+:root[data-theme="business"] .memory-card,
+:root[data-theme="business"] .chat-history-item,
+:root[data-theme="business"] .memory-column,
+:root[data-theme="business"] .memory-modal-card-item,
+:root[data-theme="business"] .brain-table-view,
+:root[data-theme="business"] .brain-table-list,
+:root[data-theme="business"] .brain-table-list-wrap,
+:root[data-theme="business"] .brain-table-view-wrap,
+:root[data-theme="business"] .mcp-guide,
+:root[data-theme="business"] .timed-jobs-editor,
+:root[data-theme="business"] .timed-jobs-list-wrap,
+:root[data-theme="business"] .token-usage-bars {
+  background: var(--surface-soft);
+  border-color: var(--border);
+}
+
+:root[data-theme="business"] input,
+:root[data-theme="business"] select,
+:root[data-theme="business"] textarea,
+:root[data-theme="business"] .mcp-contact-filter,
+:root[data-theme="business"] .timed-job-check,
+:root[data-theme="business"] .token-usage-check,
+:root[data-theme="business"] .short-term-item {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+:root[data-theme="business"] .menu-item,
+:root[data-theme="business"] .menu-item-button,
+:root[data-theme="business"] .secondary,
+:root[data-theme="business"] .mobile-settings-btn,
+:root[data-theme="business"] .mobile-drawer-handle,
+:root[data-theme="business"] .new-chat-btn,
+:root[data-theme="business"] .trace-toggle-btn,
+:root[data-theme="business"] .compact-btn,
+:root[data-theme="business"] .mcp-link-btn,
+:root[data-theme="business"] .outline-btn,
+:root[data-theme="business"] .memory-compact-btn {
+  background: var(--secondary-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+:root[data-theme="business"] .menu-item:hover,
+:root[data-theme="business"] .menu-item-button:hover,
+:root[data-theme="business"] .secondary:hover,
+:root[data-theme="business"] .mobile-settings-btn:hover,
+:root[data-theme="business"] .mobile-drawer-handle:hover,
+:root[data-theme="business"] .new-chat-btn:hover,
+:root[data-theme="business"] .trace-toggle-btn:hover,
+:root[data-theme="business"] .compact-btn:hover,
+:root[data-theme="business"] .mcp-link-btn:hover,
+:root[data-theme="business"] .outline-btn:hover,
+:root[data-theme="business"] .memory-compact-btn:hover {
+  background: var(--secondary-hover);
+}
+
+:root[data-theme="business"] button,
+:root[data-theme="business"] .button-link {
+  background-position: 100% 50%;
+}
+
+:root[data-theme="business"] button:hover,
+:root[data-theme="business"] .button-link:hover {
+  background-position: 0% 50%;
+}
+
+:root[data-theme="business"] .auth-alert-banner {
+  background: color-mix(in srgb, #7A4A1A 30%, var(--surface) 70%);
+  border-color: color-mix(in srgb, #C07830 48%, var(--border) 52%);
+  color: #F0D0A8;
+}
+
+:root[data-theme="business"] .memory-add-btn {
+  background: transparent;
+  border-color: transparent;
+  color: #BFB0A0;
+}
+
+:root[data-theme="business"] .memory-add-btn:hover {
+  background: transparent;
+  color: #E0D0C0;
+}
+
+:root[data-theme="business"] .menu-popover,
+:root[data-theme="business"] .mobile-settings-popover {
+  background: var(--menu-surface);
+}
+
+:root[data-theme="business"] .assistant-meta,
+:root[data-theme="business"] .assistant-meta-subtle,
+:root[data-theme="business"] .current-chat-title,
+:root[data-theme="business"] .mcp-description,
+:root[data-theme="business"] .mcp-scripts-list,
+:root[data-theme="business"] .memory-token-subtle,
+:root[data-theme="business"] .memory-modal-card-time,
+:root[data-theme="business"] .memory-edit-hint,
+:root[data-theme="business"] .brain-modal-meta,
+:root[data-theme="business"] .token-usage-stat,
+:root[data-theme="business"] .timed-job-field label,
+:root[data-theme="business"] .menu-item-icon,
+:root[data-theme="business"] .count-hint {
+  color: var(--muted);
+}
+
+:root[data-theme="business"] .current-chat-title {
+  color: #E8E0D8;
+}
+
+:root[data-theme="business"] .chat-thread {
+  background: #1A1714;
+  border-color: var(--border);
+}
+
+:root[data-theme="business"] .chat-message.system .chat-bubble {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+:root[data-theme="business"] .chat-message.user .chat-bubble {
+  border-color: var(--chat-user-border);
+  background: var(--chat-user-tint);
+}
+
+:root[data-theme="business"] .chat-message.assistant .chat-bubble {
+  border-color: var(--chat-assistant-border);
+  background: var(--chat-assistant-tint);
+  color: var(--chat-assistant-text);
+}
+
+:root[data-theme="business"] .chat-message.assistant.status-queued .chat-bubble,
+:root[data-theme="business"] .chat-message.assistant.status-processing .chat-bubble {
+  background: var(--chat-assistant-tint);
+  border-color: var(--chat-assistant-border);
+}
+
+:root[data-theme="business"] .voice-msg-player {
+  background: #2A2620;
+}
+
+:root[data-theme="business"] .voice-msg-play-btn {
+  background: #6B8F5E;
+}
+
+:root[data-theme="business"] .voice-msg-play-btn:hover {
+  background: #5A7D4E;
+}
+
+:root[data-theme="business"] .voice-msg-progress {
+  background: #332E28;
+}
+
+:root[data-theme="business"] .voice-msg-progress-fill {
+  background: #8BAF70;
+}
+
+:root[data-theme="business"] .voice-msg-time {
+  color: #9A8E80;
+}
+
+:root[data-theme="business"] .voice-msg-expired {
+  color: #70665C;
+}
+
+:root[data-theme="business"] .chat-composer .actions .composer-icon-btn {
+  background: #2A2620;
+  border-color: var(--border);
+  color: #C0B6AC;
+}
+
+:root[data-theme="business"] .chat-composer .actions .composer-icon-btn:hover {
+  background: #3A342E;
+  color: #E0D8D0;
+}
+
+:root[data-theme="business"] .inline-help {
+  border-color: var(--border);
+  background: #2A2620;
+  color: var(--text);
+}
+
+:root[data-theme="business"] .inline-help::after {
+  background: #1A1714;
+  border-color: var(--border);
+  color: #E0D8D0;
+}
+
+:root[data-theme="business"] .brain-table-item {
+  background: #2A2620;
+  border-color: var(--border);
+  color: #E0D8D0;
+}
+
+:root[data-theme="business"] .brain-table-item:hover {
+  background: #36302A;
+}
+
+:root[data-theme="business"] .brain-table-item.active {
+  background: #40382F;
+  border-color: #5A4F44;
+}
+
+:root[data-theme="business"] .brain-grid th {
+  background: #302A25;
+}
+
+:root[data-theme="business"] a {
+  color: #D4A880;
+}
+
+:root[data-theme="business"] .chat-thread pre,
+:root[data-theme="business"] .chat-thread code,
+:root[data-theme="business"] .tool-step {
+  background: #1A1714;
+  border-color: #3D3733;
+  color: #E8E0D8;
+}
+
+:root[data-theme="business"] .mobile-drawer-backdrop,
+:root[data-theme="business"] .memory-modal-backdrop,
+:root[data-theme="business"] .brain-modal-backdrop {
+  background: rgba(10, 8, 6, 0.75);
+}
+
+:root[data-theme="business"] .script-editor-code-wrap {
+  background: #1A1714;
+  border-color: var(--border);
+}
+
+:root[data-theme="business"] .script-editor-highlight {
+  color: #E0D8D0;
+}
+
+:root[data-theme="business"] .script-editor-textarea {
+  caret-color: #E0D8D0;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+:root[data-theme="business"] .py-line::before {
+  color: #5A5048;
+}
+
+:root[data-theme="business"] .script-editor-textarea::selection {
+  background: rgba(200, 149, 108, 0.2);
+}
+
+:root[data-theme="business"] .script-editor-delete-btn {
+  border-color: #B05050;
+  color: #D48080;
+}
+
+:root[data-theme="business"] .script-editor-delete-btn:hover {
+  background: #B05050;
+  color: #fff;
+}
+
+:root[data-theme="business"] .mcp-script-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+:root[data-theme="business"] .mcp-script-edit-btn {
+  color: #807060;
+}
+
+:root[data-theme="business"] .mcp-script-edit-btn:hover {
+  color: #C8956C;
+}
+
+:root[data-theme="business"] .mcp-script-dl-btn {
+  color: #807060;
+}
+
+:root[data-theme="business"] .mcp-script-dl-btn:hover {
+  color: #C8956C;
+}
+
+/* Business theme: warm-toned syntax highlighting */
+:root[data-theme="business"] .py-kw { color: #C8956C; }
+:root[data-theme="business"] .py-bi { color: #D4B896; }
+:root[data-theme="business"] .py-str { color: #A8C090; }
+:root[data-theme="business"] .py-cmt { color: #6A6058; }
+:root[data-theme="business"] .py-num { color: #D4A070; }
+:root[data-theme="business"] .py-dec { color: #D4B896; }
+
+/* Business theme: chat inline code and code blocks */
+:root[data-theme="business"] .chat-bubble code {
+  background: #2A2620;
+}
+
+:root[data-theme="business"] .chat-bubble pre {
+  background: #1A1714;
+  border-color: #3D3733;
+}
+
+:root[data-theme="business"] .chat-bubble blockquote {
+  border-left-color: #5A4F44;
+  color: #C0B6AC;
+}
+
+:root[data-theme="business"] .chat-bubble th {
+  background: #302A25;
+}
+
+:root[data-theme="business"] .chat-bubble a {
+  color: #D4A880;
+}
+
+:root[data-theme="business"] .tool-usage-note {
+  color: #807060;
+}
+
+@media (max-width: 900px) {
+  :root[data-theme="business"] .chat-panel {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+}

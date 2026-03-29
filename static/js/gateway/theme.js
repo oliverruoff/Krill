@@ -5,12 +5,22 @@
 import { state } from "./state.js";
 import { themeToggleButton, mobileThemeToggleButton } from "./dom.js";
 
+const ICON_DEFAULT = "/static/img/krill_icon.png";
+const ICON_BUSINESS = "/static/img/krill_icon_business.png";
+
+export function themeIconPath(theme) {
+  return theme === "business" ? ICON_BUSINESS : ICON_DEFAULT;
+}
+
 export function normalizeThemeMode(value) {
-  return String(value || "").trim().toLowerCase() === "dark" ? "dark" : "light";
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "dark") return "dark";
+  if (v === "business") return "business";
+  return "light";
 }
 
 export function renderThemeToggleLabels() {
-  const nextModeLabel = state.theme === "dark" ? "Light" : "Dark";
+  const nextModeLabel = state.theme === "light" ? "Dark" : state.theme === "dark" ? "Business" : "Light";
   const buttonLabel = `Switch to ${nextModeLabel} Mode`;
   if (themeToggleButton instanceof HTMLButtonElement) {
     themeToggleButton.innerHTML = `<span class="menu-item-icon" aria-hidden="true">◐</span>${buttonLabel}`;
@@ -33,6 +43,13 @@ export function applyThemeMode(theme) {
   } catch (_error) {
     // Ignore localStorage failures (private mode, blocked storage).
   }
+  // Swap icon assets for business theme.
+  const iconSrc = themeIconPath(normalized);
+  const favicon = document.getElementById("favicon");
+  if (favicon) favicon.href = iconSrc;
+  document.querySelectorAll(".gateway-icon, .mobile-left-panel-icon").forEach((img) => {
+    img.src = iconSrc;
+  });
   renderThemeToggleLabels();
 }
 
@@ -43,7 +60,7 @@ export async function toggleThemePreference() {
 
   const { persistSettings } = await import("./chat-sync.js");
   const { showToast } = await import("./toast.js");
-  const nextTheme = state.theme === "dark" ? "light" : "dark";
+  const nextTheme = state.theme === "light" ? "dark" : state.theme === "dark" ? "business" : "light";
   const nextSettings = JSON.parse(JSON.stringify(state.settings));
   nextSettings.theme = nextTheme;
   const persisted = await persistSettings(nextSettings);

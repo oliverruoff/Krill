@@ -5,6 +5,7 @@
 import { state } from "./state.js";
 import { toastNode, setToastNode } from "./dom.js";
 import { normalizeChatTitle } from "./utils.js";
+import { themeIconPath } from "./theme.js";
 
 export function showToast(message) {
   let node = toastNode;
@@ -73,7 +74,7 @@ export function sendAssistantResponseNotification(chat, assistantMessage) {
   const chatTitle = chat && typeof chat.title === "string" ? normalizeChatTitle(chat.title) : "New chat";
   const notification = new Notification(`Krill - ${chatTitle}`, {
     body: preview,
-    icon: "/static/img/krill_icon.png",
+    icon: themeIconPath(state.theme),
     tag: `krill-chat-${chat?.id || "default"}`,
   });
   notification.onclick = () => {

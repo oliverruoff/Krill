@@ -137,7 +137,10 @@ const OAUTH_PROVIDER_CONFIG = {
 const MEMORY_MAX_LENGTH = 200000;
 
 function normalizeThemeMode(value) {
-  return String(value || "").trim().toLowerCase() === "dark" ? "dark" : "light";
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "dark") return "dark";
+  if (v === "business") return "business";
+  return "light";
 }
 
 function applyThemeMode(theme) {
@@ -148,6 +151,13 @@ function applyThemeMode(theme) {
     window.localStorage.setItem("krill-theme", normalized);
   } catch (_error) {
     // Ignore localStorage failures (private mode, blocked storage).
+  }
+  // Swap favicon for business theme.
+  const favicon = document.getElementById("favicon");
+  if (favicon) {
+    favicon.href = normalized === "business"
+      ? "/static/img/krill_icon_business.png"
+      : "/static/img/krill_icon.png";
   }
 }
 

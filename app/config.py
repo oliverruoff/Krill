@@ -163,7 +163,7 @@ class Settings(BaseModel):
     active_chat_id: str = ""
     timed_job_auth_alert_provider_ids: list[str] = Field(default_factory=list)
     telegram_state: TelegramState = Field(default_factory=TelegramState)
-    theme: Literal["light", "dark"] = "light"
+    theme: Literal["light", "dark", "business"] = "light"
 
 
 class ShortTermMemoryItem(BaseModel):
@@ -1134,10 +1134,12 @@ def _sync_active_selection(settings: Settings) -> Settings:
     )
 
 
-def _normalize_theme_mode(raw_theme: object) -> Literal["light", "dark"]:
+def _normalize_theme_mode(raw_theme: object) -> Literal["light", "dark", "business"]:
     value = str(raw_theme).strip().lower()
     if value == "dark":
         return "dark"
+    if value == "business":
+        return "business"
     return "light"
 
 

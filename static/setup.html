@@ -12,11 +12,13 @@
         } catch (_error) {
           storedTheme = "";
         }
-        const theme = storedTheme === "dark" ? "dark" : "light";
+        const theme = storedTheme === "dark" ? "dark" : storedTheme === "business" ? "business" : "light";
         document.documentElement.setAttribute("data-theme", theme);
+        var _iconPath = theme === "business" ? "/static/img/krill_icon_business.png" : "/static/img/krill_icon.png";
       })();
     </script>
-    <link rel="icon" type="image/png" href="/static/img/krill_icon.png" />
+    <link id="favicon" rel="icon" type="image/png" href="/static/img/krill_icon.png" />
+    <script>if(typeof _iconPath==="string"){document.getElementById("favicon").href=_iconPath;}</script>
     <link rel="stylesheet" href="/static/css/style.css" />
   </head>
   <body>
