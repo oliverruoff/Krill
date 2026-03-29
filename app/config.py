@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import shutil
 import sqlite3
 import uuid
@@ -164,6 +165,7 @@ class Settings(BaseModel):
     timed_job_auth_alert_provider_ids: list[str] = Field(default_factory=list)
     telegram_state: TelegramState = Field(default_factory=TelegramState)
     theme: Literal["light", "dark", "business"] = "light"
+    last_daily_summary_date: str = ""
 
 
 class ShortTermMemoryItem(BaseModel):
@@ -445,6 +447,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_settings_core_column(conn, "user_call_name", "TEXT NOT NULL DEFAULT ''")
     _ensure_settings_core_column(conn, "timed_job_auth_alert_provider_ids", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_settings_core_column(conn, "theme", "TEXT NOT NULL DEFAULT 'light'")
+    _ensure_settings_core_column(conn, "last_daily_summary_date", "TEXT NOT NULL DEFAULT ''")
     _ensure_chats_column(conn, "hidden_from_history", "INTEGER NOT NULL DEFAULT 0 CHECK (hidden_from_history IN (0,1))")
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
@@ -733,6 +736,7 @@ def _load_settings_sync() -> Settings:
             timed_job_auth_alert_provider_ids=_deserialize_provider_id_list(core["timed_job_auth_alert_provider_ids"]),
             telegram_state=telegram_state,
             theme=_normalize_theme_mode(core["theme"]),
+            last_daily_summary_date=str(core["last_daily_summary_date"]) if "last_daily_summary_date" in core.keys() else "",
         )
     finally:
         conn.close()
@@ -839,7 +843,8 @@ def _save_settings_sync(settings: Settings) -> None:
                 bot_name = ?, system_prompt = ?, user_full_name = ?, user_call_name = ?, setup_completed = ?, 
                 active_provider_id = ?, active_model_id = ?, active_chat_id = ?,
                 tool_max_recursion = ?, tool_timeout_seconds = ?,
-                memory_extraction_interval = ?, timed_job_auth_alert_provider_ids = ?, theme = ?
+                memory_extraction_interval = ?, timed_job_auth_alert_provider_ids = ?, theme = ?,
+                last_daily_summary_date = ?
             WHERE id = 1
         """, (
             settings.bot_name, settings.system_prompt, settings.user_full_name, settings.user_call_name, int(settings.setup_completed),
@@ -847,7 +852,8 @@ def _save_settings_sync(settings: Settings) -> None:
             settings.tool_max_recursion, settings.tool_timeout_seconds,
             settings.memory_extraction_interval,
             _serialize_provider_id_list(settings.timed_job_auth_alert_provider_ids),
-            _normalize_theme_mode(settings.theme)
+            _normalize_theme_mode(settings.theme),
+            settings.last_daily_summary_date,
         ))
         
         # 2. Providers
@@ -1972,6 +1978,38 @@ def _normalize_memory_text(text: str) -> str:
     return " ".join(str(text).split()).strip()
 
 
+def _fuzzy_memory_exists(candidate: str, existing_set: set[str]) -> bool:
+    """Check if *candidate* is a near-duplicate of any entry in *existing_set*.
+
+    Catches substring containment and normalized-token overlap so that
+    ``"The user likes short answers"`` matches
+    ``"The user likes short, concise answers."`` without requiring an exact hit.
+    """
+    low = candidate.lower().strip()
+    if not low:
+        return False
+    # Exact match is already handled by the caller; check fuzzy cases.
+    tokens_candidate = set(re.findall(r"[a-z0-9]+", low))
+    if len(tokens_candidate) < 3:
+        # Very short candidates: only match on substring containment.
+        for existing in existing_set:
+            if low in existing or existing in low:
+                return True
+        return False
+    for existing in existing_set:
+        if low in existing or existing in low:
+            return True
+        tokens_existing = set(re.findall(r"[a-z0-9]+", existing))
+        if not tokens_existing:
+            continue
+        overlap = tokens_candidate & tokens_existing
+        # If >= 80% of the smaller set overlaps with the larger, consider it a match.
+        smaller = min(len(tokens_candidate), len(tokens_existing))
+        if smaller > 0 and len(overlap) / smaller >= 0.80:
+            return True
+    return False
+
+
 async def register_user_message_event() -> tuple[int, int, bool]:
     await ensure_settings_file()
     async with _DB_LOCK:
@@ -2080,6 +2118,87 @@ def _get_recent_conversation_turns_sync(limit: int) -> list[dict[str, str]]:
         conn.close()
 
 
+async def get_last_daily_summary_date() -> str:
+    """Return the date string (YYYY-MM-DD) of the last daily summary extraction, or empty string."""
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_get_last_daily_summary_date_sync)
+
+
+def _get_last_daily_summary_date_sync() -> str:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        row = conn.execute("SELECT last_daily_summary_date FROM settings_core WHERE id = 1").fetchone()
+        if row is None:
+            return ""
+        return str(row["last_daily_summary_date"]).strip()
+    finally:
+        conn.close()
+
+
+async def set_last_daily_summary_date(date_str: str) -> None:
+    """Persist the date string (YYYY-MM-DD) of the last daily summary extraction."""
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        await asyncio.to_thread(_set_last_daily_summary_date_sync, date_str)
+
+
+def _set_last_daily_summary_date_sync(date_str: str) -> None:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        conn.execute(
+            "UPDATE settings_core SET last_daily_summary_date = ? WHERE id = 1",
+            (str(date_str).strip(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def get_conversation_turns_for_date(target_date: str, source_channel: str = "") -> list[dict[str, str]]:
+    """Return conversation turns for a specific date (YYYY-MM-DD), optionally filtered by source_channel."""
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(_get_conversation_turns_for_date_sync, target_date, source_channel)
+
+
+def _get_conversation_turns_for_date_sync(target_date: str, source_channel: str) -> list[dict[str, str]]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        if source_channel:
+            rows = conn.execute(
+                """
+                SELECT source_channel, source_chat_id, user_message, assistant_message, created_at
+                FROM conversation_turns
+                WHERE created_at LIKE ? AND source_channel = ?
+                ORDER BY id ASC
+                """,
+                (f"{target_date}%", source_channel),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT source_channel, source_chat_id, user_message, assistant_message, created_at
+                FROM conversation_turns
+                WHERE created_at LIKE ?
+                ORDER BY id ASC
+                """,
+                (f"{target_date}%",),
+            ).fetchall()
+        return [
+            {
+                "source_channel": str(row["source_channel"]),
+                "source_chat_id": str(row["source_chat_id"]),
+                "user_message": str(row["user_message"]),
+                "assistant_message": str(row["assistant_message"]),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
 async def list_short_term_memories(status: str = "pending") -> list[ShortTermMemoryItem]:
     await ensure_settings_file()
     target_status = status if status in {"pending", "accepted", "rejected"} else "pending"
@@ -2132,6 +2251,8 @@ async def add_short_term_memories(
     *,
     core_memories: list[str],
     normal_memories: list[str],
+    core_importance: list[str] | None = None,
+    normal_importance: list[str] | None = None,
     source_channel: str,
     source_chat_id: str,
     source_request_id: str,
@@ -2142,6 +2263,8 @@ async def add_short_term_memories(
             _add_short_term_memories_sync,
             core_memories,
             normal_memories,
+            core_importance,
+            normal_importance,
             source_channel,
             source_chat_id,
             source_request_id,
@@ -2151,6 +2274,8 @@ async def add_short_term_memories(
 def _add_short_term_memories_sync(
     core_memories: list[str],
     normal_memories: list[str],
+    core_importance: list[str] | None,
+    normal_importance: list[str] | None,
     source_channel: str,
     source_chat_id: str,
     source_request_id: str,
@@ -2167,14 +2292,28 @@ def _add_short_term_memories_sync(
         }
         normal_existing_rows = conn.execute("SELECT content FROM memories WHERE memory_type = 'normal'").fetchall()
         existing_normal = {_normalize_memory_text(str(row["content"])) .lower() for row in normal_existing_rows}
+        core_existing_rows = conn.execute("SELECT content FROM memories WHERE memory_type = 'core'").fetchall()
+        existing_core = {_normalize_memory_text(str(row["content"])) .lower() for row in core_existing_rows}
+
+        safe_core_imp = core_importance if core_importance and len(core_importance) == len(core_memories) else None
+        safe_normal_imp = normal_importance if normal_importance and len(normal_importance) == len(normal_memories) else None
 
         added = 0
-        for raw in core_memories:
+        for idx, raw in enumerate(core_memories):
             normalized = _normalize_memory_text(raw)
             if not normalized:
                 continue
+            importance = safe_core_imp[idx] if safe_core_imp else "medium"
+            if importance not in {"high", "medium", "low"}:
+                importance = "medium"
+            # Drop low-importance core memories entirely
+            if importance == "low":
+                continue
             key = (normalized.lower(), "core")
             if key in pending_keys:
+                continue
+            # Also skip if already exists as a permanent core memory (fuzzy)
+            if _fuzzy_memory_exists(normalized, existing_core):
                 continue
             conn.execute(
                 """
@@ -2193,12 +2332,21 @@ def _add_short_term_memories_sync(
             pending_keys.add(key)
             added += 1
 
-        for raw in normal_memories:
+        for idx, raw in enumerate(normal_memories):
             normalized = _normalize_memory_text(raw)
             if not normalized:
                 continue
+            importance = safe_normal_imp[idx] if safe_normal_imp else "medium"
+            if importance not in {"high", "medium", "low"}:
+                importance = "medium"
+            # Drop low-importance normal memories entirely
+            if importance == "low":
+                continue
             lowered = normalized.lower()
             if lowered in existing_normal:
+                continue
+            # Also check fuzzy duplicate against existing normal memories
+            if _fuzzy_memory_exists(normalized, existing_normal):
                 continue
             conn.execute(
                 "INSERT INTO memories (memory_type, content, created_at) VALUES ('normal', ?, ?)",

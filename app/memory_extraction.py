@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.config import (
     add_short_term_memories,
     append_conversation_turn,
+    get_conversation_turns_for_date,
+    get_last_daily_summary_date,
     get_recent_conversation_turns,
     load_settings,
     register_user_message_event,
+    set_last_daily_summary_date,
 )
 from app.providers import get_provider
 from app.providers.resilience import generate_with_retries
@@ -101,17 +105,49 @@ def _build_extraction_prompt() -> str:
     return (
         "Analyze only the provided user messages and extract memory candidates.\n"
         "Return JSON only with this exact schema:\n"
-        '{"core_memories": ["..."], "normal_memories": ["..."]}\n\n'
-        "Rules:\n"
-        "- core_memories: stable preferences/identity/long-term constraints.\n"
-        "- normal_memories: useful but less critical context.\n"
+        "{\n"
+        '  "core_memories": [{"content": "...", "importance": "high|medium|low"}],\n'
+        '  "normal_memories": [{"content": "...", "importance": "high|medium|low"}]\n'
+        "}\n\n"
+        "## What is a CORE memory?\n"
+        "Core memories are TIMELESS facts about the user that are always true and do not expire.\n"
+        "They describe WHO the user IS, not what they did on a specific day.\n\n"
+        "Core memory examples (GOOD):\n"
+        '- "The user\'s name is Oliver."\n'
+        '- "The user\'s birthday is March 15."\n'
+        '- "The user is vegetarian."\n'
+        '- "The user prefers short, concise answers."\n'
+        '- "The user is allergic to peanuts."\n'
+        '- "The user works as a software engineer."\n'
+        '- "The user lives in Berlin."\n'
+        '- "The user\'s best friend is Peter."\n'
+        '- "The user speaks German and English."\n'
+        '- "The user dislikes small talk."\n'
+        '- "The user\'s dog is named Max."\n\n'
+        "NOT core memories (these are normal or should not be saved):\n"
+        '- "The user asked about React hooks." (episodic, not identity)\n'
+        '- "The user played football today." (time-bound event)\n'
+        '- "The user is working on a project deadline this week." (temporary)\n'
+        '- "The user had a meeting today." (daily event)\n\n'
+        "## What is a NORMAL memory?\n"
+        "Normal memories are episodic, time-bound context that is useful for a while but may expire.\n"
+        "They describe what was discussed, decisions made, tasks mentioned, or recent events.\n\n"
+        "Normal memory examples (GOOD):\n"
+        '- "The user is working on migrating their app to Python 3.12."\n'
+        '- "The user mentioned wanting to plan a trip to Japan."\n'
+        '- "The user decided to switch from Vue to React for the frontend."\n\n'
+        "## Importance levels\n"
+        "- high: clearly valuable, explicitly stated by the user, would be missed if lost.\n"
+        "- medium: useful context but not critical.\n"
+        "- low: trivial, vague, or unlikely to be useful later. Err on the side of NOT saving these.\n\n"
+        "## Rules\n"
         "- Write every memory in third-person, self-contained form prefixed with 'The user ...'.\n"
         "- Never use first-person phrasing like 'I', 'my', 'me'.\n"
-        "- Example good: 'The user's best friend is Peter.'\n"
-        "- Example bad: 'My best friend is Peter.'\n"
-        "- Do not invent facts.\n"
-        "- Keep each memory short and concrete.\n"
-        "- Empty arrays are allowed if nothing should be remembered."
+        "- Do not invent facts. Only extract what the user explicitly stated or clearly implied.\n"
+        "- Keep each memory short and concrete (one fact per memory).\n"
+        "- Empty arrays are PREFERRED if nothing worth remembering was said.\n"
+        "- Do NOT extract memories from casual chit-chat, greetings, or routine exchanges.\n"
+        "- Be very selective. Quality over quantity. When in doubt, do not extract."
     )
 
 
@@ -140,20 +176,32 @@ def _parse_json_payload(text: str) -> dict[str, Any]:
     return {"core_memories": [], "normal_memories": []}
 
 
-def _normalize_memory_list(raw_items: Any) -> list[str]:
+def _normalize_memory_list(raw_items: Any) -> list[dict[str, str]]:
+    """Normalize extraction results into list of {content, importance} dicts.
+
+    Accepts both the new object format (list of dicts with content+importance)
+    and the legacy plain-string format for backward compatibility.
+    """
     if not isinstance(raw_items, list):
         return []
-    result: list[str] = []
+    result: list[dict[str, str]] = []
     seen: set[str] = set()
     for item in raw_items:
-        text = " ".join(str(item).split()).strip()
+        if isinstance(item, dict):
+            text = " ".join(str(item.get("content", "")).split()).strip()
+            importance = str(item.get("importance", "medium")).strip().lower()
+        else:
+            text = " ".join(str(item).split()).strip()
+            importance = "medium"
         if not text:
             continue
+        if importance not in {"high", "medium", "low"}:
+            importance = "medium"
         lowered = text.lower()
         if lowered in seen:
             continue
         seen.add(lowered)
-        result.append(text)
+        result.append({"content": text, "importance": importance})
     return result
 
 
@@ -240,8 +288,10 @@ async def run_memory_extraction(*, trigger_count: int, interval: int, source_cha
                 return 0
 
             added = await add_short_term_memories(
-                core_memories=core,
-                normal_memories=normal,
+                core_memories=[item["content"] for item in core],
+                normal_memories=[item["content"] for item in normal],
+                core_importance=[item["importance"] for item in core],
+                normal_importance=[item["importance"] for item in normal],
                 source_channel=source_channel,
                 source_chat_id=source_chat_id,
                 source_request_id=f"auto-{trigger_count}",
@@ -251,3 +301,106 @@ async def run_memory_extraction(*, trigger_count: int, interval: int, source_cha
         finally:
             _EXTRACTION_STATUS["in_progress"] = False
             _EXTRACTION_STATUS["last_finished_at"] = _now_iso()
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _build_daily_summary_prompt(date_str: str) -> str:
+    return (
+        f"Summarize what the assistant did on {date_str} based on the timed job conversation turns below.\n\n"
+        "Rules:\n"
+        "- Keep only NOTABLE outcomes, results, and actions that produced meaningful information.\n"
+        "- Skip routine check-ins that found nothing, produced no output, or had no meaningful result.\n"
+        "- If nothing notable happened, return exactly: {\"summary\": \"\"}\n"
+        "- Write the summary in third-person form (e.g., 'The assistant checked weather and found...').\n"
+        "- Be concise. One to three sentences maximum.\n"
+        "- Do not invent facts. Only summarize what is in the provided turns.\n\n"
+        "Return JSON only with this exact schema:\n"
+        '{\"summary\": \"...\"}'
+    )
+
+
+async def run_daily_summary_extraction() -> bool:
+    """Extract a daily activity summary from yesterday's timed job conversation turns.
+
+    Returns True if a summary was created and saved, False otherwise.
+    """
+    now_utc = datetime.now(timezone.utc)
+    yesterday = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    last_date = await get_last_daily_summary_date()
+    if last_date >= yesterday:
+        return False
+
+    turns = await get_conversation_turns_for_date(yesterday, source_channel="timed_job")
+    if not turns:
+        await set_last_daily_summary_date(yesterday)
+        return False
+
+    settings = await load_settings()
+    provider_id = settings.active_provider_id
+    provider_config = settings.provider_configs.get(provider_id)
+    if not provider_id or provider_config is None:
+        return False
+
+    provider = get_provider(provider_id)
+    if provider is None:
+        return False
+
+    history: list[dict[str, str]] = []
+    for turn in turns:
+        prompt = str(turn.get("user_message", "")).strip()
+        response = str(turn.get("assistant_message", "")).strip()
+        if prompt:
+            history.append({"role": "user", "content": f"[Timed job prompt]: {prompt}"})
+        if response:
+            history.append({"role": "assistant", "content": response})
+
+    if not history:
+        await set_last_daily_summary_date(yesterday)
+        return False
+
+    try:
+        response_text, _ = await generate_with_retries(
+            provider=provider,
+            prompt=_build_daily_summary_prompt(yesterday),
+            system_prompt="You are a concise activity summarizer. Return valid JSON only.",
+            model=provider_config.model,
+            api_key=provider_config.api_key,
+            history=history,
+        )
+    except Exception:
+        LOGGER.warning("Daily summary extraction LLM call failed for %s", yesterday)
+        return False
+
+    payload = _parse_json_payload(response_text)
+    summary = str(payload.get("summary", "")).strip()
+
+    await set_last_daily_summary_date(yesterday)
+
+    if not summary:
+        return False
+
+    memory_content = f"Daily activity summary ({yesterday}): {summary}"
+    await add_short_term_memories(
+        core_memories=[],
+        normal_memories=[memory_content],
+        source_channel="daily_summary",
+        source_chat_id="",
+        source_request_id=f"daily-{yesterday}",
+    )
+    LOGGER.info("Daily summary memory created for %s", yesterday)
+    return True
+
+
+async def maybe_run_daily_summary() -> bool:
+    """Check if a daily summary is due and run it if so. Safe to call frequently."""
+    now_utc = datetime.now(timezone.utc)
+    yesterday = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    last_date = await get_last_daily_summary_date()
+    if last_date >= yesterday:
+        return False
+
+    return await run_daily_summary_extraction()

@@ -26,7 +26,7 @@ from app.config import (
 )
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed
 from app.integrations.registry import get_runtime_integrations
-from app.memory_extraction import register_completed_turn
+from app.memory_extraction import maybe_run_daily_summary, register_completed_turn
 from app.providers import get_provider
 from app.providers.resilience import generate_with_retries
 from app.usage import add_daily_usage
@@ -156,6 +156,12 @@ async def _timed_jobs_loop() -> None:
     while not _STOP_EVENT.is_set():
         try:
             await run_due_timed_jobs_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        try:
+            await maybe_run_daily_summary()
         except asyncio.CancelledError:
             raise
         except Exception:

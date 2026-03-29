@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 import json
+import logging
 from typing import Any
 
 from app.config import MemoryEntry, Settings, load_settings, save_settings
@@ -9,6 +10,9 @@ from app.providers import get_provider
 from app.providers.resilience import generate_with_retries
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class MemoryAccessMCP(MCPPlugin):
@@ -81,8 +85,8 @@ class MemoryAccessMCP(MCPPlugin):
             return ""
         return (
             "Memory-save intent is language-agnostic; trigger save_memory based on semantic intent, not specific keywords. "
-            "When saving memory: default to memory_type='normal'. Use memory_type='core' only if highly "
-            "confident the fact is a stable long-term identity/preference/constraint."
+            "When saving memory: provide the memory text. The system will automatically classify it as core or normal. "
+            "You may specify memory_type if you are confident, but it is not required."
         )
 
 
@@ -183,7 +187,7 @@ async def _save_memory(arguments: dict[str, object]) -> dict[str, object]:
         confidence = "explicit"
         inference_reason = "Memory type provided explicitly by tool arguments."
     else:
-        inferred_type, confidence, inference_reason = _infer_memory_type_from_text(memory_text)
+        inferred_type, confidence, inference_reason = await _infer_memory_type_via_llm(memory_text)
         target_type = inferred_type
 
     settings = await load_settings()
@@ -311,7 +315,60 @@ def _existing_memory_lookup(settings: Settings) -> dict[str, str]:
     return mapping
 
 
-def _infer_memory_type_from_text(text: str) -> tuple[str, str, str]:
+async def _infer_memory_type_via_llm(text: str) -> tuple[str, str, str]:
+    """Classify a memory as core or normal using an LLM call.
+
+    Falls back to the keyword-based heuristic if the LLM call fails.
+    Returns (memory_type, confidence, reason).
+    """
+    try:
+        settings = await load_settings()
+        provider_id = settings.active_provider_id.strip()
+        if not provider_id:
+            return _infer_memory_type_from_text_fallback(text)
+        provider_config = settings.provider_configs.get(provider_id)
+        if provider_config is None or not provider_config.model.strip() or not provider_config.api_key.strip():
+            return _infer_memory_type_from_text_fallback(text)
+        provider = get_provider(provider_id)
+        if provider is None:
+            return _infer_memory_type_from_text_fallback(text)
+
+        prompt = (
+            "Classify this memory as \"core\" or \"normal\".\n\n"
+            "CORE = Timeless facts about the user that are always true and do not expire.\n"
+            "Examples: name, birthday, diet, allergies, stable preferences (\"prefers short answers\"), "
+            "personality traits, family members, job, location, languages, communication style, long-term goals.\n\n"
+            "NORMAL = Time-bound or episodic context that may change or expire.\n"
+            "Examples: current projects, recent events, temporary states, tasks, decisions, plans.\n\n"
+            f"Memory: \"{text}\"\n\n"
+            "Return JSON only: {\"type\": \"core\" or \"normal\", \"confidence\": \"high\" or \"medium\" or \"low\", "
+            "\"reason\": \"brief explanation\"}"
+        )
+        response_text, _ = await generate_with_retries(
+            provider=provider,
+            prompt=prompt,
+            system_prompt="You are a precise memory classifier. Return valid JSON only.",
+            model=provider_config.model,
+            api_key=provider_config.api_key,
+            history=[],
+            max_attempts=2,
+        )
+        parsed = _parse_json_object(response_text)
+        inferred_type = str(parsed.get("type", "normal")).strip().lower()
+        if inferred_type not in {"core", "normal"}:
+            inferred_type = "normal"
+        confidence = str(parsed.get("confidence", "medium")).strip().lower()
+        if confidence not in {"high", "medium", "low"}:
+            confidence = "medium"
+        reason = str(parsed.get("reason", "")).strip() or "LLM classification."
+        return inferred_type, confidence, reason
+    except Exception:
+        LOGGER.debug("LLM memory type inference failed, falling back to keyword heuristic")
+        return _infer_memory_type_from_text_fallback(text)
+
+
+def _infer_memory_type_from_text_fallback(text: str) -> tuple[str, str, str]:
+    """Keyword-based fallback for memory type inference when LLM is unavailable."""
     lowered = text.lower()
     core_score = 0.0
 
