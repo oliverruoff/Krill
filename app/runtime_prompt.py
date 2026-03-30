@@ -12,12 +12,22 @@ if TYPE_CHECKING:
 def compose_runtime_system_prompt(
     settings: Settings,
     memory_block: str = "",
+    source_channel: str = "",
 ) -> str:
     current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
     invisible_context = (
         f"Current datetime (server local): {current_local_time}\n"
         "Use time context only when relevant; do not mention it unless needed."
     )
+
+    if source_channel == "timed_job":
+        invisible_context = (
+            f"{invisible_context}\n\n"
+            "You are currently executing a scheduled timed job.\n"
+            "The user message below contains the job's instructions — execute them directly.\n"
+            "Do NOT create, update, or schedule any new timed jobs unless the instructions "
+            "explicitly ask you to manage other timed jobs."
+        )
 
     capability_summary = _build_enabled_capability_summary(settings)
     if capability_summary:
