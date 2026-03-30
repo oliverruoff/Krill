@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import platform
 import tempfile
 import subprocess
 import time
@@ -18,6 +20,8 @@ from urllib import error, request
 
 from app.config import BASE_DIR
 from app.config import load_whatsapp_session_blob, save_whatsapp_session_blob
+
+LOGGER = logging.getLogger(__name__)
 
 _SIDECAR_PORT = 18777
 _SIDECAR_BASE = f"http://127.0.0.1:{_SIDECAR_PORT}"
@@ -49,15 +53,25 @@ _AUTH_EXCLUDED_FILE_NAMES = {
 
 _LOCK = asyncio.Lock()
 _PROCESS: subprocess.Popen[str] | None = None
+_LOG_HANDLE: io.TextIOWrapper | None = None
 _LAST_START = 0.0
+
+_IS_WINDOWS = platform.system().lower() == "windows"
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 
 async def ensure_sidecar_running() -> None:
-    global _PROCESS, _LAST_START
+    """Start the sidecar process if it is not already running and healthy."""
+    global _PROCESS, _LAST_START, _LOG_HANDLE
     async with _LOCK:
         if _PROCESS is not None and _PROCESS.poll() is None:
-            return
-        if await asyncio.to_thread(_sidecar_is_healthy):
+            if await asyncio.to_thread(_sidecar_is_healthy):
+                return
+        if _PROCESS is None and await asyncio.to_thread(_sidecar_is_healthy):
             return
 
         node_bin = "node"
@@ -70,60 +84,89 @@ async def ensure_sidecar_running() -> None:
         _AUTH_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         env["WA_AUTH_DIR"] = str(_AUTH_RUNTIME_DIR)
         _SIDECAR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        log_handle = open(_SIDECAR_LOG_PATH, "a", encoding="utf-8")
+
+        # Close any previously leaked log handle.
+        if _LOG_HANDLE is not None:
+            try:
+                _LOG_HANDLE.close()
+            except Exception:
+                pass
+            _LOG_HANDLE = None
+
+        _LOG_HANDLE = open(_SIDECAR_LOG_PATH, "a", encoding="utf-8")
         _PROCESS = subprocess.Popen(
             [node_bin, "server.js"],
             cwd=str(_SIDECAR_DIR),
             env=env,
-            stdout=log_handle,
-            stderr=log_handle,
+            stdout=_LOG_HANDLE,
+            stderr=_LOG_HANDLE,
             text=True,
         )
         _LAST_START = time.time()
 
-    await asyncio.to_thread(_wait_for_health)
+        # Wait for health inside the lock so concurrent callers don't
+        # escape before the sidecar is actually reachable.
+        await asyncio.to_thread(_wait_for_health)
 
 
 async def stop_sidecar() -> None:
-    global _PROCESS
+    """Terminate the sidecar process and snapshot the session."""
+    global _PROCESS, _LOG_HANDLE
     async with _LOCK:
         proc = _PROCESS
         _PROCESS = None
-    if proc is None:
+
+    if proc is not None:
         try:
-            await asyncio.to_thread(_request_json, "POST", f"{_SIDECAR_BASE}/shutdown", {})
+            proc.terminate()
         except Exception:
             pass
+        for _ in range(30):
+            if proc.poll() is not None:
+                break
+            await asyncio.sleep(0.1)
+    else:
+        # Only attempt remote shutdown if we know a sidecar is reachable.
+        if await asyncio.to_thread(_sidecar_is_healthy):
+            try:
+                await asyncio.to_thread(_request_json, "POST", f"{_SIDECAR_BASE}/shutdown", {})
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+
+    # Close the log file handle.
+    if _LOG_HANDLE is not None:
+        try:
+            _LOG_HANDLE.close()
+        except Exception:
+            pass
+        _LOG_HANDLE = None
+
+    # On Windows, files may still be locked briefly after process exit.
+    if _IS_WINDOWS:
         await asyncio.sleep(0.5)
-        await _snapshot_session_to_db()
-        return
-    try:
-        proc.terminate()
-    except Exception:
-        pass
-    for _ in range(30):
-        if proc.poll() is not None:
-            break
-        await asyncio.sleep(0.1)
+
     await _snapshot_session_to_db()
 
 
-def _sidecar_is_healthy() -> bool:
-    try:
-        _request_json("GET", f"{_SIDECAR_BASE}/health", None)
-        return True
-    except Exception:
-        return False
-
-
 async def connect() -> dict[str, object]:
+    """Ensure the sidecar is running and trigger WhatsApp client initialization."""
     await ensure_sidecar_running()
     payload = await asyncio.to_thread(_request_json, "POST", f"{_SIDECAR_BASE}/connect", {})
     return payload
 
 
-async def status() -> dict[str, object]:
-    await ensure_sidecar_running()
+async def status(*, start_if_needed: bool = True) -> dict[str, object]:
+    """Return the current sidecar status.
+
+    When *start_if_needed* is ``False`` the sidecar process is **not**
+    started — a synthetic ``disconnected`` response is returned instead.
+    """
+    if not start_if_needed:
+        if not await asyncio.to_thread(_sidecar_is_healthy):
+            return {"ok": True, "status": "disconnected", "detail": "Sidecar is not running.", "qr_data_url": ""}
+    else:
+        await ensure_sidecar_running()
     payload = await asyncio.to_thread(_request_json, "GET", f"{_SIDECAR_BASE}/status", None)
     return payload
 
@@ -202,6 +245,10 @@ async def get_message_media(number: str, message_id: str) -> dict[str, object]:
     return payload
 
 
+# ---------------------------------------------------------------------------
+# Phone number utilities (public)
+# ---------------------------------------------------------------------------
+
 
 def normalize_phone_number(raw: str) -> str:
     cleaned = "".join(ch for ch in str(raw or "") if ch.isdigit() or ch == "+").strip()
@@ -234,7 +281,21 @@ def parse_allowlist(raw: str) -> set[str]:
     return {item for item in normalized if item}
 
 
-def _wait_for_health(timeout_seconds: float = 12.0) -> None:
+# ---------------------------------------------------------------------------
+# Internals: health / HTTP
+# ---------------------------------------------------------------------------
+
+
+def _sidecar_is_healthy() -> bool:
+    try:
+        _request_json("GET", f"{_SIDECAR_BASE}/health", None)
+        return True
+    except Exception:
+        return False
+
+
+def _wait_for_health(timeout_seconds: float = 20.0) -> None:
+    """Poll the sidecar health endpoint until it responds or timeout."""
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
@@ -249,11 +310,16 @@ def _wait_for_health(timeout_seconds: float = 12.0) -> None:
     except Exception:
         details = ""
     if details:
-        raise RuntimeError(f"WhatsApp sidecar failed to start. Recent logs: {details}")
-    raise RuntimeError("WhatsApp sidecar failed to start.")
+        raise RuntimeError(f"WhatsApp sidecar failed to start within {timeout_seconds}s. Recent logs: {details}")
+    raise RuntimeError(f"WhatsApp sidecar failed to start within {timeout_seconds}s.")
 
 
-def _request_json(method: str, url: str, payload: object | None) -> dict[str, object]:
+def _request_json(method: str, url: str, payload: object | None, *, _retry: bool = True) -> dict[str, object]:
+    """Send an HTTP request to the sidecar and return the JSON response.
+
+    Includes a single automatic retry for transient connection errors on
+    idempotent (GET) requests.
+    """
     data = None
     headers = {"Accept": "application/json"}
     if payload is not None:
@@ -272,6 +338,17 @@ def _request_json(method: str, url: str, payload: object | None) -> dict[str, ob
         except Exception:
             detail = ""
         raise RuntimeError(f"WhatsApp sidecar request failed ({exc.code}): {detail}") from exc
+    except (error.URLError, OSError, TimeoutError) as exc:
+        # Single retry for transient connection errors on GET requests.
+        if _retry and method == "GET":
+            time.sleep(1)
+            return _request_json(method, url, payload, _retry=False)
+        raise RuntimeError(f"WhatsApp sidecar unreachable: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Internals: dependencies / browser
+# ---------------------------------------------------------------------------
 
 
 def _ensure_sidecar_dependencies() -> str | None:
@@ -390,6 +467,11 @@ def _detect_local_chromium_executable() -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Internals: session persistence
+# ---------------------------------------------------------------------------
+
+
 async def _restore_session_from_db() -> None:
     blob = await load_whatsapp_session_blob()
     if not blob.strip():
@@ -397,6 +479,7 @@ async def _restore_session_from_db() -> None:
     try:
         archive_bytes = base64.b64decode(blob, validate=True)
     except Exception:
+        LOGGER.warning("WhatsApp session blob in DB is not valid base64; starting with a clean session.")
         return
 
     compacted_archive_bytes = _filter_session_archive_bytes(archive_bytes)
@@ -408,55 +491,81 @@ async def _restore_session_from_db() -> None:
         except Exception:
             pass
 
-    shutil.rmtree(_AUTH_RUNTIME_DIR, ignore_errors=True)
-    _AUTH_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    archive_path = _AUTH_RUNTIME_DIR / "session.zip"
-    archive_path.write_bytes(archive_bytes)
+    # Extract to a temporary directory first, then swap — so a corrupt
+    # archive does not destroy a previously valid session on disk.
+    staging_dir = _AUTH_RUNTIME_DIR.parent / "auth_staging"
     try:
-        with zipfile.ZipFile(archive_path, "r") as zf:
-            zf.extractall(_AUTH_RUNTIME_DIR)
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = staging_dir / "session.zip"
+        archive_path.write_bytes(archive_bytes)
+        try:
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                zf.extractall(staging_dir)
+        except Exception:
+            LOGGER.warning("WhatsApp session archive is corrupt; starting with a clean session.")
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            shutil.rmtree(_AUTH_RUNTIME_DIR, ignore_errors=True)
+            _AUTH_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+            return
+        finally:
+            if archive_path.exists():
+                archive_path.unlink(missing_ok=True)
+
+        # Success — swap staging into the real auth dir.
+        shutil.rmtree(_AUTH_RUNTIME_DIR, ignore_errors=True)
+        staging_dir.rename(_AUTH_RUNTIME_DIR)
     except Exception:
+        LOGGER.warning("WhatsApp session restore failed; starting with a clean session.")
+        shutil.rmtree(staging_dir, ignore_errors=True)
         shutil.rmtree(_AUTH_RUNTIME_DIR, ignore_errors=True)
         _AUTH_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    finally:
-        if archive_path.exists():
-            archive_path.unlink(missing_ok=True)
 
 
 async def _snapshot_session_to_db() -> None:
     if not _AUTH_RUNTIME_DIR.exists():
         return
     archive_path = _AUTH_RUNTIME_DIR / "session.zip"
-    try:
-        file_candidates = [
-            file_path
-            for file_path in _AUTH_RUNTIME_DIR.rglob("*")
-            if file_path.is_file()
-            and file_path.name != "session.zip"
-            and _should_include_auth_path(file_path)
-        ]
-        if not file_candidates:
-            return
-        if archive_path.exists():
-            archive_path.unlink(missing_ok=True)
-        archived_count = 0
-        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for file_path in file_candidates:
-                relative = file_path.relative_to(_AUTH_RUNTIME_DIR)
-                try:
-                    zf.write(file_path, arcname=str(relative))
-                    archived_count += 1
-                except Exception:
-                    continue
-        if archived_count == 0:
-            return
-        encoded = base64.b64encode(archive_path.read_bytes()).decode("ascii")
-        await save_whatsapp_session_blob(encoded)
-    except Exception:
-        return
-    finally:
-        if archive_path.exists():
-            archive_path.unlink(missing_ok=True)
+
+    # On Windows, retry file reads a few times in case of residual locks.
+    max_attempts = 3 if _IS_WINDOWS else 1
+    for attempt in range(max_attempts):
+        try:
+            file_candidates = [
+                file_path
+                for file_path in _AUTH_RUNTIME_DIR.rglob("*")
+                if file_path.is_file()
+                and file_path.name != "session.zip"
+                and _should_include_auth_path(file_path)
+            ]
+            if not file_candidates:
+                return
+            if archive_path.exists():
+                archive_path.unlink(missing_ok=True)
+            archived_count = 0
+            with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for file_path in file_candidates:
+                    relative = file_path.relative_to(_AUTH_RUNTIME_DIR)
+                    try:
+                        zf.write(file_path, arcname=str(relative))
+                        archived_count += 1
+                    except Exception:
+                        continue
+            if archived_count == 0:
+                return
+            encoded = base64.b64encode(archive_path.read_bytes()).decode("ascii")
+            await save_whatsapp_session_blob(encoded)
+            return  # success
+        except Exception:
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(1.0)
+            else:
+                LOGGER.warning("WhatsApp session snapshot failed after %d attempts.", max_attempts)
+                return
+        finally:
+            if archive_path.exists():
+                archive_path.unlink(missing_ok=True)
 
 
 def _should_include_auth_path(file_path: Path) -> bool:

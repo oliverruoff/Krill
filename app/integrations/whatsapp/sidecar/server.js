@@ -6,6 +6,11 @@ import qrcode from "qrcode";
 const { Client, LocalAuth } = whatsapp;
 
 const port = Number.parseInt(process.env.WA_SIDECAR_PORT || "18777", 10);
+const authDir = process.env.WA_AUTH_DIR || "/tmp/krill_wa_auth";
+
+// ---------------------------------------------------------------------------
+// Module-level state
+// ---------------------------------------------------------------------------
 
 let client = null;
 let status = "disconnected";
@@ -15,10 +20,56 @@ let events = [];
 let allowlist = new Set();
 let initStarted = false;
 
+// Reconnection state
+let reconnectAttempt = 0;
+let reconnectTimer = null;
+const RECONNECT_MAX_ATTEMPTS = 10;
+const RECONNECT_DELAYS = [5, 5, 10, 10, 20, 20, 30, 30, 60, 60]; // seconds
+
+// Initialization timeout (60 seconds)
+const INIT_TIMEOUT_MS = 60_000;
+let initTimeoutTimer = null;
+
+// QR scan timeout (120 seconds)
+const QR_TIMEOUT_MS = 120_000;
+let qrTimeoutTimer = null;
+
+// Loading screen timeout (90 seconds)
+const LOADING_TIMEOUT_MS = 90_000;
+let loadingTimeoutTimer = null;
+
+// Mutex for ensureClient
+let initPromise = null;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function clearAllTimers() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (initTimeoutTimer) {
+    clearTimeout(initTimeoutTimer);
+    initTimeoutTimer = null;
+  }
+  if (qrTimeoutTimer) {
+    clearTimeout(qrTimeoutTimer);
+    qrTimeoutTimer = null;
+  }
+  if (loadingTimeoutTimer) {
+    clearTimeout(loadingTimeoutTimer);
+    loadingTimeoutTimer = null;
+  }
+}
+
 async function resetClient(nextStatus, detail = "") {
+  clearAllTimers();
   const current = client;
   client = null;
   initStarted = false;
+  initPromise = null;
   qrDataUrl = "";
   status = nextStatus;
   statusDetail = String(detail || "").trim();
@@ -30,6 +81,28 @@ async function resetClient(nextStatus, detail = "") {
   } catch {
     // Ignore teardown errors during reconnect cleanup.
   }
+}
+
+function scheduleReconnect(reason) {
+  if (reconnectTimer) return; // already scheduled
+  if (reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
+    status = "disconnected";
+    statusDetail = `Gave up reconnecting after ${RECONNECT_MAX_ATTEMPTS} attempts. Last reason: ${reason}. Use /connect to retry.`;
+    reconnectAttempt = 0;
+    return;
+  }
+  const delaySec = RECONNECT_DELAYS[Math.min(reconnectAttempt, RECONNECT_DELAYS.length - 1)];
+  reconnectAttempt++;
+  statusDetail = `Reconnecting in ${delaySec}s (attempt ${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})...`;
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    try {
+      await ensureClient();
+    } catch (err) {
+      const msg = String(err?.message || err || "Reconnect failed").trim();
+      scheduleReconnect(msg);
+    }
+  }, delaySec * 1000);
 }
 
 function json(res, code, payload) {
@@ -197,19 +270,33 @@ async function listContacts() {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Core client lifecycle
+// ---------------------------------------------------------------------------
+
 async function ensureClient() {
+  // Mutex: if initialization is already in progress, wait for it.
+  if (initPromise) {
+    await initPromise;
+    return;
+  }
+
+  // If the client exists and is in a broken state, reset it first.
+  if (client && (status === "error" || status === "auth_failure")) {
+    await resetClient("disconnected", "Clearing failed client for re-initialization.");
+  }
+
   if (client) {
     if (!initStarted) {
       initStarted = true;
       status = "initializing";
       statusDetail = "Starting WhatsApp Web session...";
-      client.initialize().catch((err) => {
-        statusDetail = String(err?.message || err || "Failed to initialize WhatsApp client.").trim();
-        status = "error";
-      });
+      initPromise = _initializeWithTimeout();
+      initPromise.finally(() => { initPromise = null; });
     }
     return;
   }
+
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: authDir, clientId: "krill" }),
     puppeteer: {
@@ -234,14 +321,44 @@ async function ensureClient() {
     } catch {
       qrDataUrl = "";
     }
+    // Reset QR timeout on each new QR code.
+    if (qrTimeoutTimer) clearTimeout(qrTimeoutTimer);
+    qrTimeoutTimer = setTimeout(() => {
+      qrTimeoutTimer = null;
+      if (status === "qr") {
+        void resetClient("disconnected", "QR scan timed out.").then(() => {
+          scheduleReconnect("QR scan timed out");
+        });
+      }
+    }, QR_TIMEOUT_MS);
   });
+
   client.on("loading_screen", (percent, message) => {
     const label = String(message || "Loading WhatsApp...").trim() || "Loading WhatsApp...";
     const numericPercent = Number.isFinite(Number(percent)) ? Math.max(0, Math.min(100, Math.round(Number(percent)))) : null;
     status = "loading";
     qrDataUrl = "";
     statusDetail = numericPercent === null ? label : `${label} (${numericPercent}%)`;
+
+    // Clear any QR timeout since we've moved past QR phase.
+    if (qrTimeoutTimer) {
+      clearTimeout(qrTimeoutTimer);
+      qrTimeoutTimer = null;
+    }
+
+    // Start loading screen timeout if not already set.
+    if (!loadingTimeoutTimer) {
+      loadingTimeoutTimer = setTimeout(() => {
+        loadingTimeoutTimer = null;
+        if (status === "loading") {
+          void resetClient("error", "Loading screen timed out.").then(() => {
+            scheduleReconnect("Loading screen timed out");
+          });
+        }
+      }, LOADING_TIMEOUT_MS);
+    }
   });
+
   client.on("change_state", (nextState) => {
     if (status === "ready") {
       return;
@@ -251,27 +368,52 @@ async function ensureClient() {
       return;
     }
     qrDataUrl = "";
+    // Detect problematic states and trigger recovery.
+    const upperLabel = label.toUpperCase();
+    if (upperLabel === "CONFLICT" || upperLabel === "UNPAIRED" || upperLabel === "UNLAUNCHED") {
+      void resetClient("error", `WhatsApp entered ${label} state.`).then(() => {
+        scheduleReconnect(`${label} state detected`);
+      });
+      return;
+    }
     if (status !== "authenticated" && status !== "loading") {
       status = "initializing";
     }
     statusDetail = `WhatsApp state: ${label}`;
   });
+
   client.on("ready", () => {
+    clearAllTimers();
+    reconnectAttempt = 0; // Reset reconnect counter on successful connection.
     status = "ready";
     qrDataUrl = "";
     statusDetail = "WhatsApp connected and ready.";
   });
+
   client.on("authenticated", () => {
+    // Clear QR timeout since authentication succeeded.
+    if (qrTimeoutTimer) {
+      clearTimeout(qrTimeoutTimer);
+      qrTimeoutTimer = null;
+    }
+    reconnectAttempt = 0; // Session was accepted, reset counter.
     status = "authenticated";
     qrDataUrl = "";
     statusDetail = "QR accepted. Finalizing WhatsApp login...";
   });
+
   client.on("auth_failure", (message) => {
-    void resetClient("auth_failure", message || "WhatsApp authentication failed. Please retry the QR scan.");
+    void resetClient("auth_failure", message || "WhatsApp authentication failed. Please retry the QR scan.").then(() => {
+      scheduleReconnect("auth_failure");
+    });
   });
+
   client.on("disconnected", (reason) => {
-    void resetClient("disconnected", reason || "WhatsApp disconnected. Reconnect to continue.");
+    void resetClient("disconnected", reason || "WhatsApp disconnected.").then(() => {
+      scheduleReconnect(reason || "disconnected");
+    });
   });
+
   client.on("message", (msg) => {
     try {
       if (msg.fromMe) {
@@ -301,8 +443,9 @@ async function ensureClient() {
         text_source: normalizedText.source,
         timestamp_ms: Date.now(),
       });
-      if (events.length > 300) {
-        events = events.slice(events.length - 300);
+      // Cap events buffer as a ring buffer: remove oldest first.
+      while (events.length > 300) {
+        events.shift();
       }
     } catch {
       // Keep sidecar event loop resilient.
@@ -312,11 +455,65 @@ async function ensureClient() {
   status = "initializing";
   initStarted = true;
   statusDetail = "Starting WhatsApp Web session...";
-  client.initialize().catch((err) => {
-    statusDetail = String(err?.message || err || "Failed to initialize WhatsApp client.").trim();
-    status = "error";
-  });
+  initPromise = _initializeWithTimeout();
+  initPromise.finally(() => { initPromise = null; });
 }
+
+async function _initializeWithTimeout() {
+  try {
+    await Promise.race([
+      client.initialize(),
+      new Promise((_, reject) =>
+        initTimeoutTimer = setTimeout(() => {
+          initTimeoutTimer = null;
+          reject(new Error("WhatsApp client initialization timed out."));
+        }, INIT_TIMEOUT_MS)
+      ),
+    ]);
+    // If we reach here, initialization resolved (ready events fire separately).
+    if (initTimeoutTimer) {
+      clearTimeout(initTimeoutTimer);
+      initTimeoutTimer = null;
+    }
+  } catch (err) {
+    if (initTimeoutTimer) {
+      clearTimeout(initTimeoutTimer);
+      initTimeoutTimer = null;
+    }
+    const msg = String(err?.message || err || "Failed to initialize WhatsApp client.").trim();
+    statusDetail = msg;
+    status = "error";
+    // Schedule automatic recovery.
+    scheduleReconnect(msg);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Process-level error handlers (prevent zombie sidecar after Chrome crash)
+// ---------------------------------------------------------------------------
+
+process.on("uncaughtException", (err) => {
+  const msg = `Uncaught exception: ${err?.message || err}`;
+  process.stderr.write(`${msg}\n`);
+  void resetClient("error", msg).then(() => {
+    scheduleReconnect(msg);
+  });
+});
+
+process.on("unhandledRejection", (reason) => {
+  const msg = `Unhandled rejection: ${reason?.message || reason}`;
+  process.stderr.write(`${msg}\n`);
+  // Only reset if we are not already in a recovery path.
+  if (status === "ready" || status === "loading" || status === "authenticated") {
+    void resetClient("error", msg).then(() => {
+      scheduleReconnect(msg);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// HTTP server
+// ---------------------------------------------------------------------------
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -327,6 +524,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/connect") {
+      // Reset reconnect counter on explicit user-initiated connect.
+      reconnectAttempt = 0;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       await ensureClient();
       json(res, 200, { ok: true, status, detail: statusDetail });
       return;
@@ -457,6 +660,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/shutdown") {
+      clearAllTimers();
       try {
         if (client) {
           await client.destroy();
@@ -469,8 +673,11 @@ const server = http.createServer(async (req, res) => {
       statusDetail = "";
       qrDataUrl = "";
       initStarted = false;
+      initPromise = null;
       json(res, 200, { ok: true });
+      // Graceful shutdown: close server, then exit after a short grace period.
       server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 2000);
       return;
     }
 
@@ -483,4 +690,3 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, "127.0.0.1", () => {
   process.stdout.write(`whatsapp-sidecar listening on ${port}\n`);
 });
-const authDir = process.env.WA_AUTH_DIR || "/tmp/krill_wa_auth";

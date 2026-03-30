@@ -7,6 +7,7 @@ import logging
 import random
 import contextlib
 import base64
+from collections import OrderedDict
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from uuid import uuid4
@@ -19,6 +20,7 @@ from app.providers.vision import analyze_image
 from app.usage import add_daily_usage
 
 from .sidecar_manager import (
+    connect,
     get_message_media,
     get_message_history,
     list_contacts,
@@ -26,6 +28,7 @@ from .sidecar_manager import (
     poll_events,
     send_message,
     set_allowlist,
+    status as sidecar_status,
 )
 
 
@@ -33,6 +36,25 @@ LOGGER = logging.getLogger(__name__)
 AUTO_REPLY_DELAY_MIN_SECONDS = 10
 AUTO_REPLY_DELAY_MAX_SECONDS = 60
 AUTO_REPLY_DELAY_ABSOLUTE_MAX_SECONDS = 3600
+
+# Adaptive polling intervals (seconds).
+_POLL_INTERVAL_ACTIVE = 3.0
+_POLL_INTERVAL_IDLE = 6.0
+_POLL_INTERVAL_ERROR = 10.0
+
+# Maximum concurrent dispatch tasks.
+_MAX_CONCURRENT_DISPATCHES = 3
+
+# Consecutive error threshold before escalating backoff.
+_ERROR_ESCALATION_THRESHOLD = 5
+_ERROR_ESCALATION_BACKOFF = 30.0
+
+# Health check interval: trigger a sidecar reconnect check every N polls.
+_HEALTH_CHECK_EVERY_N_POLLS = 10
+
+# Maximum seen event IDs to track.
+_SEEN_IDS_MAX = 1000
+_SEEN_IDS_TRIM_TO = 500
 
 
 def _is_truthy_flag(value: object) -> bool:
@@ -43,10 +65,14 @@ class WhatsAppBridgeWorker:
     def __init__(self) -> None:
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
-        self._seen_event_ids: set[str] = set()
+        self._seen_event_ids: OrderedDict[str, None] = OrderedDict()
         self._last_runtime_error: str = ""
+        self._consecutive_errors: int = 0
         self._automation_runtime_active = False
         self._image_analysis_cache: dict[str, str] = {}
+        self._dispatch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_DISPATCHES)
+        self._poll_count: int = 0
+        self._had_recent_activity: bool = False
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -55,6 +81,7 @@ class WhatsAppBridgeWorker:
         self._task = asyncio.create_task(self._run_loop())
 
     async def stop(self) -> None:
+        """Stop the worker. The plugin's stop() calls stop_sidecar() separately."""
         self._stop_event.set()
         if self._task is None:
             return
@@ -67,40 +94,66 @@ class WhatsAppBridgeWorker:
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
-            sleep_seconds = 2.0
+            sleep_seconds = _POLL_INTERVAL_IDLE
             try:
-                await self._poll_once()
+                had_events = await self._poll_once()
                 self._last_runtime_error = ""
+                self._consecutive_errors = 0
+                # Adaptive polling: shorter interval when there's recent activity.
+                self._had_recent_activity = had_events
+                sleep_seconds = _POLL_INTERVAL_ACTIVE if had_events else _POLL_INTERVAL_IDLE
             except asyncio.CancelledError:
                 raise
             except RuntimeError as exc:
                 detail = str(exc).strip() or "WhatsApp runtime unavailable."
+                self._consecutive_errors += 1
                 if detail != self._last_runtime_error:
                     LOGGER.warning("WhatsApp worker poll skipped: %s", detail)
                     self._last_runtime_error = detail
-                sleep_seconds = 10.0
+                if self._consecutive_errors >= _ERROR_ESCALATION_THRESHOLD:
+                    sleep_seconds = _ERROR_ESCALATION_BACKOFF
+                else:
+                    sleep_seconds = _POLL_INTERVAL_ERROR
             except Exception:
+                self._consecutive_errors += 1
                 LOGGER.exception("WhatsApp worker poll failed")
+                if self._consecutive_errors >= _ERROR_ESCALATION_THRESHOLD:
+                    sleep_seconds = _ERROR_ESCALATION_BACKOFF
+                else:
+                    sleep_seconds = _POLL_INTERVAL_ERROR
             await asyncio.sleep(sleep_seconds)
 
-    async def _poll_once(self) -> None:
+    async def _poll_once(self) -> bool:
+        """Run a single poll iteration. Returns True if events were processed."""
         automation_state = await self._load_automation_state()
         if not automation_state.enabled:
             await self._deactivate_automation_runtime()
-            return
+            return False
+
+        # Periodic health check: verify sidecar WhatsApp client is connected
+        # and trigger reconnection if it is in a broken state.
+        self._poll_count += 1
+        if self._poll_count % _HEALTH_CHECK_EVERY_N_POLLS == 0:
+            await self._check_sidecar_health()
 
         await set_allowlist(automation_state.allowlist)
         self._automation_runtime_active = True
 
         events = await poll_events()
+        if not events:
+            return False
+
+        dispatched = False
         for event in events:
             event_id = str(event.get("id", "")).strip()
             if event_id and event_id in self._seen_event_ids:
                 continue
             if event_id:
-                self._seen_event_ids.add(event_id)
-                if len(self._seen_event_ids) > 1000:
-                    self._seen_event_ids = set(list(self._seen_event_ids)[-500:])
+                self._seen_event_ids[event_id] = None
+                if len(self._seen_event_ids) > _SEEN_IDS_MAX:
+                    # Trim oldest entries (OrderedDict preserves insertion order).
+                    while len(self._seen_event_ids) > _SEEN_IDS_TRIM_TO:
+                        self._seen_event_ids.popitem(last=False)
 
             number = str(event.get("from_number", "")).strip()
             text = str(event.get("text", "")).strip()
@@ -116,19 +169,73 @@ class WhatsAppBridgeWorker:
             latest_state = await self._load_automation_state()
             if not latest_state.enabled:
                 await self._deactivate_automation_runtime()
-                return
+                return dispatched
 
             if number not in latest_state.allowlist:
                 continue
 
-            await self._dispatch_inbound_message(
-                number,
-                text,
-                latest_state.prompt,
-                trigger_message_id=event_id,
-                trigger_has_image=has_image,
-                quote_latest_reply_message=latest_state.quote_latest_reply_message,
+            # Dispatch as a concurrent task (bounded by semaphore).
+            asyncio.create_task(
+                self._guarded_dispatch(
+                    number,
+                    text,
+                    latest_state.prompt,
+                    trigger_message_id=event_id,
+                    trigger_has_image=has_image,
+                    quote_latest_reply_message=latest_state.quote_latest_reply_message,
+                    min_delay_seconds=latest_state.min_delay_seconds,
+                    max_delay_seconds=latest_state.max_delay_seconds,
+                )
             )
+            dispatched = True
+
+        return dispatched
+
+    async def _guarded_dispatch(
+        self,
+        number: str,
+        text: str,
+        prompt: str,
+        *,
+        trigger_message_id: str,
+        trigger_has_image: bool,
+        quote_latest_reply_message: bool,
+        min_delay_seconds: int,
+        max_delay_seconds: int,
+    ) -> None:
+        """Dispatch with concurrency limit and error isolation."""
+        async with self._dispatch_semaphore:
+            try:
+                await self._dispatch_inbound_message(
+                    number,
+                    text,
+                    prompt,
+                    trigger_message_id=trigger_message_id,
+                    trigger_has_image=trigger_has_image,
+                    quote_latest_reply_message=quote_latest_reply_message,
+                    min_delay_seconds=min_delay_seconds,
+                    max_delay_seconds=max_delay_seconds,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("WhatsApp dispatch failed for %s", number)
+
+    async def _check_sidecar_health(self) -> None:
+        """Verify the sidecar's WhatsApp client is in a usable state.
+
+        If the sidecar process is alive but the WhatsApp client is
+        disconnected/errored, trigger a /connect to kick off reconnection.
+        """
+        try:
+            current = await sidecar_status(start_if_needed=False)
+            state = str(current.get("status", "")).strip().lower()
+            if state in {"disconnected", "error", "auth_failure"}:
+                LOGGER.info("WhatsApp sidecar state is '%s'; triggering reconnect.", state)
+                await connect()
+        except Exception:
+            # Non-critical; the next poll_events call will surface the real error.
+            pass
 
     async def _dispatch_inbound_message(
         self,
@@ -139,6 +246,8 @@ class WhatsAppBridgeWorker:
         trigger_message_id: str,
         trigger_has_image: bool,
         quote_latest_reply_message: bool,
+        min_delay_seconds: int,
+        max_delay_seconds: int,
     ) -> None:
         settings = await load_settings()
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -222,7 +331,6 @@ class WhatsAppBridgeWorker:
             source_request_id=f"whatsapp-{chat.id}",
         )
 
-
         final_text = str(result.get("text", "")).strip()
         chat.messages.append(
             ChatMessage(
@@ -246,7 +354,11 @@ class WhatsAppBridgeWorker:
 
         if final_text:
             try:
-                send_allowed = await self._wait_for_send_window(number)
+                send_allowed = await self._wait_for_send_window(
+                    number,
+                    min_delay_seconds=min_delay_seconds,
+                    max_delay_seconds=max_delay_seconds,
+                )
                 if not send_allowed:
                     LOGGER.info("WhatsApp auto-reply aborted before send for %s", number)
                 else:
@@ -262,26 +374,35 @@ class WhatsAppBridgeWorker:
             assistant_message=final_text,
         )
 
-    async def _wait_for_send_window(self, number: str) -> bool:
-        initial_state = await self._load_automation_state()
-        delay_seconds = random.randint(initial_state.min_delay_seconds, initial_state.max_delay_seconds)
-        for _ in range(delay_seconds):
+    async def _wait_for_send_window(
+        self,
+        number: str,
+        *,
+        min_delay_seconds: int,
+        max_delay_seconds: int,
+    ) -> bool:
+        """Wait a random delay before sending, checking automation state periodically.
+
+        Checks every 5 seconds (instead of every 1 second) to reduce DB reads.
+        """
+        delay_seconds = random.randint(min_delay_seconds, max_delay_seconds)
+        check_interval = 5  # seconds between automation state re-checks
+        elapsed = 0
+        while elapsed < delay_seconds:
             if self._stop_event.is_set():
                 return False
+            # Sleep in 1-second increments but only check DB every check_interval.
             await asyncio.sleep(1)
-            latest_state = await self._load_automation_state()
-            if not latest_state.enabled or number not in latest_state.allowlist:
-                await self._deactivate_automation_runtime()
-                return False
-
-        latest_state = await self._load_automation_state()
-        if not latest_state.enabled or number not in latest_state.allowlist:
-            await self._deactivate_automation_runtime()
-            return False
+            elapsed += 1
+            if elapsed % check_interval == 0 or elapsed >= delay_seconds:
+                latest_state = await self._load_automation_state()
+                if not latest_state.enabled or number not in latest_state.allowlist:
+                    await self._deactivate_automation_runtime()
+                    return False
 
         return True
 
-    async def _load_automation_state(self) -> "WhatsAppAutomationState":
+    async def _load_automation_state(self) -> WhatsAppAutomationState:
         settings = await load_settings()
         integration_config = settings.integration_configs.get("whatsapp") or IntegrationConfig()
         if not integration_config.enabled:

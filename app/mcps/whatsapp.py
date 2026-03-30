@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import time
 
 from typing import Any
 
@@ -16,6 +17,37 @@ from app.integrations.whatsapp.sidecar_manager import (
     send_message,
     status,
 )
+
+
+# ---------------------------------------------------------------------------
+# Contacts TTL cache (shared across tool calls, avoids re-fetching each time)
+# ---------------------------------------------------------------------------
+
+_contacts_cache: list[dict[str, str]] = []
+_contacts_cache_ts: float = 0.0
+_CONTACTS_CACHE_TTL = 30.0  # seconds
+
+
+async def _get_contacts_cached() -> list[dict[str, str]]:
+    """Return the contacts list, using a TTL cache to avoid hammering the sidecar."""
+    global _contacts_cache, _contacts_cache_ts
+    now = time.monotonic()
+    if _contacts_cache and (now - _contacts_cache_ts) < _CONTACTS_CACHE_TTL:
+        return _contacts_cache
+    try:
+        _contacts_cache = await list_contacts()
+    except Exception:
+        # If the live fetch fails, return the stale cache (if any).
+        if _contacts_cache:
+            return _contacts_cache
+        _contacts_cache = []
+    _contacts_cache_ts = now
+    return _contacts_cache
+
+
+# ---------------------------------------------------------------------------
+# MCP Plugin
+# ---------------------------------------------------------------------------
 
 
 class WhatsAppMCP(MCPPlugin):
@@ -128,15 +160,29 @@ class WhatsAppMCP(MCPPlugin):
         ]
 
     async def verify(self, params: dict[str, str]) -> tuple[bool, str]:
-        await connect()
-        current = await status()
-        state = str(current.get("status", "")).strip().lower()
+        try:
+            connect_result = await connect()
+        except Exception as exc:
+            return False, f"WhatsApp sidecar failed to start: {exc}"
+
+        # Use the state from the connect response directly (avoids a redundant status call).
+        state = str(connect_result.get("status", "")).strip().lower()
+        if not state:
+            # Fallback: explicit status call if connect did not return state.
+            try:
+                current = await status()
+                state = str(current.get("status", "")).strip().lower()
+            except Exception as exc:
+                return False, f"WhatsApp sidecar status check failed: {exc}"
+
         allowlist_send = parse_allowlist(params.get("allowed_numbers_send", ""))
         allowlist_recv = parse_allowlist(params.get("allowed_numbers_receive", ""))
         allowlist = allowlist_send | allowlist_recv
 
         if state in {"error", "auth_failure"}:
             return False, "WhatsApp failed to initialize. Reconnect and scan the QR code again."
+        if state == "disconnected":
+            return False, "WhatsApp is disconnected. Click Connect to scan the QR code."
         if state == "ready":
             if not allowlist:
                 return True, "WhatsApp connected. Select at least one Allowed number from synced contacts."
@@ -161,6 +207,20 @@ class WhatsAppMCP(MCPPlugin):
         if not text:
             raise RuntimeError("text is required.")
 
+        # Pre-check: verify WhatsApp is ready before attempting to send.
+        try:
+            current_status = await status(start_if_needed=False)
+            wa_state = str(current_status.get("status", "")).strip().lower()
+            if wa_state != "ready":
+                raise RuntimeError(
+                    f"WhatsApp is not ready (current state: {wa_state}). "
+                    "Use the Connect button in the WhatsApp MCP settings to re-establish the connection."
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass  # Non-critical — the send call will surface the real error.
+
         allowlist = parse_allowlist(params.get("allowed_numbers_send", ""))
         raw_target = str(arguments.get("to_number", "")).strip()
         to_number = normalize_phone_number(raw_target)
@@ -169,7 +229,14 @@ class WhatsAppMCP(MCPPlugin):
             to_number = next(iter(allowlist))
 
         if not to_number and raw_target:
-            to_number = await _resolve_allowlisted_contact(raw_target, allowlist)
+            resolved, ambiguous = await _resolve_allowlisted_contact(raw_target, allowlist)
+            to_number = resolved
+            if not to_number and ambiguous:
+                suggestions = ", ".join(f"{e['name']} ({e['number']})" for e in ambiguous)
+                raise RuntimeError(
+                    f"Multiple contacts match '{raw_target}'. Please specify an exact number. "
+                    f"Candidates: {suggestions}"
+                )
 
         if not to_number:
             raise RuntimeError("to_number is required (or implied by a single allowlisted contact).")
@@ -201,11 +268,19 @@ class WhatsAppMCP(MCPPlugin):
         )
 
 
-async def _resolve_allowlisted_contact(target: str, allowlist: set[str]) -> str:
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_allowlisted_contact(target: str, allowlist: set[str]) -> tuple[str, list[dict[str, str]]]:
+    """Resolve a contact target to a number. Returns (number, ambiguous_candidates)."""
     matches = await _find_allowlisted_contacts(target, allowlist)
     if len(matches) == 1:
-        return matches[0]["number"]
-    return ""
+        return matches[0]["number"], []
+    if len(matches) > 1:
+        return "", matches[:5]
+    return "", []
 
 
 async def _read_recent_messages(arguments: dict[str, object], params: dict[str, str]) -> dict[str, object]:
@@ -287,10 +362,7 @@ async def _score_allowlisted_contacts(target: str, allowlist: set[str]) -> list[
     lowered_target = target.strip().lower()
     digit_target = normalize_phone_number(target)
 
-    try:
-        contacts = await list_contacts()
-    except Exception:
-        contacts = []
+    contacts = await _get_contacts_cached()
 
     known_contacts: list[dict[str, Any]] = []
     for entry in contacts:

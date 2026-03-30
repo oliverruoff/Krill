@@ -7,6 +7,8 @@ import { themeToggleButton, mobileThemeToggleButton } from "./dom.js";
 
 const ICON_DEFAULT = "/static/img/krill_icon.png";
 const ICON_BUSINESS = "/static/img/krill_icon_business.png";
+const BANNER_DEFAULT = "/static/img/krill_banner.png";
+const BANNER_BUSINESS = "/static/img/krill_banner_business.png";
 
 export function themeIconPath(theme) {
   return theme === "business" ? ICON_BUSINESS : ICON_DEFAULT;
@@ -49,6 +51,11 @@ export function applyThemeMode(theme) {
   if (favicon) favicon.href = iconSrc;
   document.querySelectorAll(".gateway-icon, .mobile-left-panel-icon").forEach((img) => {
     img.src = iconSrc;
+  });
+  // Swap banner asset for business theme.
+  const bannerSrc = normalized === "business" ? BANNER_BUSINESS : BANNER_DEFAULT;
+  document.querySelectorAll(".gateway-banner").forEach((img) => {
+    img.src = bannerSrc;
   });
   renderThemeToggleLabels();
 }

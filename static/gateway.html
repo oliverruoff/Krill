@@ -15,6 +15,7 @@
         const theme = storedTheme === "dark" ? "dark" : storedTheme === "business" ? "business" : "light";
         document.documentElement.setAttribute("data-theme", theme);
         var _iconPath = theme === "business" ? "/static/img/krill_icon_business.png" : "/static/img/krill_icon.png";
+        var _bannerPath = theme === "business" ? "/static/img/krill_banner_business.png" : null;
       })();
     </script>
     <link id="favicon" rel="icon" type="image/png" href="/static/img/krill_icon.png" />
@@ -36,6 +37,7 @@
           <p id="mobile-assistant-name" class="mobile-assistant-name">Assistant</p>
         </div>
         <img src="/static/img/krill_banner.png" alt="Krill" class="gateway-banner" />
+        <script>if(typeof _bannerPath==="string"){document.querySelector(".gateway-banner").src=_bannerPath;}</script>
         <div class="assistant-header">
           <p id="assistant-title" class="assistant-title">This is your personal assistant.</p>
           <p id="assistant-meta" class="assistant-meta">Loading assistant metadata...</p>
