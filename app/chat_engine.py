@@ -1,5 +1,6 @@
 """Shared chat execution engine used by Gateway SSE and Telegram integration."""
 
+import asyncio
 from typing import Awaitable, Callable, TypedDict
 
 from app.config import load_settings, save_settings, Settings
@@ -10,6 +11,13 @@ from app.providers.openai_codex_oauth import (
 )
 from app.runtime_prompt import compose_runtime_system_prompt
 from app.tooling import generate_with_tools
+from app.tooling.execution import (
+    CancellationToken,
+    ExecutionEvent,
+    build_conversation_key,
+    register_execution,
+    unregister_execution,
+)
 from app.tooling.runtime_context import reset_runtime_context, set_runtime_context
 
 
@@ -30,9 +38,10 @@ class ChatEngineResult(TypedDict):
     used_tokens: int | None
     used_mcp_tools: list[ChatEngineToolUsage]
     system_trace_messages: list[ChatEngineTraceMessage]
+    execution_events: list[ExecutionEvent]
 
 
-ToolStepCallback = Callable[[ChatEngineTraceMessage], Awaitable[None]]
+ExecutionEventCallback = Callable[[ExecutionEvent], Awaitable[None]]
 
 
 async def generate_chat_response(
@@ -49,7 +58,8 @@ async def generate_chat_response(
     source_channel: str = "gateway",
     source_chat_id: str = "",
     source_request_id: str = "",
-    on_tool_step: ToolStepCallback | None = None,
+    on_execution_event: ExecutionEventCallback | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> tuple[ChatEngineResult, int | None]:
     active_provider_id = provider_id.strip() if provider_id.strip() else settings.active_provider_id
     provider_config = settings.provider_configs.get(active_provider_id)
@@ -70,10 +80,20 @@ async def generate_chat_response(
     )
     token_limit = get_provider_model_limit(active_provider_id, model_id)
 
+    token = cancellation_token or CancellationToken()
+    conversation_key = build_conversation_key(source_channel, source_chat_id)
+    current_task = asyncio.current_task()
+    await register_execution(
+        conversation_key=conversation_key,
+        request_id=source_request_id,
+        token=token,
+        task=current_task,
+    )
     context_token = set_runtime_context(
         source_channel=source_channel,
         source_chat_id=source_chat_id,
         source_request_id=source_request_id,
+        cancellation_token=token,
     )
     try:
         orchestration = await generate_with_tools(
@@ -86,10 +106,12 @@ async def generate_chat_response(
             history=history,
             max_tool_recursion=settings.tool_max_recursion,
             tool_timeout_seconds=settings.tool_timeout_seconds,
-            on_tool_step=on_tool_step,
+            on_execution_event=on_execution_event,
+            cancellation_token=token,
         )
     finally:
         reset_runtime_context(context_token)
+        await unregister_execution(request_id=source_request_id, conversation_key=conversation_key)
 
     if used_stored_provider_api_key and active_provider_id == OPENAI_CODEX_OAUTH_PROVIDER_ID:
         await _persist_refreshed_openai_oauth_bundle_if_needed()
@@ -122,12 +144,21 @@ async def generate_chat_response(
                 }
             )
 
+    normalized_events: list[ExecutionEvent] = []
+    raw_events = orchestration.get("execution_events", [])
+    if isinstance(raw_events, list):
+        for entry in raw_events:
+            if not isinstance(entry, dict):
+                continue
+            normalized_events.append({str(key): value for key, value in entry.items()})
+
     used_tokens = orchestration.get("used_tokens")
     result: ChatEngineResult = {
         "text": str(orchestration.get("text", "")).strip(),
         "used_tokens": used_tokens if isinstance(used_tokens, int) else None,
         "used_mcp_tools": normalized_tools,
         "system_trace_messages": normalized_trace,
+        "execution_events": normalized_events,
     }
     return result, token_limit
 

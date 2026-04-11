@@ -16,6 +16,17 @@ from app.mcps.base import MCPPlugin, McpConfigField
 from app.mcps.registry import get_all_mcps
 from app.providers.base import LLMProvider
 from app.providers.resilience import ProviderRetryMetadata, generate_with_retries
+from .execution import (
+    CancellationToken,
+    ExecutionEvent,
+    TaskIntent,
+    build_event_message,
+    classify_task_intent,
+    execution_event,
+    rank_tools_for_intent,
+)
+from .pipelines import PipelineSpec, get_pipeline_spec
+from .validators import validate_tool_result
 
 
 class ToolUsageEntry(TypedDict):
@@ -35,6 +46,7 @@ class OrchestrationResult(TypedDict):
     used_tokens: int | None
     used_mcp_tools: list[ToolUsageEntry]
     system_trace_messages: list[SystemTraceEntry]
+    execution_events: list[ExecutionEvent]
 
 
 class PlannerParseResult(TypedDict):
@@ -44,7 +56,7 @@ class PlannerParseResult(TypedDict):
     recovery_mode: str
 
 
-ToolStepCallback = Callable[[SystemTraceEntry], Awaitable[None]]
+ExecutionEventCallback = Callable[[ExecutionEvent], Awaitable[None]]
 
 
 _MAX_PLANNER_INTERACTIONS = 8
@@ -102,21 +114,57 @@ async def generate_with_tools(
     history: list[dict[str, str]],
     max_tool_recursion: int,
     tool_timeout_seconds: int,
-    on_tool_step: ToolStepCallback | None = None,
+    on_execution_event: ExecutionEventCallback | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> OrchestrationResult:
     system_trace_messages: list[SystemTraceEntry] = []
+    execution_events: list[ExecutionEvent] = []
     used_tools: list[ToolUsageEntry] = []
     token_values: list[int] = []
     started_at = monotonic()
+    cancel_token = cancellation_token or CancellationToken()
 
     async def trace(system_type: str, content: str) -> None:
         entry: SystemTraceEntry = {"system_type": system_type, "content": content}
         system_trace_messages.append(entry)
-        if on_tool_step is not None:
-            await on_tool_step(entry)
+
+    async def emit_event(payload: ExecutionEvent) -> None:
+        if cancel_token.is_cancelled and payload.get("event_type") != "task_cancelled":
+            return
+        execution_events.append(payload)
+        if on_execution_event is not None:
+            await on_execution_event(payload)
+
+    def check_cancelled() -> None:
+        cancel_token.raise_if_cancelled()
 
     await trace("runtime_system_prompt", system_prompt)
     enabled_tools = _collect_enabled_tools(settings)
+    task_intent = classify_task_intent(prompt, enabled_tools)
+    enabled_tools = rank_tools_for_intent(enabled_tools, task_intent)
+    pipeline = get_pipeline_spec(str(task_intent.get("pipeline_id", "")))
+    await emit_event(
+        execution_event(
+            "task_started",
+            message="Starting execution.",
+            stage="planning",
+        )
+    )
+    await emit_event(
+        execution_event(
+            "task_classified",
+            message=build_event_message(
+                "task_classified",
+                {
+                    "pipeline_id": pipeline["pipeline_id"],
+                },
+            ),
+            stage="planning",
+            pipeline_id=pipeline["pipeline_id"],
+            categories=list(task_intent.get("categories", [])),
+            detail=pipeline["summary"],
+        )
+    )
     scripts_catalog = await _collect_script_catalog(settings)
     logger.debug(
         "Starting orchestration: prompt_chars=%s enabled_tools=%s scripts=%s max_steps=%s timeout_seconds=%s",
@@ -141,6 +189,7 @@ async def generate_with_tools(
             reason: str,
             metadata: ProviderRetryMetadata,
         ) -> None:
+            check_cancelled()
             await trace(
                 "provider_retry",
                 json.dumps(
@@ -164,6 +213,7 @@ async def generate_with_tools(
             api_key=api_key,
             history=history,
             on_retry=on_retry,
+            cancellation_token=cancel_token,
         )
 
     if not enabled_tools:
@@ -181,6 +231,7 @@ async def generate_with_tools(
             "used_tokens": _sum_tokens(*token_values),
             "used_mcp_tools": [],
             "system_trace_messages": system_trace_messages,
+            "execution_events": execution_events,
         }
 
     interaction_log: list[dict[str, object]] = []
@@ -207,7 +258,18 @@ async def generate_with_tools(
     await trace("tool_planner_system", planner_system)
 
     for step_index in range(1, normalized_recursion + 1):
+        check_cancelled()
         await trace("tool_step_status", f"Step {step_index}/{normalized_recursion}")
+        await emit_event(
+            execution_event(
+                "step_started",
+                message=f"{pipeline['ordered_steps'][min(step_index - 1, len(pipeline['ordered_steps']) - 1)].capitalize()} via {pipeline['pipeline_id'].replace('_', ' ')}.",
+                stage=_event_stage_for_step_label(pipeline["ordered_steps"], step_index),
+                pipeline_id=pipeline["pipeline_id"],
+                categories=list(task_intent.get("categories", [])),
+                step_index=step_index,
+            )
+        )
 
         # Global wall-clock timeout: abort if we've been running too long.
         elapsed_seconds = monotonic() - started_at
@@ -256,6 +318,8 @@ async def generate_with_tools(
             step_index,
             normalized_recursion,
             current_local_time,
+            task_intent,
+            pipeline,
             failed_or_unused_tool_keys=failed_or_unused,
         )
         await trace("tool_planner_prompt", planner_prompt)
@@ -348,6 +412,7 @@ async def generate_with_tools(
                 "used_tokens": _sum_tokens(*token_values),
                 "used_mcp_tools": used_tools,
                 "system_trace_messages": system_trace_messages,
+                "execution_events": execution_events,
             }
 
         consecutive_invalid_planner_responses = 0
@@ -416,11 +481,20 @@ async def generate_with_tools(
                     len(used_tools),
                     monotonic() - started_at,
                 )
+                await emit_event(
+                    execution_event(
+                        "task_completed",
+                        message="Completed the task.",
+                        stage="finalizing",
+                        pipeline_id=pipeline["pipeline_id"],
+                    )
+                )
                 return {
                     "text": normalized_answer,
                     "used_tokens": _sum_tokens(*token_values),
                     "used_mcp_tools": used_tools,
                     "system_trace_messages": system_trace_messages,
+                    "execution_events": execution_events,
                 }
 
             break
@@ -449,11 +523,20 @@ async def generate_with_tools(
                 required_user_input,
                 monotonic() - started_at,
             )
+            await emit_event(
+                execution_event(
+                    "task_blocked",
+                    message=blocked_message,
+                    stage="blocked",
+                    pipeline_id=pipeline["pipeline_id"],
+                )
+            )
             return {
                 "text": blocked_message,
                 "used_tokens": _sum_tokens(*token_values),
                 "used_mcp_tools": used_tools,
                 "system_trace_messages": system_trace_messages,
+                "execution_events": execution_events,
             }
 
         if action != "call_tool":
@@ -730,6 +813,7 @@ async def generate_with_tools(
                 "used_tokens": _sum_tokens(*token_values),
                 "used_mcp_tools": used_tools,
                 "system_trace_messages": system_trace_messages,
+                "execution_events": execution_events,
             }
 
         mcp_tool_key = f"{mcp_id}.{tool_id}"
@@ -830,8 +914,31 @@ async def generate_with_tools(
             ),
         )
         await trace("tool_call", json.dumps(tool_call_payload, ensure_ascii=True))
+        await emit_event(
+            execution_event(
+                "tool_call_started",
+                message=build_event_message(
+                    "tool_call_started",
+                    {
+                        "mcp_id": mcp_id,
+                        "mcp_label": tool_usage["mcp_label"],
+                        "tool_id": tool_id,
+                        "tool_label": tool_usage["tool_label"],
+                    },
+                ),
+                stage=_stage_for_mcp_id(mcp_id),
+                pipeline_id=pipeline["pipeline_id"],
+                mcp_id=mcp_id,
+                mcp_label=tool_usage["mcp_label"],
+                tool_id=tool_id,
+                tool_label=tool_usage["tool_label"],
+                step_index=step_index,
+                call_id=tool_call_id,
+            )
+        )
 
         try:
+            check_cancelled()
             tool_result = await asyncio.wait_for(
                 plugin.call_tool(tool_id, tool_arguments, config.params),
                 timeout=timeout_seconds,
@@ -862,6 +969,18 @@ async def generate_with_tools(
                 "mcp_tool_attempt": timeout_mcp_tool_failures,
             }
             tool_call_failures_by_signature[tool_call_signature] = failure_attempts + 1
+            await emit_event(
+                execution_event(
+                    "fallback_started",
+                    message="Tool timed out; trying a fallback route if available.",
+                    stage="validating",
+                    pipeline_id=pipeline["pipeline_id"],
+                    mcp_id=mcp_id,
+                    tool_id=tool_id,
+                    step_index=step_index,
+                    call_id=tool_call_id,
+                )
+            )
             await trace("tool_call_failed", json.dumps(tool_error_payload, ensure_ascii=True))
             await trace("tool_error", json.dumps(tool_error_payload, ensure_ascii=True))
             interaction_log.append(
@@ -904,6 +1023,18 @@ async def generate_with_tools(
                 "mcp_tool_attempt": updated_mcp_tool_failures,
             }
             tool_call_failures_by_signature[tool_call_signature] = failure_attempts + 1
+            await emit_event(
+                execution_event(
+                    "fallback_started",
+                    message="Tool failed; trying a fallback route if available.",
+                    stage="validating",
+                    pipeline_id=pipeline["pipeline_id"],
+                    mcp_id=mcp_id,
+                    tool_id=tool_id,
+                    step_index=step_index,
+                    call_id=tool_call_id,
+                )
+            )
             await trace("tool_call_failed", json.dumps(tool_error_payload, ensure_ascii=True))
             await trace("tool_error", json.dumps(tool_error_payload, ensure_ascii=True))
             interaction_log.append(
@@ -934,6 +1065,12 @@ async def generate_with_tools(
 
         redacted_tool_result = _redact_sensitive_payload(tool_result)
         compact_tool_result = _compact_payload_for_prompt(redacted_tool_result)
+        validation = validate_tool_result(
+            mcp_id=mcp_id,
+            tool_id=tool_id,
+            result=tool_result,
+            intent=task_intent,
+        )
         await trace(
             "tool_call_completed",
             json.dumps(
@@ -947,6 +1084,50 @@ async def generate_with_tools(
             ),
         )
         await trace("tool_result", json.dumps(compact_tool_result, ensure_ascii=True))
+        if validation["passed"]:
+            await emit_event(
+                execution_event(
+                    "validation_passed",
+                    message=f"Validated the result from {tool_usage['mcp_label']}.",
+                    stage="validating",
+                    pipeline_id=pipeline["pipeline_id"],
+                    mcp_id=mcp_id,
+                    tool_id=tool_id,
+                    step_index=step_index,
+                    call_id=tool_call_id,
+                    reason=validation["validator"],
+                    detail=validation["detail"],
+                )
+            )
+        else:
+            await emit_event(
+                execution_event(
+                    "validation_failed",
+                    message="The result did not pass validation; trying a fallback path.",
+                    stage="validating",
+                    pipeline_id=pipeline["pipeline_id"],
+                    mcp_id=mcp_id,
+                    tool_id=tool_id,
+                    step_index=step_index,
+                    call_id=tool_call_id,
+                    reason=validation["validator"],
+                    detail=validation["detail"],
+                )
+            )
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_call": tool_call_payload,
+                    "tool_result": compact_tool_result,
+                    "planner_feedback": {
+                        "type": "validation_failed",
+                        "message": validation["detail"],
+                        "validator": validation["validator"],
+                        "fallback_policy": pipeline["fallback_policy"],
+                    },
+                }
+            )
+            continue
         interaction_log.append({
             "step": step_index,
             "tool_call": tool_call_payload,
@@ -969,12 +1150,21 @@ async def generate_with_tools(
         len(used_tools),
         monotonic() - started_at,
     )
+    await emit_event(
+        execution_event(
+            "task_completed",
+            message="Completed the task.",
+            stage="finalizing",
+            pipeline_id=pipeline["pipeline_id"],
+        )
+    )
 
     return {
         "text": final_response,
         "used_tokens": _sum_tokens(*token_values),
         "used_mcp_tools": used_tools,
         "system_trace_messages": system_trace_messages,
+        "execution_events": execution_events,
     }
 
 
@@ -983,6 +1173,34 @@ def _sum_tokens(*token_values: int | None) -> int | None:
     if not values:
         return None
     return sum(values)
+
+
+def _event_stage_for_step_label(step_labels: Sequence[str], step_index: int) -> str:
+    if not step_labels:
+        return "working"
+    label = str(step_labels[min(max(step_index - 1, 0), len(step_labels) - 1)]).strip().lower()
+    if label.startswith("fetch") or label.startswith("resolve"):
+        return "fetching"
+    if label.startswith("modify") or label.startswith("apply") or label.startswith("publish"):
+        return "updating"
+    if label.startswith("validate") or label.startswith("confirm") or label.startswith("verify"):
+        return "validating"
+    if label.startswith("final"):
+        return "finalizing"
+    if label.startswith("inspect") or label.startswith("route"):
+        return "planning"
+    return "working"
+
+
+def _stage_for_mcp_id(mcp_id: str) -> str:
+    normalized = str(mcp_id or "").strip().lower()
+    if normalized in {"google_services", "brave_search", "browser_control", "youtube_summarizer"}:
+        return "fetching"
+    if normalized in {"git_ops", "local_files", "opencode", "scripts", "ssh_control"}:
+        return "updating"
+    if normalized in {"home_assistant", "whatsapp", "memory_access", "timed_jobs"}:
+        return "applying"
+    return "working"
 
 
 def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
@@ -1064,6 +1282,8 @@ def _build_recursive_planner_prompt(
     step_index: int,
     max_steps: int,
     current_local_time: str,
+    task_intent: TaskIntent,
+    pipeline: PipelineSpec,
     failed_or_unused_tool_keys: set[str] | None = None,
 ) -> str:
     if step_index <= 1:
@@ -1120,6 +1340,11 @@ def _build_recursive_planner_prompt(
         "Do not claim you cannot access browsing/tools/devices when relevant tools are listed.\n"
         "Only ask the user for help if truly blocked by missing user-only input, explicit approval, or an external challenge that tools cannot resolve.\n"
         "If information can be fetched via enabled tools, fetch it yourself and continue.\n"
+        f"Task categories: {json.dumps(task_intent.get('categories', []), ensure_ascii=True)}\n"
+        f"Preferred pipeline: {json.dumps(pipeline, ensure_ascii=True)}\n"
+        f"Completion criteria: {json.dumps(task_intent.get('completion_criteria', []), ensure_ascii=True)}\n"
+        f"Validation focus: {json.dumps(task_intent.get('validation_focus', []), ensure_ascii=True)}\n"
+        f"Preferred MCP order: {json.dumps(task_intent.get('preferred_mcp_ids', []), ensure_ascii=True)}\n"
         "\n"
         "=== TOOL USAGE RULES ===\n"
         "Before calling a tool, you MUST:\n"

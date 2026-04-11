@@ -33,9 +33,9 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Timed-job auth failures are de-noised: Krill sends one reconnect warning, suppresses repeated auth-expired spam, and advances the schedule instead of tight-loop retries
 - Gateway and Setup show a visible warning banner while timed-job auth-expiry suppression is active
 - Reconnecting the affected OAuth provider clears the timed-job auth warning immediately, without waiting for the next successful scheduled run
-- Let Krill orchestrate multi-step tool flows automatically (sequential recursive tool calls)
-- See live tool/system trace messages while execution runs
-- Stop running tool chains and clear queued work for the active chat
+- Let Krill orchestrate multi-step tool flows automatically with intent classification, reusable execution pipelines, validation gates, and fallback routing
+- See concise live execution progress before meaningful tool calls instead of raw low-level trace spam
+- Stop running tool chains from Gateway or Telegram with `/stop`, then return to a clean ready state
 - Create hidden `/debug` snapshots from Gateway or Telegram that capture the full live chat state, including system/tool traces, into a persisted hidden chat plus a downloadable JSON file
 - Attach one image in Gateway/Telegram messages for transient vision analysis (no image file persistence)
 - Track token usage per chat and per day
@@ -109,6 +109,13 @@ Gemini OAuth provider notes:
 ### 3) Tools (MCP layer)
 
 Tool integrations live in `app/mcps/` and are registered once in `app/mcps/registry.py`.
+
+Orchestration notes:
+
+- the orchestrator now classifies tasks into generic execution patterns before acting
+- tool routing prefers stronger/native integrations first and keeps lower-confidence routes as fallback options
+- important tool results pass lightweight validation gates before the workflow advances
+- Gateway SSE and Telegram share the same execution event model for progress visibility and cancellation-aware execution
 
 Current tools:
 

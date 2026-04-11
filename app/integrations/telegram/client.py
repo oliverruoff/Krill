@@ -35,6 +35,26 @@ def telegram_send_message(token: str, chat_id: int, text: str, parse_mode: str |
         return json.loads(response.read().decode("utf-8"))
 
 
+def telegram_edit_message(token: str, chat_id: int, message_id: int, text: str, parse_mode: str | None = None) -> dict[str, object]:
+    url = f"https://api.telegram.org/bot{parse.quote(token, safe=':')}/editMessageText"
+    payload_dict: dict[str, object] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    }
+    if parse_mode:
+        payload_dict["parse_mode"] = parse_mode
+    payload = json.dumps(payload_dict).encode("utf-8")
+    req = request.Request(
+        url=url,
+        data=payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def telegram_get_file_path(token: str, file_id: str) -> str:
     query = parse.urlencode({"file_id": file_id})
     url = f"https://api.telegram.org/bot{parse.quote(token, safe=':')}/getFile?{query}"

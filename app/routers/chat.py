@@ -29,6 +29,7 @@ from ..config import (
 )
 from ..debug_dumps import create_hidden_debug_chat, is_debug_command
 from ..integrations.chat_runtime import ensure_runtime_context_seed
+from ..tooling.execution import cancel_registered_executions
 from ..memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from ..providers import get_provider
 from ..providers.resilience import generate_with_retries
@@ -60,6 +61,7 @@ class ChatRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=1000)
     source_channel: str = "gateway"
     source_chat_id: str = ""
+    source_request_id: str = ""
 
 
 class ChatEnqueueRequest(BaseModel):
@@ -295,12 +297,16 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
             orchestration_holder: dict[str, object] = {}
 
             async def _emit_tool_step(step: object) -> None:
-                event_payload: dict[str, object]
-                if isinstance(step, dict):
-                    event_payload = {str(key): value for key, value in step.items()}
-                else:
-                    event_payload = {"system_type": "tool_step", "content": str(step)}
-                await queue.put(_sse("tool_step", event_payload))
+                if not isinstance(step, dict):
+                    return
+                event_type = str(step.get("event_type", "")).strip()
+                message = str(step.get("message", "")).strip()
+                if not event_type or not message:
+                    return
+                event_payload = {str(key): value for key, value in step.items()}
+                event_payload["content"] = message
+                event_payload["system_type"] = f"execution_{event_type}"
+                await queue.put(_sse("progress", event_payload))
 
             async def run_orchestration() -> None:
                 try:
@@ -316,7 +322,8 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
                         system_prompt=payload.system_prompt,
                         source_channel=payload.source_channel,
                         source_chat_id=payload.source_chat_id,
-                        on_tool_step=_emit_tool_step,
+                        source_request_id=payload.source_request_id,
+                        on_execution_event=_emit_tool_step,
                     )
                 except Exception as exc:
                     orchestration_holder["error"] = exc
@@ -351,6 +358,7 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
             used_tokens = orchestration.get("used_tokens")
             used_mcp_tools = orchestration.get("used_mcp_tools", [])
             system_trace_messages = orchestration.get("system_trace_messages", [])
+            execution_events = orchestration.get("execution_events", [])
 
             used_value = used_tokens if isinstance(used_tokens, int) else 0
             used_percent = round((used_value / token_limit) * 100, 2) if token_limit else 0
@@ -362,6 +370,7 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
                     "used_percent": used_percent,
                     "used_mcp_tools": used_mcp_tools,
                     "system_trace_messages": system_trace_messages,
+                    "execution_events": execution_events,
                 },
             )
 
@@ -599,6 +608,7 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
             source_channel="gateway",
             source_chat_id=chat_id,
             source_request_id=request_id,
+            on_execution_event=None,
         )
     except asyncio.CancelledError:
         user_cancelled = request_id in _gateway_chat_user_cancelled_request_ids
@@ -709,6 +719,11 @@ async def _stop_gateway_chat(chat_id: str) -> int:
     if active_request_id and active_request_id not in request_ids:
         request_ids.append(active_request_id)
     _gateway_chat_user_cancelled_request_ids.update(request_ids)
+    await cancel_registered_executions(
+        request_ids=request_ids,
+        conversation_key=f"gateway:{chat_id}",
+        reason="Execution interrupted by user.",
+    )
     return await _mark_gateway_requests_interrupted(chat_id, request_ids=request_ids, detail="Execution interrupted by user.")
 
 

@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import html
 from datetime import datetime, timezone
-from typing import Any, TypedDict, cast
+from typing import Any, Awaitable, Callable, TypedDict, cast
 from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
@@ -16,10 +16,12 @@ from app.providers.resilience import generate_with_retries
 from app.providers.vision import analyze_image
 from app.memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from app.shared_files import get_shared_file_entry
+from app.tooling.execution import ExecutionEvent, cancel_registered_executions
 from app.usage import add_daily_usage, get_today_token_usage
 
 from .client import (
     telegram_download_file_bytes,
+    telegram_edit_message,
     telegram_send_document,
     telegram_get_file_path,
     telegram_get_me,
@@ -49,6 +51,14 @@ class TelegramCommandResponse(TypedDict, total=False):
     document_mime_type: str
 
 
+class ActiveTelegramRun(TypedDict):
+    task: asyncio.Task[None]
+    source_chat_id: str
+    source_request_id: str
+    status_message_id: int
+    last_progress_text: str
+
+
 def _markdown_command_response(text: str) -> TelegramCommandResponse:
     return {
         "text": _escape_markdown_v2(text),
@@ -69,6 +79,7 @@ class TelegramBridgeWorker:
         self._last_token = ""
         self._telegram_chats: list[ChatSession] = []
         self._active_chat_id = ""
+        self._active_runs: dict[int, ActiveTelegramRun] = {}
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -213,7 +224,13 @@ class TelegramBridgeWorker:
 
         command, command_arg = _parse_command(prompt_text, bot_username)
         if command:
-            response_payload = await self._handle_command(command, command_arg, settings)
+            response_payload = await self._handle_command(
+                command,
+                command_arg,
+                settings,
+                token=token,
+                telegram_chat_id=chat_id,
+            )
             response_text = str(response_payload.get("text", "")).strip()
             response_parse_mode = str(response_payload.get("parse_mode", "MarkdownV2")).strip()
             if response_text:
@@ -242,50 +259,37 @@ class TelegramBridgeWorker:
                     pass
             return
 
-        response_text = await self._handle_user_message(settings, prompt_text, image=image_payload)
-        if response_text:
-            # Extract TTS audio URLs before sending text
-            tts_audio_files = _extract_tts_audio_files(response_text)
-            shared_file_tokens = _extract_shared_file_tokens(response_text)
-            clean_text = _strip_tts_audio_urls(response_text)
-            clean_text = _strip_shared_file_urls(clean_text)
-            if clean_text.strip():
-                for chunk in chunk_telegram_text(clean_text):
-                    # LLM responses: convert markdown to HTML
-                    html_chunk = markdown_to_html(chunk)
-                    await asyncio.to_thread(telegram_send_message, token, chat_id, html_chunk, "HTML")
-            for shared_token in shared_file_tokens:
-                try:
-                    shared_payload = await _read_shared_file_payload(shared_token)
-                    if shared_payload is None:
-                        continue
-                    payload_bytes = shared_payload.get("content_bytes")
-                    payload_filename = str(shared_payload.get("filename", "file.bin") or "file.bin")
-                    payload_mime = str(shared_payload.get("mime_type", "application/octet-stream") or "application/octet-stream")
-                    if not isinstance(payload_bytes, bytes):
-                        continue
-                    await asyncio.to_thread(
-                        telegram_send_document,
-                        token,
-                        chat_id,
-                        payload_bytes,
-                        payload_filename,
-                        None,
-                        None,
-                        payload_mime,
-                    )
-                except Exception:
-                    pass
-            # Send any TTS audio files as Telegram audio messages
-            for audio_filename in tts_audio_files:
-                try:
-                    audio_bytes = _read_tts_audio_file(audio_filename)
-                    if audio_bytes:
-                        await asyncio.to_thread(
-                            telegram_send_audio, token, chat_id, audio_bytes, audio_filename,
-                        )
-                except Exception:
-                    pass
+        active_run = self._active_runs.get(chat_id)
+        if active_run is not None and not active_run["task"].done():
+            await asyncio.to_thread(
+                telegram_send_message,
+                token,
+                chat_id,
+                _escape_markdown_v2("Still working on the active task. Send /stop to interrupt it."),
+                "MarkdownV2",
+            )
+            return
+
+        active_chat = self._ensure_active_chat(prompt_text)
+        request_id = str(uuid4())
+        task = asyncio.create_task(
+            self._run_user_message(
+                token=token,
+                telegram_chat_id=chat_id,
+                settings=settings,
+                prompt_text=prompt_text,
+                image_payload=image_payload,
+                source_chat_id=active_chat.id,
+                source_request_id=request_id,
+            )
+        )
+        self._active_runs[chat_id] = {
+            "task": task,
+            "source_chat_id": active_chat.id,
+            "source_request_id": request_id,
+            "status_message_id": 0,
+            "last_progress_text": "",
+        }
 
     async def _extract_message_image(self, token: str, message: dict[str, Any]) -> dict[str, object] | None:
         photo = message.get("photo")
@@ -334,7 +338,165 @@ class TelegramBridgeWorker:
             "telegram_file_id": selected_file_id,
         }
 
-    async def _handle_command(self, command: str, argument: str, settings: Settings) -> TelegramCommandResponse:
+    def _ensure_active_chat(self, prompt: str) -> ChatSession:
+        active_chat = _get_active_chat(self._telegram_chats, self._active_chat_id)
+        if active_chat is None:
+            active_chat = _create_chat_entry(prompt)
+            self._telegram_chats.append(active_chat)
+            self._active_chat_id = active_chat.id
+        elif not active_chat.messages and active_chat.title.strip().lower() == "new chat":
+            active_chat.title = _derive_chat_title(prompt)
+        return active_chat
+
+    async def _stop_active_run(self, *, token: str, telegram_chat_id: int) -> bool:
+        active_run = self._active_runs.get(telegram_chat_id)
+        if active_run is None:
+            return False
+        await cancel_registered_executions(
+            request_ids=[active_run["source_request_id"]],
+            conversation_key=f"telegram:{active_run['source_chat_id']}",
+            reason="Execution interrupted by user.",
+        )
+        status_message_id = int(active_run.get("status_message_id", 0) or 0)
+        if status_message_id > 0:
+            try:
+                await asyncio.to_thread(
+                    telegram_edit_message,
+                    token,
+                    telegram_chat_id,
+                    status_message_id,
+                    "Stopped. Ready for the next task.",
+                    None,
+                )
+            except Exception:
+                pass
+        task = active_run.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+        self._active_runs.pop(telegram_chat_id, None)
+        return True
+
+    async def _update_progress_message(self, *, token: str, telegram_chat_id: int, event: ExecutionEvent) -> None:
+        active_run = self._active_runs.get(telegram_chat_id)
+        if active_run is None:
+            return
+        message = str(event.get("message", "")).strip()
+        if not message or message == active_run.get("last_progress_text", ""):
+            return
+        status_message_id = int(active_run.get("status_message_id", 0) or 0)
+        try:
+            if status_message_id <= 0:
+                response = await asyncio.to_thread(telegram_send_message, token, telegram_chat_id, message, None)
+                result = response.get("result") if isinstance(response, dict) else None
+                message_id = result.get("message_id") if isinstance(result, dict) else None
+                active_run["status_message_id"] = int(message_id) if isinstance(message_id, int) else 0
+            else:
+                await asyncio.to_thread(
+                    telegram_edit_message,
+                    token,
+                    telegram_chat_id,
+                    status_message_id,
+                    message,
+                    None,
+                )
+            active_run["last_progress_text"] = message
+        except Exception:
+            pass
+
+    async def _run_user_message(
+        self,
+        *,
+        token: str,
+        telegram_chat_id: int,
+        settings: Settings,
+        prompt_text: str,
+        image_payload: dict[str, object] | None,
+        source_chat_id: str,
+        source_request_id: str,
+    ) -> None:
+        try:
+            response_text = await self._handle_user_message(
+                settings,
+                prompt_text,
+                image=image_payload,
+                source_chat_id=source_chat_id,
+                source_request_id=source_request_id,
+                on_execution_event=lambda event: self._update_progress_message(
+                    token=token,
+                    telegram_chat_id=telegram_chat_id,
+                    event=event,
+                ),
+            )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            response_text = f"Hard error: {exc}"
+
+        if response_text:
+            tts_audio_files = _extract_tts_audio_files(response_text)
+            shared_file_tokens = _extract_shared_file_tokens(response_text)
+            clean_text = _strip_tts_audio_urls(response_text)
+            clean_text = _strip_shared_file_urls(clean_text)
+            if clean_text.strip():
+                for chunk in chunk_telegram_text(clean_text):
+                    html_chunk = markdown_to_html(chunk)
+                    await asyncio.to_thread(telegram_send_message, token, telegram_chat_id, html_chunk, "HTML")
+            for shared_token in shared_file_tokens:
+                try:
+                    shared_payload = await _read_shared_file_payload(shared_token)
+                    if shared_payload is None:
+                        continue
+                    payload_bytes = shared_payload.get("content_bytes")
+                    payload_filename = str(shared_payload.get("filename", "file.bin") or "file.bin")
+                    payload_mime = str(shared_payload.get("mime_type", "application/octet-stream") or "application/octet-stream")
+                    if not isinstance(payload_bytes, bytes):
+                        continue
+                    await asyncio.to_thread(
+                        telegram_send_document,
+                        token,
+                        telegram_chat_id,
+                        payload_bytes,
+                        payload_filename,
+                        None,
+                        None,
+                        payload_mime,
+                    )
+                except Exception:
+                    pass
+            for audio_filename in tts_audio_files:
+                try:
+                    audio_bytes = _read_tts_audio_file(audio_filename)
+                    if audio_bytes:
+                        await asyncio.to_thread(telegram_send_audio, token, telegram_chat_id, audio_bytes, audio_filename)
+                except Exception:
+                    pass
+
+        active_run = self._active_runs.get(telegram_chat_id)
+        if active_run is not None and active_run.get("source_request_id") == source_request_id:
+            status_message_id = int(active_run.get("status_message_id", 0) or 0)
+            if status_message_id > 0:
+                try:
+                    await asyncio.to_thread(
+                        telegram_edit_message,
+                        token,
+                        telegram_chat_id,
+                        status_message_id,
+                        "Done.",
+                        None,
+                    )
+                except Exception:
+                    pass
+            self._active_runs.pop(telegram_chat_id, None)
+
+    async def _handle_command(
+        self,
+        command: str,
+        argument: str,
+        settings: Settings,
+        *,
+        token: str,
+        telegram_chat_id: int,
+    ) -> TelegramCommandResponse:
         if command == "new":
             chat = _create_chat_entry("New chat")
             self._telegram_chats.append(chat)
@@ -371,6 +533,7 @@ class TelegramBridgeWorker:
         if command == "help":
             return _markdown_command_response(
                 "Available commands:\n"
+                "/stop - Cancel the active task\n"
                 "/new - Create and switch to a new chat\n"
                 "/chats - List recent Telegram chats\n"
                 "/use <number> - Switch active Telegram chat\n"
@@ -381,6 +544,12 @@ class TelegramBridgeWorker:
                 "/compaction - Compact active chat and start fresh\n"
                 "/help - Show this help"
             )
+
+        if command == "stop":
+            stopped = await self._stop_active_run(token=token, telegram_chat_id=telegram_chat_id)
+            if stopped:
+                return _markdown_command_response("Stopped. Ready for the next task.")
+            return _markdown_command_response("Nothing is currently running. Ready for the next task.")
 
         if command == "debug":
             active = _get_active_chat(self._telegram_chats, self._active_chat_id)
@@ -473,18 +642,24 @@ class TelegramBridgeWorker:
 
         return _markdown_command_response("Unknown command. Use /help for available commands.")
 
-    async def _handle_user_message(self, settings: Settings, text: str, *, image: dict[str, object] | None = None) -> str:
+    async def _handle_user_message(
+        self,
+        settings: Settings,
+        text: str,
+        *,
+        image: dict[str, object] | None = None,
+        source_chat_id: str = "",
+        source_request_id: str = "",
+        on_execution_event: Callable[[ExecutionEvent], Awaitable[None]] | None = None,
+    ) -> str:
         prompt = text.strip()
         if not prompt and image is None:
             return ""
 
-        active_chat = _get_active_chat(self._telegram_chats, self._active_chat_id)
+        active_chat = next((chat for chat in self._telegram_chats if chat.id == source_chat_id), None)
         if active_chat is None:
-            active_chat = _create_chat_entry(prompt)
-            self._telegram_chats.append(active_chat)
-            self._active_chat_id = active_chat.id
-        elif not active_chat.messages and active_chat.title.strip().lower() == "new chat":
-            active_chat.title = _derive_chat_title(prompt)
+            active_chat = self._ensure_active_chat(prompt)
+            source_chat_id = active_chat.id
 
         user_timestamp = _timestamp()
         user_content = prompt
@@ -547,6 +722,8 @@ class TelegramBridgeWorker:
                 memory_block=active_chat.memory_block,
                 source_channel="telegram",
                 source_chat_id=active_chat.id,
+                source_request_id=source_request_id,
+                on_execution_event=on_execution_event,
             )
             text_response = engine_result["text"]
             used_tokens = engine_result["used_tokens"]

@@ -113,16 +113,38 @@ function processSseBlock(block, context) {
       context.systemTrace = merged;
     }
 
+    const executionTrace = Array.isArray(payload.execution_events)
+      ? payload.execution_events
+          .filter((entry) => entry && typeof entry === "object")
+          .map((entry) => ({
+            system_type: typeof entry.event_type === "string" ? `execution_${entry.event_type}` : "execution_progress",
+            content: typeof entry.message === "string" ? entry.message : "",
+          }))
+          .filter((entry) => entry.content)
+      : [];
+    if (executionTrace.length > 0) {
+      const merged = [...context.systemTrace];
+      executionTrace.forEach((entry) => {
+        const exists = merged.some((item) => item.system_type === entry.system_type && item.content === entry.content);
+        if (!exists) {
+          merged.push(entry);
+        }
+      });
+      context.systemTrace = merged;
+    }
+
     if (payload.token_limit && state.activeChatId === context.chatId) {
       _updateTokenCounter(state.usedTokens, payload.token_limit ?? state.modelTokenLimit);
     }
     return { done: false, hasError: false };
   }
 
-  if (eventName === "tool_step") {
+  if (eventName === "tool_step" || eventName === "progress") {
     const entry = {
       system_type: typeof payload.system_type === "string" ? payload.system_type : "tool_step",
-      content: typeof payload.content === "string" ? payload.content : "",
+      content: typeof payload.content === "string"
+        ? payload.content
+        : (typeof payload.message === "string" ? payload.message : ""),
     };
 
     if (entry.content) {
@@ -350,6 +372,7 @@ async function executeQueuedJob(chat, job, runtime) {
         system_prompt: job.snapshot.systemPrompt,
         source_channel: "gateway",
         source_chat_id: chat.id,
+        source_request_id: job.requestId,
       }),
     });
 
@@ -715,7 +738,7 @@ async function stopActiveChatExecution() {
     }
     const { syncRemoteChatState } = await import("./chat-sync.js");
     await syncRemoteChatState();
-    setStatus("Execution stopped. Queued messages were cleared.", true);
+    setStatus("Stopped. Ready for the next task.", true);
   } catch (error) {
     setStatus(normalizeErrorMessage(error, "Failed to stop chat execution."), true);
   }

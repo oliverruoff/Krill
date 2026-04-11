@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 from typing import Awaitable, Callable, TypedDict
 
 from .base import LLMProvider
+from app.tooling.execution import CancellationToken
 
 
 
@@ -37,10 +38,13 @@ async def generate_with_retries(
     history: list[dict[str, str]],
     on_retry: ProviderRetryCallback | None = None,
     max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    cancellation_token: CancellationToken | None = None,
 ) -> tuple[str, int | None]:
     """Calls provider.generate with retry/backoff on transient failures."""
     attempts = max(1, min(5, int(max_attempts)))
     for attempt in range(1, attempts + 1):
+        if cancellation_token is not None:
+            cancellation_token.raise_if_cancelled()
         try:
             return await provider.generate(
                 prompt=prompt,
@@ -63,7 +67,14 @@ async def generate_with_retries(
             }
             if on_retry is not None:
                 await on_retry(attempt, attempts, delay, _error_message(exc), metadata)
-            await asyncio.sleep(delay)
+            if cancellation_token is not None:
+                try:
+                    await asyncio.wait_for(cancellation_token.wait(), timeout=delay)
+                    cancellation_token.raise_if_cancelled()
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(delay)
 
     raise RuntimeError("Provider retry loop failed unexpectedly.")
 
