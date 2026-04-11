@@ -5,17 +5,19 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 from app.config import ChatMessage, ChatSession, DATA_DIR, Settings, save_settings
 from app.shared_files import create_shared_file_link
 from app.version import APP_VERSION
+
+logger = logging.getLogger(__name__)
 
 DEBUG_CHAT_PREFIX = "[HIDDEN] [DEBUG]"
 DEBUG_DUMPS_DIR = (DATA_DIR / "debug_dumps").resolve()
@@ -23,6 +25,13 @@ DEBUG_DUMP_TTL_SECONDS = 24 * 60 * 60
 _PUBLIC_BASE_URL_ENV = "KRILL_PUBLIC_BASE_URL"
 _PUBLIC_PORT_ENV = "KRILL_PUBLIC_PORT"
 _DEFAULT_PUBLIC_PORT = 8055
+
+# Maximum serialized size (bytes) before message list is truncated in the dump file.
+_DUMP_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+# Number of most-recent messages to keep when truncating.
+_DUMP_TRUNCATE_KEEP_MESSAGES = 50
+# Maximum number of debug dump files to retain on disk.
+_DUMP_MAX_FILES = 10
 
 
 def is_debug_command(text: str) -> bool:
@@ -144,6 +153,31 @@ def _message_to_dump_dict(message: ChatMessage) -> dict[str, object]:
     }
 
 
+def _prune_old_debug_dumps(keep_count: int = _DUMP_MAX_FILES) -> None:
+    """Delete oldest debug dump files, keeping only the *keep_count* most recent.
+
+    Runs synchronously so it can be dispatched via asyncio.to_thread.
+    Failures are logged but never propagated — pruning must not break the dump flow.
+    """
+    if not DEBUG_DUMPS_DIR.is_dir():
+        return
+    try:
+        dump_files = sorted(
+            DEBUG_DUMPS_DIR.glob("debug-*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        to_delete = dump_files[keep_count:]
+        for old_file in to_delete:
+            try:
+                old_file.unlink(missing_ok=True)
+                logger.info("debug_dump: pruned old dump file %s", old_file.name)
+            except Exception as exc:
+                logger.warning("debug_dump: could not delete %s: %s", old_file.name, exc)
+    except Exception as exc:
+        logger.warning("debug_dump: pruning failed: %s", exc)
+
+
 async def _write_debug_dump_file(
     payload: dict[str, object],
     *,
@@ -156,10 +190,39 @@ async def _write_debug_dump_file(
         f"{_sanitize_file_component(source_chat.title)}-{timestamp}.json"
     )
     file_path = DEBUG_DUMPS_DIR / file_name
+
+    # Apply size cap: if the full serialization exceeds _DUMP_MAX_BYTES, truncate
+    # the messages list and add a warning note so the file stays manageable.
     dump_text = json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True)
+    if len(dump_text.encode("utf-8")) > _DUMP_MAX_BYTES:
+        chat_section = payload.get("chat")
+        if isinstance(chat_section, dict):
+            all_messages = list(chat_section.get("messages") or [])
+            total_count = len(all_messages)
+            kept = all_messages[-_DUMP_TRUNCATE_KEEP_MESSAGES:]
+            truncated_count = total_count - len(kept)
+            chat_section = dict(chat_section)
+            chat_section["messages"] = kept
+            chat_section["truncation_note"] = (
+                f"Messages truncated: {truncated_count} oldest message(s) omitted "
+                f"because the dump exceeded {_DUMP_MAX_BYTES // (1024 * 1024)} MB. "
+                f"Kept last {len(kept)} of {total_count}."
+            )
+            payload = dict(payload)
+            payload["chat"] = chat_section
+            payload["truncated"] = True
+            dump_text = json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True)
+            logger.warning(
+                "debug_dump: payload exceeded size cap; truncated %d message(s) for %s",
+                truncated_count,
+                file_name,
+            )
 
     await asyncio.to_thread(DEBUG_DUMPS_DIR.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(file_path.write_text, dump_text, "utf-8")
+
+    # Prune old dump files to keep disk usage bounded.
+    await asyncio.to_thread(_prune_old_debug_dumps)
 
     shared = await create_shared_file_link(
         file_path,
@@ -172,31 +235,43 @@ async def _write_debug_dump_file(
         "download_url_absolute": build_absolute_debug_download_url(str(shared.get("download_url", ""))),
         "filename": file_name,
         "expires_at": str(shared.get("expires_at", "")),
+        "size_bytes": len(dump_text.encode("utf-8")),
+        "truncated": bool(payload.get("truncated", False)),
     }
 
 
 def _build_debug_chat_message(payload: dict[str, object], file_info: dict[str, object]) -> str:
     download_url = str(file_info.get("download_url", "")).strip()
+    download_url_absolute = str(file_info.get("download_url_absolute", "")).strip()
     file_path = str(file_info.get("path", "")).strip()
     generated_at = str(payload.get("generated_at", "")).strip()
     source_channel = str(payload.get("source_channel", "")).strip()
     chat_payload = payload.get("chat") if isinstance(payload.get("chat"), dict) else {}
     source_chat_id = str(chat_payload.get("id", "")).strip() if isinstance(chat_payload, dict) else ""
     source_title = str(chat_payload.get("title", "")).strip() if isinstance(chat_payload, dict) else ""
+    message_count = chat_payload.get("message_count", "") if isinstance(chat_payload, dict) else ""
+    _raw_size = file_info.get("size_bytes")
+    size_bytes = int(_raw_size) if isinstance(_raw_size, int | float) else 0
+    size_kb = round(size_bytes / 1024, 1) if size_bytes else None
+    truncated = bool(file_info.get("truncated", False))
 
     lines = [
-        "Debug dump created automatically via /debug.",
+        "Debug dump created via /debug.",
         f"Generated at: {generated_at}",
         f"Source channel: {source_channel}",
         f"Source chat id: {source_chat_id}",
         f"Source chat title: {source_title}",
-        f"Stored file: {file_path}",
+        f"Message count: {message_count}",
     ]
-    if download_url:
+    if truncated:
+        lines.append("Note: message list was truncated (dump exceeded size cap).")
+    if size_kb is not None:
+        lines.append(f"Dump file size: {size_kb} KB")
+    lines.append(f"Stored file: {file_path}")
+    if download_url_absolute:
+        lines.append(f"Download URL: {download_url_absolute}")
+    elif download_url:
         lines.append(f"Download URL: {download_url}")
-
-    dump_json = json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True)
-    lines.extend(["", "```json", dump_json, "```"])
     return "\n".join(lines)
 
 

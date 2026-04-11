@@ -530,7 +530,7 @@ if (normalMemoryList instanceof HTMLElement) {
 }
 
 chatInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
     if (!sendButton.disabled) {
       chatForm.requestSubmit();

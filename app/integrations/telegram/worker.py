@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import html
+import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, TypedDict, cast
 from uuid import uuid4
@@ -31,6 +32,8 @@ from .client import (
 )
 from .utils import chunk_telegram_text, markdown_to_html
 
+
+logger = logging.getLogger(__name__)
 
 TELEGRAM_POLL_TIMEOUT_SECONDS = 25
 TELEGRAM_DRAIN_BATCH_TIMEOUT_SECONDS = 0
@@ -237,26 +240,45 @@ class TelegramBridgeWorker:
                 await asyncio.to_thread(telegram_send_message, token, chat_id, response_text, response_parse_mode or None)
             document_token = str(response_payload.get("document_token", "")).strip()
             if document_token:
-                try:
-                    shared_payload = await _read_shared_file_payload(document_token)
-                    if shared_payload is not None:
-                        payload_bytes = shared_payload.get("content_bytes")
-                        payload_filename = str(response_payload.get("document_filename", "") or shared_payload.get("filename", "file.bin") or "file.bin")
-                        payload_mime = str(response_payload.get("document_mime_type", "") or shared_payload.get("mime_type", "application/octet-stream") or "application/octet-stream")
-                        payload_caption = str(response_payload.get("document_caption", "")).strip() or None
-                        if isinstance(payload_bytes, bytes):
-                            await asyncio.to_thread(
-                                telegram_send_document,
-                                token,
-                                chat_id,
-                                payload_bytes,
-                                payload_filename,
-                                payload_caption,
-                                None,
-                                payload_mime,
-                            )
-                except Exception:
-                    pass
+                # Check file size before loading bytes into memory.
+                # Files larger than 8 MB are not uploaded to Telegram to avoid
+                # memory spikes, upload timeouts, and worker freezes.
+                _TELEGRAM_UPLOAD_MAX_BYTES = 8 * 1024 * 1024
+                shared_entry = await get_shared_file_entry(document_token)
+                file_size_bytes = int(shared_entry.get("size_bytes") or 0) if isinstance(shared_entry, dict) else 0
+                if file_size_bytes > _TELEGRAM_UPLOAD_MAX_BYTES:
+                    size_mb = round(file_size_bytes / (1024 * 1024), 1)
+                    skip_msg = (
+                        f"Debug file is {size_mb} MB — too large to send via Telegram. "
+                        "Use the download link above to fetch it directly."
+                    )
+                    await asyncio.to_thread(telegram_send_message, token, chat_id, skip_msg, None)
+                else:
+                    try:
+                        shared_payload = await _read_shared_file_payload(document_token)
+                        if shared_payload is not None:
+                            payload_bytes = shared_payload.get("content_bytes")
+                            payload_filename = str(response_payload.get("document_filename", "") or shared_payload.get("filename", "file.bin") or "file.bin")
+                            payload_mime = str(response_payload.get("document_mime_type", "") or shared_payload.get("mime_type", "application/octet-stream") or "application/octet-stream")
+                            payload_caption = str(response_payload.get("document_caption", "")).strip() or None
+                            if isinstance(payload_bytes, bytes):
+                                await asyncio.to_thread(
+                                    telegram_send_document,
+                                    token,
+                                    chat_id,
+                                    payload_bytes,
+                                    payload_filename,
+                                    payload_caption,
+                                    None,
+                                    payload_mime,
+                                )
+                    except Exception as exc:
+                        logger.warning("telegram: failed to send debug document: %s", exc)
+                        err_msg = "Debug dump file could not be uploaded. Use the download link above to fetch it."
+                        try:
+                            await asyncio.to_thread(telegram_send_message, token, chat_id, err_msg, None)
+                        except Exception:
+                            pass
             return
 
         active_run = self._active_runs.get(chat_id)
