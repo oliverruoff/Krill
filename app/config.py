@@ -1288,18 +1288,15 @@ def _parse_time_of_day(raw_time: object) -> time:
 def _normalize_channels(raw_channels: object) -> list[str]:
     if not isinstance(raw_channels, list):
         return ["gateway"]
-    allowed = {"gateway", "telegram"}
     unique: list[str] = []
     for entry in raw_channels:
         channel_id = str(entry).strip().lower()
-        if channel_id not in allowed:
+        if not channel_id:
             continue
         if channel_id in unique:
             continue
         unique.append(channel_id)
-    if not unique:
-        return ["gateway"]
-    return unique
+    return unique if unique else ["gateway"]
 
 
 def _make_local_datetime(local_date: date, local_time: time, tz: tzinfo) -> datetime:
@@ -1399,9 +1396,18 @@ def _decode_channels_json(raw_value: object) -> list[str]:
 
 
 def _row_to_timed_job(row: sqlite3.Row) -> TimedJob:
-    timezone_name, tz = _server_timezone()
-    offset = tz.utcoffset(datetime.now(timezone.utc).astimezone(tz)) or timedelta(minutes=0)
-    timezone_offset_minutes = int(offset.total_seconds() // 60)
+    stored_tz_name = str(row["timezone"]).strip()
+    if stored_tz_name:
+        # Use the timezone that was persisted when the job was created/updated.
+        timezone_name = stored_tz_name
+        timezone_offset_minutes = max(-840, min(840, int(row["timezone_offset_minutes"] or 0)))
+    else:
+        # Legacy row created before the timezone columns were populated — fall back to the
+        # current server timezone so the job still has a valid timezone value.
+        _tz_name, _tz = _server_timezone()
+        _offset = _tz.utcoffset(datetime.now(timezone.utc).astimezone(_tz)) or timedelta(minutes=0)
+        timezone_name = _tz_name
+        timezone_offset_minutes = max(-840, min(840, int(_offset.total_seconds() // 60)))
     return TimedJob(
         id=str(row["id"]),
         title=str(row["title"]),
@@ -1410,7 +1416,7 @@ def _row_to_timed_job(row: sqlite3.Row) -> TimedJob:
         start_date=str(row["start_date"]),
         time_of_day=str(row["time_of_day"]),
         timezone=timezone_name,
-        timezone_offset_minutes=max(-840, min(840, timezone_offset_minutes)),
+        timezone_offset_minutes=timezone_offset_minutes,
         enabled=bool(row["enabled"]),
         output_decision_enabled=bool(row["output_decision_enabled"]),
         channels=_decode_channels_json(row["channels_json"]),

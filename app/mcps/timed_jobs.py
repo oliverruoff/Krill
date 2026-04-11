@@ -97,7 +97,7 @@ class TimedJobsMCP(MCPPlugin):
             McpToolSpec(
                 id="timed_jobs_list",
                 label="Timed Jobs List",
-                description="Lists timed jobs with next execution details in server timezone.",
+                description="Lists all timed jobs (enabled and disabled) with their schedule and next execution details. Set enabled_only=true to return only enabled jobs.",
                 input_schema={
                     "type": "object",
                     "properties": {
