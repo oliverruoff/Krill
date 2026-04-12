@@ -7,6 +7,8 @@ import { setSpeechUiState } from "./speech.js";
 import { setSwitchersDisabled, setCompactButtonDisabled } from "./providers.js";
 import { setHistoryControlsDisabled } from "./runtime-context.js";
 
+const EMPTY_CHAT_GREETING = "Hi ✌️";
+
 function addMessage(role, text = "", timestamp = "", status = "") {
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message ${role}`;
@@ -108,6 +110,14 @@ function renderEmptyChatView() {
   chatThread.appendChild(emptyNode);
 }
 
+function hasVisibleConversation(chat) {
+  if (!chat || !Array.isArray(chat.messages)) {
+    return false;
+  }
+
+  return chat.messages.some((turn) => turn && (turn.role === "user" || turn.role === "assistant"));
+}
+
 async function renderActiveChat() {
   const { updateCurrentChatTitle, updateSystemTraceToggleLabel, getActiveChat } = await import("./chat-history.js");
   updateCurrentChatTitle();
@@ -119,6 +129,9 @@ async function renderActiveChat() {
   }
 
   chatThread.innerHTML = "";
+  if (!hasVisibleConversation(activeChat)) {
+    addMessage("assistant", EMPTY_CHAT_GREETING);
+  }
   activeChat.messages.forEach((turn) => {
     if (turn?.role !== "user" && turn?.role !== "assistant" && turn?.role !== "system") {
       return;

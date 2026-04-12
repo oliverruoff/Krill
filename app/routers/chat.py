@@ -122,6 +122,15 @@ _gateway_chat_client_enqueue_ids: dict[str, dict[str, tuple[str, float]]] = {}
 _GATEWAY_CHAT_CLIENT_ENQUEUE_TTL_SECONDS = 600.0
 
 
+def _derive_chat_title(first_message: str, max_len: int = 24) -> str:
+    normalized = " ".join(str(first_message or "").split()).strip()
+    if not normalized:
+        return "New chat"
+    if len(normalized) <= max_len:
+        return normalized
+    return f"{normalized[:max_len].rstrip()}..."
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -185,6 +194,10 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
             user_content = f"{user_content}\n\n[Image attached]"
         else:
             user_content = "[Image attached]"
+
+    existing_user_messages = [message for message in target_chat.messages if message.role == "user" and message.content.strip()]
+    if not existing_user_messages and target_chat.title.strip().lower() == "new chat":
+        target_chat.title = _derive_chat_title(user_content)
 
     client_enqueue_id = payload.client_enqueue_id.strip()
     if client_enqueue_id:
@@ -489,12 +502,15 @@ async def _generate_and_save_chat_title(
     """Ask the LLM for a short chat title and persist it. Fire-and-forget background task."""
     try:
         provider = get_provider(provider_id)
+        if provider is None:
+            return
         prompt = (
             "Write a short 3-5 word title for a chat that starts with this message. "
             "Reply with only the title, no quotes, no punctuation at the end:\n\n"
             f"{first_user_message[:300]}"
         )
-        text, _ = await provider.generate(
+        text, _ = await generate_with_retries(
+            provider=provider,
             prompt=prompt,
             system_prompt="",
             model=model,
