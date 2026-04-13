@@ -77,11 +77,11 @@ _EXECUTIONS_BY_REQUEST_ID: dict[str, RegisteredExecution] = {}
 _EXECUTIONS_BY_CONVERSATION: dict[str, set[str]] = {}
 
 _CATEGORY_TOOL_PREFERENCES: dict[str, list[str]] = {
-    "repo_modification": ["opencode", "git_ops", "local_files", "browser_control", "ssh_control"],
-    "external_file_retrieval": ["google_services", "local_files", "browser_control", "brave_search"],
+    "repo_modification": ["opencode", "git_ops", "shell_access", "browser_control"],
+    "external_file_retrieval": ["google_services", "shell_access", "browser_control", "brave_search"],
     "browser_interaction": ["browser_control", "google_services", "brave_search"],
     "structured_data_fetch": ["google_services", "home_assistant", "brave_search", "browser_control"],
-    "home_automation_change": ["home_assistant", "ssh_control", "browser_control"],
+    "home_automation_change": ["home_assistant", "shell_access", "browser_control"],
     "communication_task": ["google_services", "whatsapp", "browser_control"],
     "memory_task": ["memory_access"],
 }

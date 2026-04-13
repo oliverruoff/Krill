@@ -1196,7 +1196,7 @@ def _stage_for_mcp_id(mcp_id: str) -> str:
     normalized = str(mcp_id or "").strip().lower()
     if normalized in {"google_services", "brave_search", "browser_control", "youtube_summarizer"}:
         return "fetching"
-    if normalized in {"git_ops", "local_files", "opencode", "scripts", "ssh_control"}:
+    if normalized in {"git_ops", "shell_access", "opencode", "scripts"}:
         return "updating"
     if normalized in {"home_assistant", "whatsapp", "memory_access", "timed_jobs"}:
         return "applying"

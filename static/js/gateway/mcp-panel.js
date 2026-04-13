@@ -591,7 +591,7 @@ function renderConfigPanel(container, items, getConfig, options) {
       actions.appendChild(verifyButton);
       cardBody.appendChild(actions);
     } else if (options.kind === "mcp") {
-      if (item.id === "local_files") {
+      if (item.id === "shell_access") {
         card.appendChild(cardBody);
         container.appendChild(card);
         return;

@@ -67,9 +67,6 @@ function normalizeToolUsage(toolUsage) {
 
 function getFrontendMcpLabel(mcpId, fallbackLabel = "") {
   const normalizedId = typeof mcpId === "string" ? mcpId : "";
-  if (normalizedId === "local_files") {
-    return "Local Ops";
-  }
   if (typeof fallbackLabel === "string" && fallbackLabel.trim()) {
     return fallbackLabel;
   }

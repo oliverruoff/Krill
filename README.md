@@ -124,13 +124,12 @@ Current tools:
 - `git_ops`
 - `home_assistant` (token-based Home Assistant access; defaults base URL to `http://homeassistant.local:8123`)
 - `google_services` (disabled by default, OAuth login, read-only/read-write modes for Gmail, Calendar, and Drive)
-- `local_files` (enabled by default, includes `share_file` for temporary signed download links)
-  - set Local Files `Public Base URL` to your reachable host:port (for example `http://192.168.1.126:8055`) so absolute links use the correct endpoint
+- `shell_access` (enabled by default, generic shell command execution — ssh, grep, sed, python, scripts, scp, curl, etc. — plus `share_file` for temporary signed download links)
+  - set Shell Access `Public Base URL` to your reachable host:port (for example `http://192.168.1.126:8055`) so absolute links use the correct endpoint
   - Telegram `/debug` links auto-use `KRILL_PUBLIC_BASE_URL` when set; otherwise Krill falls back to a detected LAN IP with optional `KRILL_PUBLIC_PORT` override (default `8055`)
 - `memory_access` (enabled by default)
 - `opencode` (disabled by default, delegates coding work to `npx opencode run`)
 - `scripts` (disabled by default, creates DB-backed Python scripts with metadata comments in `data/scripts`)
-- `ssh_control` (disabled by default, chat-driven SSH connect/execute/session management)
 - `timed_jobs` (manage timed jobs via tools: list/get/create/update/delete/trigger)
 - `youtube_summarizer` (enabled by default, fetches YouTube transcripts and summarizes videos)
 
@@ -508,7 +507,7 @@ The script builds the image, starts fresh containers, configures setup with Gemi
 - `POST /api/braindump/import` -> full state import
 - `GET /api/braindump/download` -> download full state
 - `GET /api/braindump/view` -> inspect SQLite tables/columns/rows
-- `GET /api/files/shared/{token}` -> public temporary signed download for files shared via `local_files.share_file`
+- `GET /api/files/shared/{token}` -> public temporary signed download for files shared via `shell_access.share_file`
 - `POST /api/memory/user-message` -> increment global user message counter and trigger extraction checks
 - `POST /api/memory/turn-complete` -> register completed user+assistant turn for extraction context
 - `GET /api/memory/short-term` -> list pending short-term memory suggestions
