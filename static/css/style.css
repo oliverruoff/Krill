@@ -2705,6 +2705,85 @@ button:disabled {
   color: #8a99ad;
 }
 
+.gateway-boot-loading .gateway-shell {
+  pointer-events: none;
+  user-select: none;
+}
+
+.gateway-boot-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--accent) 12%, transparent 88%), transparent 52%),
+    color-mix(in srgb, var(--surface) 76%, rgba(255, 255, 255, 0.82) 24%);
+  backdrop-filter: blur(12px);
+}
+
+.gateway-boot-card {
+  width: min(25rem, 100%);
+  padding: 1.5rem 1.4rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border) 80%);
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--surface) 90%, #ffffff 10%);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.16);
+  text-align: center;
+}
+
+.gateway-boot-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+}
+
+.gateway-boot-spinner span {
+  width: 0.72rem;
+  height: 0.72rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 78%, #ffffff 22%);
+  opacity: 0.32;
+  animation: typing-dot-pulse 1s ease-in-out infinite;
+}
+
+.gateway-boot-spinner span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.gateway-boot-spinner span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.gateway-boot-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.gateway-boot-detail {
+  margin: 0.55rem 0 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.gateway-boot-overlay.is-error .gateway-boot-card {
+  border-color: color-mix(in srgb, #d84d4d 30%, var(--border) 70%);
+}
+
+.gateway-boot-overlay.is-error .gateway-boot-spinner span {
+  background: color-mix(in srgb, #d84d4d 75%, #ffffff 25%);
+}
+
+.gateway-boot-overlay #gateway-boot-retry {
+  margin-top: 1rem;
+}
+
 .chat-bubble.is-loading {
   display: flex;
   align-items: center;

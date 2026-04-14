@@ -7,6 +7,10 @@ import {
   assistantTitleNode,
   mobileAssistantNameNode,
   assistantMetaNode,
+  gatewayBootOverlay,
+  gatewayBootTitleNode,
+  gatewayBootDetailNode,
+  gatewayBootRetryButton,
 } from "./dom.js";
 import { setStatus, syncChatInputHeight } from "./utils.js";
 import { applyThemeMode } from "./theme.js";
@@ -43,7 +47,42 @@ import { renderPendingImageAttachment } from "./image-upload.js";
 import { syncMobileDrawerUi } from "./mobile-drawer.js";
 import { showToast } from "./toast.js";
 
+function setBootLoading(loading, options = {}) {
+  const title = typeof options.title === "string" && options.title.trim()
+    ? options.title.trim()
+    : (loading ? "Loading Gateway" : "Gateway ready");
+  const detail = typeof options.detail === "string"
+    ? options.detail.trim()
+    : (loading ? "Preparing chats, tools, and integrations..." : "");
+  const error = typeof options.error === "string" ? options.error.trim() : "";
+  const showRetry = Boolean(options.showRetry);
+
+  state.bootLoading = Boolean(loading);
+  state.bootError = error;
+  document.body.classList.toggle("gateway-boot-loading", state.bootLoading);
+
+  if (!(gatewayBootOverlay instanceof HTMLElement)) {
+    return;
+  }
+
+  gatewayBootOverlay.classList.toggle("hidden", !state.bootLoading && !error);
+  gatewayBootOverlay.classList.toggle("is-error", Boolean(error));
+  gatewayBootOverlay.setAttribute("aria-hidden", (!state.bootLoading && !error).toString());
+
+  if (gatewayBootTitleNode instanceof HTMLElement) {
+    gatewayBootTitleNode.textContent = error ? "Gateway failed to load" : title;
+  }
+  if (gatewayBootDetailNode instanceof HTMLElement) {
+    gatewayBootDetailNode.textContent = error || detail || "";
+  }
+  if (gatewayBootRetryButton instanceof HTMLButtonElement) {
+    gatewayBootRetryButton.classList.toggle("hidden", !showRetry);
+    gatewayBootRetryButton.disabled = state.bootLoading;
+  }
+}
+
 async function loadGatewayMeta() {
+  setBootLoading(true, { detail: "Preparing chats, tools, and integrations..." });
   try {
     const { loadAppVersion } = await import("./header.js");
     loadAppVersion();
@@ -156,9 +195,13 @@ async function loadGatewayMeta() {
     const { syncTimedJobAuthAlertStatus } = await import("./chat-sync.js");
     syncTimedJobAuthAlertStatus();
     const { updateComposerState } = await import("./chat-render.js");
+    state.bootLoading = false;
+    state.bootError = "";
     updateComposerState();
+    setBootLoading(false);
     setStatus("");
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Failed to load Gateway.";
     updateMetaIndicators();
     assistantTitleNode.textContent = "This is your personal assistant";
     if (mobileAssistantNameNode instanceof HTMLElement) {
@@ -189,8 +232,15 @@ async function loadGatewayMeta() {
     const { renderTimedJobAuthAlert } = await import("./chat-sync.js");
     renderTimedJobAuthAlert({ active: false });
     const { updateComposerState } = await import("./chat-render.js");
+    state.bootLoading = false;
+    state.bootError = errorMessage;
     updateComposerState();
-    setStatus(error.message, true);
+    setBootLoading(false, {
+      error: errorMessage,
+      detail: "Krill could not finish the initial startup.",
+      showRetry: true,
+    });
+    setStatus(errorMessage, true);
   }
 }
 
@@ -243,6 +293,7 @@ function initBoot() {
     }
   });
   window.addEventListener("load", () => {
+    setBootLoading(true, { detail: "Preparing chats, tools, and integrations..." });
     applyThemeMode(state.theme);
     initializeSpeechRecognition();
     syncChatInputHeight();
@@ -250,6 +301,14 @@ function initBoot() {
     syncMobileDrawerUi();
     loadGatewayMeta();
   });
+  if (gatewayBootRetryButton instanceof HTMLButtonElement) {
+    gatewayBootRetryButton.addEventListener("click", () => {
+      if (state.bootLoading) {
+        return;
+      }
+      void loadGatewayMeta();
+    });
+  }
 }
 
 export { loadGatewayMeta, initBoot };

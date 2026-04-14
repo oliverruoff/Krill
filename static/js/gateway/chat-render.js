@@ -199,15 +199,16 @@ async function renderActiveChat() {
 function updateComposerState() {
   const activeChatId = state.activeChatId;
   const isBusy = activeChatId ? isChatBusy(activeChatId) : false;
-  sendButton.disabled = false;
-  chatInput.disabled = false;
+  const bootLoading = Boolean(state.bootLoading);
+  sendButton.disabled = bootLoading;
+  chatInput.disabled = bootLoading;
   if (stopButton instanceof HTMLButtonElement) {
-    stopButton.disabled = !isBusy;
+    stopButton.disabled = bootLoading || !isBusy;
   }
   setSpeechUiState();
-  setSwitchersDisabled(state.isSwitching || state.isCompacting);
-  setCompactButtonDisabled(state.isSwitching || state.isCompacting || isBusy);
-  setHistoryControlsDisabled(state.isSwitching || state.isCompacting);
+  setSwitchersDisabled(bootLoading || state.isSwitching || state.isCompacting);
+  setCompactButtonDisabled(bootLoading || state.isSwitching || state.isCompacting || isBusy);
+  setHistoryControlsDisabled(bootLoading || state.isSwitching || state.isCompacting);
 }
 
 export {

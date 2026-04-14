@@ -43,6 +43,8 @@ export const state = {
   integrationConfigs: {},
   chats: [],
   activeChatId: "",
+  bootLoading: true,
+  bootError: "",
   chatRuntimes: {},
   isCompacting: false,
   isSwitching: false,

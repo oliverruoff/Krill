@@ -18,6 +18,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Chat with your configured LLM provider and keep persistent multi-chat history
 - Keep your current chat selection stable while other chats receive queued or completed messages
 - Gateway opens into a fresh `New chat` draft (or reuses an existing empty `New chat` draft) on page load, shows a static `Hi ✌️` assistant bubble in empty drafts, and auto-titles a chat from the first sent message before the model refines it
+- Gateway now blocks first interaction behind a startup loading overlay until chats, MCPs, integrations, and core metadata are fully hydrated, then reveals the usable UI in one step
 - Mobile Gateway keeps extra composer padding near the left/right screen edges and bottom inset so send/utility buttons do not sit flush against the display border
 - Queue messages with immediate composer clearing to reduce accidental duplicate sends
 - Switch provider/model from the gateway header while preserving chat context

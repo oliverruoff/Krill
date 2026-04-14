@@ -23,6 +23,16 @@
     <link rel="stylesheet" href="/static/css/style.css" />
   </head>
   <body class="gateway-page">
+    <div id="gateway-boot-overlay" class="gateway-boot-overlay" role="status" aria-live="polite" aria-label="Loading Gateway">
+      <div class="gateway-boot-card">
+        <div class="gateway-boot-spinner" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <p id="gateway-boot-title" class="gateway-boot-title">Loading Gateway</p>
+        <p id="gateway-boot-detail" class="gateway-boot-detail">Preparing chats, tools, and integrations...</p>
+        <button type="button" id="gateway-boot-retry" class="secondary hidden">Retry</button>
+      </div>
+    </div>
     <main class="gateway-shell">
       <div id="mobile-drawer-backdrop" class="mobile-drawer-backdrop hidden" aria-hidden="true"></div>
       <p id="timed-job-auth-alert" class="auth-alert-banner hidden" role="status" aria-live="polite"></p>
