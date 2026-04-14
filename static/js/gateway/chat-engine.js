@@ -340,6 +340,8 @@ async function executeQueuedJob(chat, job, runtime) {
     return;
   }
 
+  const { stopActiveRequestSync } = await import("./chat-sync.js");
+
   assistantMessage.status = "processing";
   const context = {
     chatId: chat.id,
@@ -473,6 +475,7 @@ async function executeQueuedJob(chat, job, runtime) {
       setStatus(`Response failed and save failed: ${persistError.message}`, true);
     }
   } finally {
+    await stopActiveRequestSync(chat.id, job.requestId);
     runtime.abortController = null;
   }
 }
@@ -673,9 +676,12 @@ async function sendMessage(event) {
       optimisticUserMessage.request_id = "";
     }
     setStatus("Queued.");
-    const { syncRemoteChatState } = await import("./chat-sync.js");
+    const { startActiveRequestSync, syncRemoteChatState } = await import("./chat-sync.js");
     void syncRemoteChatState();
+    void startActiveRequestSync(chat.id, serverRequestId || localRequestId);
   } catch (error) {
+    const { stopActiveRequestSync } = await import("./chat-sync.js");
+    await stopActiveRequestSync(chat.id);
     const filteredMessages = chat.messages.filter((entry) => entry?.request_id !== localRequestId);
     chat.messages = filteredMessages;
     chat.updated_at = createTimestamp();
@@ -736,7 +742,8 @@ async function stopActiveChatExecution() {
       const detail = await buildHttpErrorDetail(response, "Failed to stop chat execution.");
       throw new Error(detail);
     }
-    const { syncRemoteChatState } = await import("./chat-sync.js");
+    const { stopActiveRequestSync, syncRemoteChatState } = await import("./chat-sync.js");
+    await stopActiveRequestSync(activeChat.id);
     await syncRemoteChatState();
     setStatus("Stopped. Ready for the next task.", true);
   } catch (error) {

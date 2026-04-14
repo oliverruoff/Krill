@@ -35,7 +35,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Gateway and Setup show a visible warning banner while timed-job auth-expiry suppression is active
 - Reconnecting the affected OAuth provider clears the timed-job auth warning immediately, without waiting for the next successful scheduled run
 - Let Krill orchestrate multi-step tool flows automatically with intent classification, reusable execution pipelines, validation gates, and fallback routing
-- See concise live execution progress before meaningful tool calls instead of raw low-level trace spam, including small queued Gateway update messages during longer runs
+- See concise live execution progress before meaningful tool calls instead of raw low-level trace spam, including fast-updating Gateway tool-selection and execution messages during queued runs
 - Stop running tool chains from Gateway or Telegram with `/stop`, then return to a clean ready state
 - Create hidden `/debug` snapshots from Gateway or Telegram that capture the full live chat state, including system/tool traces, into a persisted hidden chat plus a downloadable JSON file
 - Attach one image in Gateway/Telegram messages for transient vision analysis (no image file persistence)

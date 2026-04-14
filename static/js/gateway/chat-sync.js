@@ -2,7 +2,7 @@
  * Chat state persistence, remote sync, and integration status polling.
  */
 
-import { state, CHAT_SYNC_INTERVAL_MS, INTEGRATION_STATUS_SYNC_INTERVAL_MS } from "./state.js";
+import { state, CHAT_SYNC_INTERVAL_MS, ACTIVE_REQUEST_SYNC_INTERVAL_MS, INTEGRATION_STATUS_SYNC_INTERVAL_MS } from "./state.js";
 import { timedJobAuthAlertNode } from "./dom.js";
 import { buildHttpErrorDetail, createTimestamp, setStatus, normalizeChatTitle } from "./utils.js";
 
@@ -402,6 +402,117 @@ export async function syncRemoteChatState() {
   } finally {
     state.chatSyncInFlight = false;
   }
+}
+
+function hasPendingRequest(chatId, requestId) {
+  if (!chatId || !requestId) {
+    return false;
+  }
+  const chat = state.chats.find((entry) => entry && entry.id === chatId);
+  if (!chat || !Array.isArray(chat.messages)) {
+    return false;
+  }
+  return chat.messages.some((message) => (
+    message
+    && message.role === "assistant"
+    && message.request_id === requestId
+    && (message.status === "queued" || message.status === "processing")
+  ));
+}
+
+export async function syncActiveRequestState(chatId, requestId) {
+  if (!chatId || !requestId || state.isCompacting || state.isSwitching || state.chatPersistInFlight) {
+    return;
+  }
+
+  const { getChatRuntime } = await import("./chat-runtime.js");
+  const runtime = getChatRuntime(chatId);
+  if (!runtime || runtime.liveSyncInFlight || runtime.liveSyncRequestId !== requestId) {
+    return;
+  }
+  if (!hasPendingRequest(chatId, requestId)) {
+    stopActiveRequestSync(chatId, requestId);
+    return;
+  }
+
+  const startedAtMutationVersion = state.chatStateMutationVersion;
+  runtime.liveSyncInFlight = true;
+  try {
+    const response = await fetch("/api/chat/state", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+
+    if (runtime.liveSyncRequestId !== requestId) {
+      return;
+    }
+    if (startedAtMutationVersion !== state.chatStateMutationVersion || state.chatPersistInFlight) {
+      return;
+    }
+
+    const signature = buildChatStateSignature(payload);
+    if (signature !== state.lastChatStateSignature) {
+      state.lastChatStateSignature = signature;
+      await applyRemoteChatState(payload);
+    }
+
+    if (!hasPendingRequest(chatId, requestId)) {
+      stopActiveRequestSync(chatId, requestId);
+    }
+  } catch (_error) {
+    // Keep active request sync best-effort and silent.
+  } finally {
+    runtime.liveSyncInFlight = false;
+  }
+}
+
+export async function startActiveRequestSync(chatId, requestId) {
+  if (!chatId || !requestId) {
+    return;
+  }
+  const { getChatRuntime } = await import("./chat-runtime.js");
+  const runtime = getChatRuntime(chatId);
+  if (!runtime) {
+    return;
+  }
+
+  if (runtime.liveSyncTimerId) {
+    window.clearInterval(runtime.liveSyncTimerId);
+    runtime.liveSyncTimerId = null;
+  }
+  runtime.liveSyncRequestId = requestId;
+  runtime.liveSyncInFlight = false;
+
+  await syncActiveRequestState(chatId, requestId);
+  if (runtime.liveSyncRequestId !== requestId || !hasPendingRequest(chatId, requestId)) {
+    stopActiveRequestSync(chatId, requestId);
+    return;
+  }
+
+  runtime.liveSyncTimerId = window.setInterval(() => {
+    void syncActiveRequestState(chatId, requestId);
+  }, ACTIVE_REQUEST_SYNC_INTERVAL_MS);
+}
+
+export async function stopActiveRequestSync(chatId, requestId = "") {
+  if (!chatId) {
+    return;
+  }
+  const { getChatRuntime } = await import("./chat-runtime.js");
+  const runtime = getChatRuntime(chatId);
+  if (!runtime) {
+    return;
+  }
+  if (requestId && runtime.liveSyncRequestId && runtime.liveSyncRequestId !== requestId) {
+    return;
+  }
+  if (runtime.liveSyncTimerId) {
+    window.clearInterval(runtime.liveSyncTimerId);
+    runtime.liveSyncTimerId = null;
+  }
+  runtime.liveSyncRequestId = "";
+  runtime.liveSyncInFlight = false;
 }
 
 export function startChatStateSync() {

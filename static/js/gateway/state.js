@@ -7,6 +7,7 @@ import { normalizeThemeMode } from "./theme.js";
 export const CHAT_TITLE_MAX_LENGTH = 24;
 export const EDITABLE_CHAT_TITLE_MAX_LENGTH = 24;
 export const CHAT_SYNC_INTERVAL_MS = 5000;
+export const ACTIVE_REQUEST_SYNC_INTERVAL_MS = 600;
 export const INTEGRATION_STATUS_SYNC_INTERVAL_MS = 8000;
 export const RUNTIME_CONTEXT_SYSTEM_TYPE = "runtime_context_seed";
 export const MEMORY_MAX_LENGTH = 1000000;

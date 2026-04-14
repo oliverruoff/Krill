@@ -16,6 +16,9 @@ export function getChatRuntime(chatId) {
       cancelledRequestIds: new Set(),
       activeRequestId: "",
       abortController: null,
+      liveSyncTimerId: null,
+      liveSyncRequestId: "",
+      liveSyncInFlight: false,
     };
   }
 
@@ -42,6 +45,12 @@ export function removeChatRuntime(chatId) {
   if (runtime.abortController instanceof AbortController) {
     runtime.abortController.abort();
   }
+  if (runtime.liveSyncTimerId) {
+    window.clearInterval(runtime.liveSyncTimerId);
+    runtime.liveSyncTimerId = null;
+  }
+  runtime.liveSyncRequestId = "";
+  runtime.liveSyncInFlight = false;
 }
 
 export function isChatBusy(chatId) {
