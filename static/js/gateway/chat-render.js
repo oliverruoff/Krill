@@ -9,7 +9,34 @@ import { setHistoryControlsDisabled } from "./runtime-context.js";
 
 const EMPTY_CHAT_GREETING = "Hi ✌️";
 
-function addMessage(role, text = "", timestamp = "", status = "") {
+function getMessageRoleLabel(role, systemType = "") {
+  if (role === "user") {
+    return "You";
+  }
+  if (role === "assistant") {
+    return state.botName || "Krill";
+  }
+  if (String(systemType || "").startsWith("execution_")) {
+    return "Update";
+  }
+  return "System";
+}
+
+function hasVisibleExecutionUpdate(chat, requestId = "") {
+  if (!chat || !Array.isArray(chat.messages) || !requestId) {
+    return false;
+  }
+  return chat.messages.some((message) => (
+    message
+    && message.role === "system"
+    && message.request_id === requestId
+    && String(message.system_type || "").startsWith("execution_")
+    && typeof message.content === "string"
+    && message.content.trim()
+  ));
+}
+
+function addMessage(role, text = "", timestamp = "", status = "", systemType = "") {
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message ${role}`;
   if (status) {
@@ -18,7 +45,7 @@ function addMessage(role, text = "", timestamp = "", status = "") {
 
   const title = document.createElement("p");
   title.className = "chat-role";
-  const roleLabel = role === "user" ? "You" : role === "system" ? "System" : state.botName || "Krill";
+  const roleLabel = getMessageRoleLabel(role, systemType);
   const timeStr = (timestamp && status !== "queued" && status !== "processing")
     ? ` - ${formatMessageTimestamp(timestamp)}`
     : "";
@@ -135,6 +162,15 @@ async function renderActiveChat() {
     }
 
     if (
+      turn.role === "assistant"
+      && (turn.status === "queued" || turn.status === "processing")
+      && !String(turn.content ?? "").trim()
+      && hasVisibleExecutionUpdate(activeChat, String(turn.request_id ?? ""))
+    ) {
+      return;
+    }
+
+    if (
       turn.role === "system"
       && activeChat.collapse_system_trace
       && turn.system_type !== "memory_compaction"
@@ -143,7 +179,13 @@ async function renderActiveChat() {
       return;
     }
 
-    const bubble = addMessage(turn.role, String(turn.content ?? ""), String(turn.timestamp ?? ""), String(turn.status ?? ""));
+    const bubble = addMessage(
+      turn.role,
+      String(turn.content ?? ""),
+      String(turn.timestamp ?? ""),
+      String(turn.status ?? ""),
+      String(turn.system_type ?? ""),
+    );
     if (turn.role === "assistant") {
       const wrapper = bubble.parentElement;
       if (wrapper instanceof HTMLElement) {
