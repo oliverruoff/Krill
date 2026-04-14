@@ -29,7 +29,7 @@ from ..config import (
 )
 from ..debug_dumps import create_hidden_debug_chat, is_debug_command
 from ..integrations.chat_runtime import ensure_runtime_context_seed
-from ..tooling.execution import cancel_registered_executions
+from ..tooling.execution import ExecutionEvent, cancel_registered_executions
 from ..memory_extraction import register_completed_turn, register_user_message_and_maybe_extract
 from ..providers import get_provider
 from ..providers.resilience import generate_with_retries
@@ -172,7 +172,8 @@ async def enqueue_chat(payload: ChatEnqueueRequest) -> dict[str, object]:
             settings=settings,
             triggered_by="gateway_enqueue_command",
         )
-        file_info = result["file_info"] if isinstance(result, dict) else {}
+        raw_file_info = result.get("file_info") if isinstance(result, dict) else None
+        file_info = raw_file_info if isinstance(raw_file_info, dict) else {}
         debug_chat = result["debug_chat"] if isinstance(result, dict) else None
         return {
             "ok": True,
@@ -270,7 +271,8 @@ async def debug_chat(payload: ChatDebugRequest) -> dict[str, object]:
         settings=settings,
         triggered_by="gateway_command",
     )
-    file_info = result["file_info"] if isinstance(result, dict) else {}
+    raw_file_info = result.get("file_info") if isinstance(result, dict) else None
+    file_info = raw_file_info if isinstance(raw_file_info, dict) else {}
     debug_chat = result["debug_chat"] if isinstance(result, dict) else None
     return {
         "ok": True,
@@ -624,7 +626,11 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
             source_channel="gateway",
             source_chat_id=chat_id,
             source_request_id=request_id,
-            on_execution_event=None,
+            on_execution_event=lambda event: _persist_gateway_execution_update(
+                chat_id=chat_id,
+                request_id=request_id,
+                event=event,
+            ),
         )
     except asyncio.CancelledError:
         user_cancelled = request_id in _gateway_chat_user_cancelled_request_ids
@@ -658,14 +664,12 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
             if not content:
                 continue
             system_type = str(entry.get("system_type", "")).strip() or "orchestrator"
-            chat.messages.append(
-                ChatMessage(
-                    role="system",
-                    content=content,
-                    timestamp=final_timestamp,
-                    system_type=system_type,
-                    request_id=request_id,
-                )
+            _append_gateway_system_message(
+                chat,
+                content=content,
+                timestamp=final_timestamp,
+                system_type=system_type,
+                request_id=request_id,
             )
 
     assistant.content = str(result.get("text", "")).strip() if isinstance(result, dict) else ""
@@ -819,6 +823,66 @@ def _find_assistant_message_by_request_id(chat: Any, request_id: str) -> Any:
         if message.role == "assistant" and message.request_id == request_id:
             return message
     return None
+
+
+def _append_gateway_system_message(
+    chat: Any,
+    *,
+    content: str,
+    timestamp: str,
+    system_type: str,
+    request_id: str,
+) -> bool:
+    normalized_content = content.strip()
+    normalized_system_type = system_type.strip() or "orchestrator"
+    normalized_request_id = request_id.strip()
+    if not normalized_content:
+        return False
+    duplicate = any(
+        message.role == "system"
+        and message.request_id == normalized_request_id
+        and message.system_type == normalized_system_type
+        and message.content == normalized_content
+        for message in chat.messages
+    )
+    if duplicate:
+        return False
+    chat.messages.append(
+        ChatMessage(
+            role="system",
+            content=normalized_content,
+            timestamp=timestamp,
+            system_type=normalized_system_type,
+            request_id=normalized_request_id,
+        )
+    )
+    return True
+
+
+async def _persist_gateway_execution_update(
+    *,
+    chat_id: str,
+    request_id: str,
+    event: ExecutionEvent,
+) -> None:
+    event_type = str(event.get("event_type", "")).strip()
+    message = str(event.get("message", "")).strip()
+    if not event_type or not message:
+        return
+    settings = await load_settings()
+    chat = _find_chat_by_id(settings, chat_id)
+    if chat is None:
+        return
+    appended = _append_gateway_system_message(
+        chat,
+        content=message,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        system_type=f"execution_{event_type}",
+        request_id=request_id,
+    )
+    if not appended:
+        return
+    await save_chat_state(settings.chats, settings.active_chat_id, settings.daily_token_usage, preserve_active_chat_id=True)
 
 
 def _build_gateway_history(messages: list[ChatMessage]) -> list[dict[str, str]]:

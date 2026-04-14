@@ -134,7 +134,12 @@ async function renderActiveChat() {
       return;
     }
 
-    if (turn.role === "system" && activeChat.collapse_system_trace && turn.system_type !== "memory_compaction") {
+    if (
+      turn.role === "system"
+      && activeChat.collapse_system_trace
+      && turn.system_type !== "memory_compaction"
+      && !String(turn.system_type || "").startsWith("execution_")
+    ) {
       return;
     }
 
