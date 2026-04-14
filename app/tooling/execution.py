@@ -220,11 +220,15 @@ def classify_task_intent(prompt: str, enabled_tools: list[dict[str, Any]]) -> Ta
 def rank_tools_for_intent(enabled_tools: list[dict[str, Any]], intent: TaskIntent) -> list[dict[str, Any]]:
     preferred_order = intent.get("preferred_mcp_ids", [])
     fallback_order = intent.get("fallback_mcp_ids", [])
+    categories = set(intent.get("categories", []))
     order_map = {mcp_id: index for index, mcp_id in enumerate(preferred_order + fallback_order, start=1)}
 
     def sort_key(entry: dict[str, Any]) -> tuple[int, str, str]:
         mcp_id = str(entry.get("mcp_id", ""))
-        return (order_map.get(mcp_id, 999), mcp_id, str(entry.get("tool_id", "")))
+        rank = order_map.get(mcp_id, 999)
+        if mcp_id == "shell_access" and not ({"repo_modification", "external_file_retrieval", "home_automation_change"} & categories):
+            rank += 100
+        return (rank, mcp_id, str(entry.get("tool_id", "")))
 
     return sorted(enabled_tools, key=sort_key)
 

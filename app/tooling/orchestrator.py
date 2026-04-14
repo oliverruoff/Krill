@@ -672,6 +672,7 @@ async def generate_with_tools(
             "tool_label": str(tool_entry["tool_label"]),
         }
 
+        original_tool_arguments = dict(tool_arguments)
         tool_call_payload = {
             "mcp_id": mcp_id,
             "tool_id": tool_id,
@@ -679,8 +680,14 @@ async def generate_with_tools(
             "step": step_index,
         }
 
+        input_schema = cast(dict[str, object], tool_entry.get("input_schema", {}))
         reminder_text = await _get_mcp_tool_call_reminder(plugin, tool_id, config.params, arguments=tool_arguments)
-        if reminder_text:
+        if reminder_text and _should_apply_tool_call_reminder(
+            mcp_id=mcp_id,
+            tool_id=tool_id,
+            input_schema=input_schema,
+            arguments=tool_arguments,
+        ):
             logger.debug("Applying tool call reminder for mcp=%s tool=%s at step=%s", mcp_id, tool_id, step_index)
             await trace("mcp_tool_call_reminder", reminder_text)
             tool_arguments, reminder_tokens = await _apply_tool_call_reminder(
@@ -690,10 +697,12 @@ async def generate_with_tools(
                 history=history,
                 user_message=prompt,
                 tool_call_payload=tool_call_payload,
-                tool_input_schema=cast(dict[str, object], tool_entry.get("input_schema", {})),
+                tool_input_schema=input_schema,
                 reminder_text=reminder_text,
                 current_local_time=current_local_time,
                 original_arguments=tool_arguments,
+                mcp_id=mcp_id,
+                tool_id=tool_id,
             )
             if isinstance(reminder_tokens, int):
                 token_values.append(reminder_tokens)
@@ -701,8 +710,15 @@ async def generate_with_tools(
 
         tool_arguments = _align_tool_timeout_argument(
             arguments=tool_arguments,
-            input_schema=cast(dict[str, object], tool_entry.get("input_schema", {})),
+            input_schema=input_schema,
             timeout_seconds=timeout_seconds,
+        )
+        tool_arguments = _repair_tool_arguments(
+            mcp_id=mcp_id,
+            tool_id=tool_id,
+            input_schema=input_schema,
+            original_arguments=original_tool_arguments,
+            candidate_arguments=tool_arguments,
         )
         tool_call_payload["arguments"] = _redact_sensitive_payload(tool_arguments)
 
@@ -713,7 +729,7 @@ async def generate_with_tools(
         tool_call_payload["call_id"] = tool_call_id
 
         missing_required_arguments = _missing_required_arguments(
-            cast(dict[str, object], tool_entry.get("input_schema", {})),
+            input_schema,
             tool_arguments,
         )
         if missing_required_arguments:
@@ -747,7 +763,7 @@ async def generate_with_tools(
             continue
 
         argument_validation_errors = _validate_tool_arguments(
-            cast(dict[str, object], tool_entry.get("input_schema", {})),
+            input_schema,
             tool_arguments,
         )
         if argument_validation_errors:
@@ -1331,7 +1347,7 @@ def _build_recursive_planner_prompt(
     return (
         "You can recursively call tools.\n"
         f"Current step: {step_index} of {max_steps}.\n"
-        "Return JSON only.\n"
+        "Return exactly one JSON object only. No prose, no markdown, no code fences.\n"
         "Tool selection is intent-based and language-agnostic: infer user intent semantically even when the user writes in any language or mixed languages.\n"
         "Your goal is to complete the user's original request end-to-end, not to stop at intermediate status updates.\n"
         "If user asks for live/external/private data (web, files, integrations, devices, Home Assistant, calendars, email), use a tool call first.\n"
@@ -1353,6 +1369,7 @@ def _build_recursive_planner_prompt(
         "3. Match argument names EXACTLY as listed in the schema (case-sensitive).\n"
         "4. For scripts, use 'description' in the scripts catalog to decide WHICH script to run; the exact input_json keys will be provided after you select the script.\n"
         "5. Never invent argument names that are not in the schema.\n"
+        "6. If you already have enough tool results to answer, respond instead of calling another tool.\n"
         "\n"
         "If you need another tool call, return: "
         '{"action":"call_tool","mcp_id":"...","tool_id":"...","arguments":{...}}\n'
@@ -1472,6 +1489,15 @@ def _invalid_planner_reason(plan: dict[str, object]) -> str:
 
 
 def _parse_planner_response(response_text: str) -> PlannerParseResult:
+    wrapped_tool_call = _extract_tool_call_wrapper(response_text)
+    if wrapped_tool_call is not None:
+        return {
+            "plan": wrapped_tool_call,
+            "object_count": 1,
+            "selected_index": 0,
+            "recovery_mode": "tool_call_wrapper",
+        }
+
     try:
         payload = json.loads(response_text)
         if isinstance(payload, dict):
@@ -1481,6 +1507,16 @@ def _parse_planner_response(response_text: str) -> PlannerParseResult:
                 "selected_index": 0,
                 "recovery_mode": "full_json",
             }
+        if isinstance(payload, list):
+            dict_payloads = [item for item in payload if isinstance(item, dict)]
+            if dict_payloads:
+                selected_index, selected_payload, recovery_mode = _select_planner_payload(dict_payloads)
+                return {
+                    "plan": selected_payload,
+                    "object_count": len(dict_payloads),
+                    "selected_index": selected_index,
+                    "recovery_mode": f"full_json_list_{recovery_mode}",
+                }
     except Exception:
         pass
 
@@ -1497,6 +1533,18 @@ def _parse_planner_response(response_text: str) -> PlannerParseResult:
     start = response_text.find("{")
     end = response_text.rfind("}")
     if start == -1 or end == -1 or end <= start:
+        stripped = response_text.strip()
+        if stripped:
+            return {
+                "plan": {
+                    "action": "respond",
+                    "goal_status": "complete",
+                    "final_answer": stripped,
+                },
+                "object_count": 0,
+                "selected_index": -1,
+                "recovery_mode": "plain_text_response",
+            }
         return {
             "plan": {"action": "respond", "final_answer": ""},
             "object_count": 0,
@@ -1550,6 +1598,59 @@ def _extract_planner_json_objects(response_text: str) -> list[dict[str, object]]
         index = max(end_index, next_brace + 1)
 
     return objects
+
+
+def _extract_tool_call_wrapper(response_text: str) -> dict[str, object] | None:
+    match = re.search(r"\[TOOL_CALL\](.*?)\[/TOOL_CALL\]", response_text, flags=re.DOTALL | re.IGNORECASE)
+    if match is None:
+        return None
+    body = match.group(1).strip()
+    if not body:
+        return None
+
+    tool_match = re.search(r'tool\s*=>\s*"([^"]+)"', body, flags=re.IGNORECASE)
+    if tool_match is None:
+        return None
+    tool_name = tool_match.group(1).strip()
+    if not tool_name:
+        return None
+
+    arguments: dict[str, object] = {}
+    args_match = re.search(r"args\s*=>\s*\{(.*)\}\s*$", body, flags=re.DOTALL | re.IGNORECASE)
+    if args_match is not None:
+        arguments = _parse_tool_call_wrapper_arguments(args_match.group(1))
+
+    mcp_id, tool_id = _split_wrapped_tool_name(tool_name)
+    return {
+        "action": "call_tool",
+        "mcp_id": mcp_id,
+        "tool_id": tool_id,
+        "arguments": arguments,
+    }
+
+
+def _split_wrapped_tool_name(tool_name: str) -> tuple[str, str]:
+    normalized = tool_name.strip()
+    if "." in normalized:
+        mcp_id, tool_id = normalized.split(".", 1)
+        return mcp_id.strip(), tool_id.strip()
+    if normalized.startswith("gmail_") or normalized.startswith("calendar_") or normalized.startswith("drive_"):
+        return "google_services", normalized
+    return "", normalized
+
+
+def _parse_tool_call_wrapper_arguments(body: str) -> dict[str, object]:
+    arguments: dict[str, object] = {}
+    matches = re.findall(r'--([a-zA-Z0-9_-]+)\s+("[^"]*"|\S+)', body)
+    for raw_key, raw_value in matches:
+        key = raw_key.strip().replace("-", "_")
+        if raw_value.startswith('"') and raw_value.endswith('"') and len(raw_value) >= 2:
+            value: object = raw_value[1:-1]
+        else:
+            parsed_int = _safe_int(raw_value)
+            value = parsed_int if parsed_int is not None else raw_value
+        arguments[key] = value
+    return arguments
 
 
 def _select_planner_payload(parsed_objects: list[dict[str, object]]) -> tuple[int, dict[str, object], str]:
@@ -1607,6 +1708,8 @@ async def _apply_tool_call_reminder(
     reminder_text: str,
     current_local_time: str,
     original_arguments: dict[str, object] | None = None,
+    mcp_id: str = "",
+    tool_id: str = "",
 ) -> tuple[dict[str, object], int | None]:
     prompt = (
         "You selected an MCP tool call.\n"
@@ -1635,14 +1738,30 @@ async def _apply_tool_call_reminder(
     parsed = _parse_planner_response(response_text)
     maybe_args = parsed["plan"].get("arguments")
     if isinstance(maybe_args, dict):
-        return cast(dict[str, object], maybe_args), used_tokens if isinstance(used_tokens, int) else None
+        repaired = _repair_tool_arguments(
+            mcp_id=mcp_id,
+            tool_id=tool_id,
+            input_schema=tool_input_schema,
+            original_arguments=original_arguments or {},
+            candidate_arguments=cast(dict[str, object], maybe_args),
+        )
+        if _should_keep_rewritten_arguments(tool_input_schema, original_arguments or {}, repaired):
+            return repaired, used_tokens if isinstance(used_tokens, int) else None
 
     try:
         payload = json.loads(response_text)
         if isinstance(payload, dict):
             raw_args = payload.get("arguments")
             if isinstance(raw_args, dict):
-                return cast(dict[str, object], raw_args), used_tokens if isinstance(used_tokens, int) else None
+                repaired = _repair_tool_arguments(
+                    mcp_id=mcp_id,
+                    tool_id=tool_id,
+                    input_schema=tool_input_schema,
+                    original_arguments=original_arguments or {},
+                    candidate_arguments=cast(dict[str, object], raw_args),
+                )
+                if _should_keep_rewritten_arguments(tool_input_schema, original_arguments or {}, repaired):
+                    return repaired, used_tokens if isinstance(used_tokens, int) else None
     except Exception:
         pass
 
@@ -1676,6 +1795,105 @@ def _missing_required_arguments(input_schema: dict[str, object], arguments: dict
             missing.append(item)
 
     return missing
+
+
+def _should_apply_tool_call_reminder(
+    *,
+    mcp_id: str,
+    tool_id: str,
+    input_schema: dict[str, object],
+    arguments: dict[str, object],
+) -> bool:
+    if _missing_required_arguments(input_schema, arguments):
+        return True
+    if _validate_tool_arguments(input_schema, arguments):
+        return True
+    return (mcp_id, tool_id) in {
+        ("google_services", "calendar_create_event"),
+        ("google_services", "calendar_update_event"),
+        ("google_services", "gmail_send_message"),
+        ("google_services", "gmail_reply_to_message"),
+        ("home_assistant", "call_service"),
+        ("home_assistant", "trigger_entity"),
+        ("home_assistant", "add_todo_item"),
+        ("home_assistant", "update_todo_item"),
+        ("home_assistant", "delete_todo_item"),
+    }
+
+
+def _should_keep_rewritten_arguments(
+    input_schema: dict[str, object],
+    original_arguments: dict[str, object],
+    candidate_arguments: dict[str, object],
+) -> bool:
+    original_missing = _missing_required_arguments(input_schema, original_arguments)
+    candidate_missing = _missing_required_arguments(input_schema, candidate_arguments)
+    if candidate_missing and len(candidate_missing) >= len(original_missing):
+        return False
+
+    original_errors = _validate_tool_arguments(input_schema, original_arguments)
+    candidate_errors = _validate_tool_arguments(input_schema, candidate_arguments)
+    if candidate_errors and len(candidate_errors) >= len(original_errors):
+        return False
+
+    required_keys = _required_argument_keys(input_schema)
+    for key in required_keys:
+        if key in original_arguments and key not in candidate_arguments:
+            return False
+    return True
+
+
+def _repair_tool_arguments(
+    *,
+    mcp_id: str,
+    tool_id: str,
+    input_schema: dict[str, object],
+    original_arguments: dict[str, object],
+    candidate_arguments: dict[str, object],
+) -> dict[str, object]:
+    repaired = dict(candidate_arguments)
+    properties = input_schema.get("properties") if isinstance(input_schema, dict) else None
+    if not isinstance(properties, dict):
+        properties = {}
+
+    alias_map = {"q": "query"}
+    for source_key, target_key in alias_map.items():
+        if source_key in repaired and target_key not in repaired and target_key in properties:
+            repaired[target_key] = repaired.pop(source_key)
+
+    for key in _required_argument_keys(input_schema):
+        if key not in repaired and key in original_arguments:
+            repaired[key] = original_arguments[key]
+
+    if mcp_id == "google_services" and tool_id == "gmail_get_message":
+        if "message_id" in original_arguments and "message_id" not in repaired:
+            repaired["message_id"] = original_arguments["message_id"]
+        if "format" not in repaired and "format" in original_arguments:
+            repaired["format"] = original_arguments["format"]
+
+    if mcp_id == "scripts" and tool_id == "execute_script":
+        if "title" in original_arguments:
+            repaired["title"] = original_arguments["title"]
+        original_input_json = original_arguments.get("input_json")
+        candidate_input_json = repaired.get("input_json")
+        if isinstance(original_input_json, dict):
+            merged_input_json = dict(candidate_input_json) if isinstance(candidate_input_json, dict) else {}
+            operation_value = original_input_json.get("operation")
+            if operation_value not in (None, "") and "operation" not in merged_input_json:
+                merged_input_json["operation"] = operation_value
+            elif operation_value not in (None, "") and merged_input_json.get("operation") != operation_value:
+                merged_input_json["operation"] = operation_value
+            if merged_input_json:
+                repaired["input_json"] = merged_input_json
+
+    return repaired
+
+
+def _required_argument_keys(input_schema: dict[str, object]) -> list[str]:
+    required_raw = input_schema.get("required") if isinstance(input_schema, dict) else None
+    if not isinstance(required_raw, list):
+        return []
+    return [item for item in required_raw if isinstance(item, str)]
 
 
 def _build_tool_call_signature(mcp_id: str, tool_id: str, arguments: dict[str, object]) -> str:
