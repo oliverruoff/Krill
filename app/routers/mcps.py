@@ -212,6 +212,10 @@ async def get_whatsapp_runtime_status() -> WhatsAppStatusResponse:
 
 @router.get("/api/mcps/whatsapp/contacts")
 async def get_whatsapp_contacts() -> dict[str, object]:
+    settings = await load_settings()
+    mcp_config = settings.mcp_configs.get("whatsapp")
+    if not (mcp_config and mcp_config.enabled):
+        return {"ok": True, "contacts": []}
     contacts = await whatsapp_list_contacts()
     return {"ok": True, "contacts": contacts}
 

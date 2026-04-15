@@ -125,13 +125,18 @@ async function loadGatewayMeta() {
     const { normalizeIncomingMcpConfigs } = await import("./mcp-handlers.js");
     state.mcpConfigs = normalizeIncomingMcpConfigs(settings.mcp_configs);
     state.integrationConfigs = normalizeIncomingMcpConfigs(settings.integration_configs);
-    hydrateWhatsappContactsFromCache();
+    const whatsappEnabled = Boolean(state.mcpConfigs?.["whatsapp"]?.enabled);
+    if (whatsappEnabled) {
+      hydrateWhatsappContactsFromCache();
+    }
     try {
       await fetchGoogleOauthStatus();
     } catch (error) {
       state.googleOauthStatus = null;
     }
-    await fetchWhatsappContacts();
+    if (whatsappEnabled) {
+      await fetchWhatsappContacts();
+    }
     const { syncTelegramFlagsFromIntegrationConfig } = await import("./mcp-handlers.js");
     syncTelegramFlagsFromIntegrationConfig();
     state.telegramOwnerUserId = typeof settings?.telegram_state?.owner_user_id === "string"
