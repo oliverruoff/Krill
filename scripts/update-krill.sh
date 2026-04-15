@@ -7,10 +7,28 @@ IMAGE_NAME="ghcr.io/oliverruoff/krill:latest"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKUP_DIR="${PWD}/backups"
 BACKUP_FILE="${BACKUP_DIR}/braindump.db"
+FUNNEL_ENABLED="${KRILL_ENABLE_FUNNEL:-1}"
+FUNNEL_TARGET="${KRILL_FUNNEL_TARGET:-80}"
 
 # You can override this when running the script, e.g.:
 # KRILL_PUBLIC_BASE_URL="https://krill.example.com" ./scripts/update-krill.sh
 : "${KRILL_PUBLIC_BASE_URL:=}"
+
+configure_tailscale_funnel() {
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "ℹ️ Tailscale nicht installiert, ueberspringe Funnel-Konfiguration."
+    return 0
+  fi
+
+  if [ "$FUNNEL_ENABLED" != "1" ] && [ "$FUNNEL_ENABLED" != "true" ] && [ "$FUNNEL_ENABLED" != "TRUE" ]; then
+    echo "ℹ️ KRILL_ENABLE_FUNNEL=$FUNNEL_ENABLED, ueberspringe Funnel-Konfiguration."
+    return 0
+  fi
+
+  echo "🌐 Stellt Tailscale Funnel auf lokalen Port ${FUNNEL_TARGET} sicher..."
+  tailscale funnel --bg "$FUNNEL_TARGET"
+  tailscale funnel status
+}
 
 mkdir -p "$BACKUP_DIR"
 
@@ -52,6 +70,8 @@ docker run -d \
   -p 80:8055 \
   "${ENV_ARGS[@]}" \
   "$IMAGE_NAME"
+
+configure_tailscale_funnel
 
 if [ -f "$BACKUP_FILE" ]; then
   echo "📥 Stellt braindump.db im neuen Container wieder her..."

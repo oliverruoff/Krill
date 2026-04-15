@@ -439,6 +439,7 @@ If you use the provided updater script `scripts/update-krill.sh`, it now handles
 2. copies current `/app/data/braindump.db` from the running container to `backups/braindump.db`
 3. recreates the container with the new image
 4. restores `braindump.db` into the new container and restarts once
+5. refreshes Tailscale Funnel to the local Docker port (`80` by default) so the public `*.ts.net` endpoint stays attached after redeploys
 
 Run it with:
 
@@ -450,6 +451,13 @@ Optional (recommended for OAuth in Docker/reverse-proxy setups):
 
 ```bash
 KRILL_PUBLIC_BASE_URL="http://localhost" ./scripts/update-krill.sh
+```
+
+Optional Funnel controls:
+
+```bash
+KRILL_ENABLE_FUNNEL=0 ./scripts/update-krill.sh
+KRILL_FUNNEL_TARGET=3001 ./scripts/update-krill.sh
 ```
 
 Why `KRILL_PUBLIC_BASE_URL` matters:
