@@ -313,8 +313,18 @@ export function buildChatStateSignature(payload) {
       if (!chat || typeof chat !== "object") {
         return chat;
       }
+      // Include execution_* system messages in the signature so that
+      // real-time progress updates from active requests are detected by polling.
       const messages = Array.isArray(chat.messages)
-        ? chat.messages.filter((message) => message && message.role !== "system")
+        ? chat.messages.filter((message) => {
+          if (!message) {
+            return false;
+          }
+          if (message.role !== "system") {
+            return true;
+          }
+          return String(message.system_type || "").startsWith("execution_");
+        })
         : [];
       return {
         ...chat,
