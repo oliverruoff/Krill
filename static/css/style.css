@@ -2724,6 +2724,10 @@ button:disabled {
   backdrop-filter: blur(12px);
 }
 
+.gateway-boot-overlay.hidden {
+  display: none;
+}
+
 .gateway-boot-card {
   width: min(25rem, 100%);
   padding: 1.5rem 1.4rem;
