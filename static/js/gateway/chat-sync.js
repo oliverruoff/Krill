@@ -461,10 +461,31 @@ export async function syncActiveRequestState(chatId, requestId) {
       return;
     }
 
+    // Always apply state during active request polling so that execution
+    // progress events (written to DB by the backend) are rendered promptly.
+    // The signature is still updated to keep syncRemoteChatState in sync.
     const signature = buildChatStateSignature(payload);
-    if (signature !== state.lastChatStateSignature) {
-      state.lastChatStateSignature = signature;
-      await applyRemoteChatState(payload);
+    state.lastChatStateSignature = signature;
+    await applyRemoteChatState(payload);
+
+    // Mirror the latest execution event in the status bar so the user sees
+    // live step updates (like "Using brave_search (web_search).") while waiting.
+    if (state.activeChatId === chatId && hasPendingRequest(chatId, requestId)) {
+      const activeChat = state.chats.find((c) => c && c.id === chatId);
+      if (activeChat && Array.isArray(activeChat.messages)) {
+        const executionMessages = activeChat.messages.filter((m) =>
+          m
+          && m.role === "system"
+          && m.request_id === requestId
+          && String(m.system_type || "").startsWith("execution_")
+          && typeof m.content === "string"
+          && m.content.trim()
+        );
+        if (executionMessages.length > 0) {
+          const latest = executionMessages[executionMessages.length - 1];
+          setStatus(latest.content.trim());
+        }
+      }
     }
 
     if (!hasPendingRequest(chatId, requestId)) {
