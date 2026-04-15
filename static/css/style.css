@@ -650,7 +650,8 @@ button:disabled {
 
 .gateway-shell {
   --gateway-max-width: 1500px;
-  height: 100vh;
+  height: 100vh; /* fallback for browsers without dvh support */
+  height: 100dvh;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 1rem;
@@ -2966,7 +2967,6 @@ button:disabled {
     padding: 0.45rem;
     gap: 0.45rem;
     position: relative;
-    height: 100dvh;
   }
 
   .gateway-shell .auth-alert-banner {
