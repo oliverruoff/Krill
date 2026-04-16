@@ -51,7 +51,7 @@ class ChatTurn(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=5000)
+    message: str = Field(default="", max_length=5000)
     history: list[ChatTurn] = Field(default_factory=list)
     memory_block: str = Field(default="", max_length=8000)
     provider_id: str = ""
@@ -62,6 +62,7 @@ class ChatRequest(BaseModel):
     source_channel: str = "gateway"
     source_chat_id: str = ""
     source_request_id: str = ""
+    image: dict[str, str] | None = None
 
 
 class ChatEnqueueRequest(BaseModel):
@@ -304,6 +305,51 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     except Exception:
         # Memory extraction triggering must not block chat.
         pass
+
+    # Resolve image attachment: analyse it first and inject result into message.
+    image_payload = _normalize_enqueued_image(payload.image)
+    stream_message = payload.message.strip()
+    image_analysis_tokens: int = 0
+
+    if image_payload is not None:
+        image_mime = str(image_payload.get("mime_type", "")).strip()
+        image_bytes_raw = image_payload.get("content_bytes")
+        if not image_mime.startswith("image/") or not isinstance(image_bytes_raw, (bytes, bytearray)):
+            async def _bad_image_stream():
+                yield _sse("error", {"detail": "Invalid image payload."})
+            return StreamingResponse(_bad_image_stream(), media_type="text/event-stream")
+        try:
+            resolved_provider_id = payload.provider_id or settings.active_provider_id
+            resolved_provider_config = settings.provider_configs.get(resolved_provider_id)
+            resolved_model = payload.model or (resolved_provider_config.model if resolved_provider_config else "")
+            resolved_api_key = payload.api_key or (resolved_provider_config.api_key if resolved_provider_config else "")
+            image_analysis_text, _img_tokens = await analyze_image(
+                provider_id=resolved_provider_id,
+                model=resolved_model,
+                api_key=resolved_api_key,
+                image_bytes=bytes(image_bytes_raw),
+                mime_type=image_mime,
+                prompt=_image_analysis_prompt(stream_message),
+            )
+            image_analysis_tokens = _img_tokens if isinstance(_img_tokens, int) else 0
+            analysis_block = image_analysis_text.strip()
+            if stream_message:
+                stream_message = f"{stream_message}\n\nImage analysis:\n{analysis_block}"
+            else:
+                stream_message = (
+                    "The user sent an image without text. Use this image analysis to respond helpfully:\n"
+                    f"{analysis_block}"
+                )
+        except Exception as exc:
+            async def _img_err_stream():
+                yield _sse("error", {"detail": f"Image analysis failed: {exc}"})
+            return StreamingResponse(_img_err_stream(), media_type="text/event-stream")
+
+    if not stream_message:
+        async def _empty_stream():
+            yield _sse("error", {"detail": "Either message text or one image is required."})
+        return StreamingResponse(_empty_stream(), media_type="text/event-stream")
+
     history = [turn.model_dump() for turn in payload.history]
 
     async def event_stream():
@@ -327,7 +373,7 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
                 try:
                     orchestration_holder["result"] = await generate_chat_response(
                         settings=settings,
-                        message=payload.message,
+                        message=stream_message,
                         history=history,
                         memory_block=payload.memory_block,
                         provider_id=payload.provider_id,
@@ -375,7 +421,7 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
             system_trace_messages = orchestration.get("system_trace_messages", [])
             execution_events = orchestration.get("execution_events", [])
 
-            used_value = used_tokens if isinstance(used_tokens, int) else 0
+            used_value = (used_tokens if isinstance(used_tokens, int) else 0) + image_analysis_tokens
             used_percent = round((used_value / token_limit) * 100, 2) if token_limit else 0
             yield _sse(
                 "meta",

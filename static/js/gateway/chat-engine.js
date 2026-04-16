@@ -153,6 +153,10 @@ function processSseBlock(block, context) {
       );
       if (!duplicate) {
         context.systemTrace.push(entry);
+        // Mirror the latest execution event in the status bar for immediate visibility.
+        if (state.activeChatId === context.chatId) {
+          setStatus(entry.content);
+        }
         const chat = state.chats.find((entryChat) => entryChat.id === context.chatId);
         if (chat) {
           appendSystemTraceMessages(chat, [entry], createTimestamp(), context.requestId);
@@ -353,7 +357,7 @@ async function executeQueuedJob(chat, job, runtime) {
   };
   if (state.activeChatId === chat.id) {
     _renderActiveChat();
-    setStatus("Processing...");
+    setStatus("Working...");
   }
   _renderChatHistory();
 
@@ -375,6 +379,7 @@ async function executeQueuedJob(chat, job, runtime) {
         source_channel: "gateway",
         source_chat_id: chat.id,
         source_request_id: job.requestId,
+        image: job.image ?? null,
       }),
     });
 
@@ -600,12 +605,11 @@ async function sendMessage(event) {
     : message;
   const draftKey = buildEnqueueDraftKey(message, pendingImage);
   if (state.pendingEnqueueByChat[chat.id] === draftKey) {
-    setStatus("This message is already being queued.", true);
+    setStatus("This message is already being processed.", true);
     return;
   }
-
-  const clientEnqueueId = createClientEnqueueId();
   state.pendingEnqueueByChat[chat.id] = draftKey;
+
   const localRequestId = createLocalRequestId();
   const queuedTimestamp = createTimestamp();
   const optimisticUserMessage = {
@@ -642,70 +646,29 @@ async function sendMessage(event) {
   const { updateComposerState } = await import("./chat-render.js");
   updateComposerState();
 
-  try {
-    const snapshot = buildQueueSnapshot(chat);
-    const response = await fetch("/api/chat/enqueue", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chat.id,
-        message,
-        client_enqueue_id: clientEnqueueId,
-        image: pendingImage
-          ? {
-            file_name: String(pendingImage.fileName || "image"),
-            mime_type: String(pendingImage.mimeType || "image/jpeg"),
-            content_base64: String(pendingImage.contentBase64 || ""),
-          }
-          : null,
-        provider_id: snapshot.providerId,
-        model: snapshot.model,
-        api_key: snapshot.apiKey,
-        bot_name: snapshot.botName,
-        system_prompt: snapshot.systemPrompt,
-      }),
-    });
-    if (!response.ok) {
-      const detail = await buildHttpErrorDetail(response, "Chat request failed.");
-      throw new Error(detail);
-    }
-    const payload = await response.json();
-    const serverRequestId = typeof payload?.request_id === "string" ? payload.request_id.trim() : "";
-    if (serverRequestId) {
-      optimisticAssistantMessage.request_id = serverRequestId;
-      optimisticUserMessage.request_id = "";
-    }
-    setStatus("Queued.");
-    const { startActiveRequestSync, syncRemoteChatState } = await import("./chat-sync.js");
-    void syncRemoteChatState();
-    void startActiveRequestSync(chat.id, serverRequestId || localRequestId);
-  } catch (error) {
-    const { stopActiveRequestSync } = await import("./chat-sync.js");
-    await stopActiveRequestSync(chat.id);
-    const filteredMessages = chat.messages.filter((entry) => entry?.request_id !== localRequestId);
-    chat.messages = filteredMessages;
-    chat.updated_at = createTimestamp();
-    if (state.activeChatId === chat.id) {
-      const { renderActiveChat: renderActiveChatOnError } = await import("./chat-render.js");
-      renderActiveChatOnError();
-    }
-    const { renderChatHistory: renderChatHistoryOnError } = await import("./chat-history.js");
-    renderChatHistoryOnError();
-    if (state.activeChatId === chat.id && !chatInput.value && !state.pendingImageAttachment) {
-      chatInput.value = message;
-      state.pendingImageAttachment = pendingImage;
-      renderPendingImageAttachment();
-      syncChatInputHeight();
-    }
-    const { updateComposerState: updateComposerStateOnError } = await import("./chat-render.js");
-    updateComposerStateOnError();
-    setStatus(normalizeErrorMessage(error, "Failed to queue message."), true);
-    delete state.pendingEnqueueByChat[chat.id];
-    return;
-  }
+  // Stream directly instead of enqueue+poll so execution updates appear in real-time.
+  const snapshot = buildQueueSnapshot(chat);
+  const job = {
+    requestId: localRequestId,
+    message,
+    image: pendingImage
+      ? {
+        file_name: String(pendingImage.fileName || "image"),
+        mime_type: String(pendingImage.mimeType || "image/jpeg"),
+        content_base64: String(pendingImage.contentBase64 || ""),
+      }
+      : null,
+    snapshot,
+  };
 
   delete state.pendingEnqueueByChat[chat.id];
   chatInput.focus();
+
+  const runtime = getChatRuntime(chat.id);
+  if (runtime) {
+    runtime.queue.push(job);
+    void processChatQueue(chat.id);
+  }
 }
 
 /* ── Lazy cross-module wrappers (fire-and-forget from sync code) ── */
