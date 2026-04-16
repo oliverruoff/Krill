@@ -337,7 +337,7 @@ function buildQueueSnapshot(chat) {
 }
 
 function findMessageByRequestId(chat, requestId) {
-  return chat.messages.find((message) => message.request_id === requestId) ?? null;
+  return chat.messages.find((message) => message.role === "assistant" && message.request_id === requestId) ?? null;
 }
 
 async function createDebugDump(chat) {
