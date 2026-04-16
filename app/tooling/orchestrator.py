@@ -422,33 +422,12 @@ async def generate_with_tools(
             final_answer = plan.get("final_answer")
             if isinstance(final_answer, str) and final_answer.strip():
                 normalized_answer = final_answer.strip()
-                goal_status = _normalize_goal_status(plan.get("goal_status"))
 
-                if goal_status != "complete" and step_index < normalized_recursion:
-                    logger.debug(
-                        "Planner responded early at step=%s with goal_status=%s; continuing",
-                        step_index,
-                        goal_status,
-                    )
-                    incomplete_payload = {
-                        "step": step_index,
-                        "error": "planner_marked_incomplete",
-                        "detail": "Planner responded before objective completion; continuing tool loop.",
-                        "goal_status": goal_status,
-                        "final_answer": normalized_answer,
-                    }
-                    await trace("tool_error", json.dumps(incomplete_payload, ensure_ascii=True))
-                    interaction_log.append(
-                        {
-                            "step": step_index,
-                            "planner_feedback": {
-                                "type": "planner_marked_incomplete",
-                                "message": "Continue using tools until the task is complete or blocked.",
-                                "goal_status": goal_status,
-                            },
-                        }
-                    )
-                    continue
+                # goal_status enforcement removed: if the planner provides a
+                # non-empty final_answer the loop accepts it regardless of the
+                # goal_status field. Forcing re-iterations on goal_status !=
+                # "complete" caused redundant tool calls because the LLM
+                # rarely set that field reliably.
 
                 avoidance_pattern = _match_tool_avoidance_pattern(normalized_answer)
                 if not used_tools and avoidance_pattern:
@@ -1100,6 +1079,10 @@ async def generate_with_tools(
             ),
         )
         await trace("tool_result", json.dumps(compact_tool_result, ensure_ascii=True))
+        # Emit a UI event for the validation outcome but always keep the
+        # tool result — failed validation is a hint, not a blocker. Forcing
+        # a re-loop here caused redundant extra tool calls when the planner
+        # could have simply acted on the result it already had.
         if validation["passed"]:
             await emit_event(
                 execution_event(
@@ -1119,7 +1102,7 @@ async def generate_with_tools(
             await emit_event(
                 execution_event(
                     "validation_failed",
-                    message="The result did not pass validation; trying a fallback path.",
+                    message="The result did not pass validation; the planner will decide next steps.",
                     stage="validating",
                     pipeline_id=pipeline["pipeline_id"],
                     mcp_id=mcp_id,
@@ -1130,20 +1113,6 @@ async def generate_with_tools(
                     detail=validation["detail"],
                 )
             )
-            interaction_log.append(
-                {
-                    "step": step_index,
-                    "tool_call": tool_call_payload,
-                    "tool_result": compact_tool_result,
-                    "planner_feedback": {
-                        "type": "validation_failed",
-                        "message": validation["detail"],
-                        "validator": validation["validator"],
-                        "fallback_policy": pipeline["fallback_policy"],
-                    },
-                }
-            )
-            continue
         interaction_log.append({
             "step": step_index,
             "tool_call": tool_call_payload,
@@ -1804,21 +1773,16 @@ def _should_apply_tool_call_reminder(
     input_schema: dict[str, object],
     arguments: dict[str, object],
 ) -> bool:
+    # Only fire the reminder (extra LLM call) when arguments are genuinely
+    # malformed — missing required fields or wrong types. The previous
+    # unconditional whitelist for calendar/gmail/home_assistant caused a
+    # redundant LLM round-trip on every call to those tools even when the
+    # arguments were already correct.
     if _missing_required_arguments(input_schema, arguments):
         return True
     if _validate_tool_arguments(input_schema, arguments):
         return True
-    return (mcp_id, tool_id) in {
-        ("google_services", "calendar_create_event"),
-        ("google_services", "calendar_update_event"),
-        ("google_services", "gmail_send_message"),
-        ("google_services", "gmail_reply_to_message"),
-        ("home_assistant", "call_service"),
-        ("home_assistant", "trigger_entity"),
-        ("home_assistant", "add_todo_item"),
-        ("home_assistant", "update_todo_item"),
-        ("home_assistant", "delete_todo_item"),
-    }
+    return False
 
 
 def _should_keep_rewritten_arguments(
