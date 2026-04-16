@@ -1,10 +1,13 @@
 """Shell Access MCP plugin for generic shell command execution and file sharing."""
 
 import asyncio
+import mimetypes
 import subprocess
 from pathlib import Path
 
-from app.config import BASE_DIR
+from app.config import BASE_DIR, load_settings
+from app.providers.registry import get_provider_model_supports_images
+from app.providers.vision import analyze_image
 from app.shared_files import create_shared_file_link
 
 from .base import MCPPlugin, McpConfigField, McpToolSpec
@@ -84,6 +87,35 @@ class ShellAccessMCP(MCPPlugin):
                     "required": ["path"],
                 },
             ),
+            McpToolSpec(
+                id="analyze_file_with_vision",
+                label="Analyze File with Vision",
+                description=(
+                    "Reads a local file (image or PDF) and sends it to the active LLM using vision/multimodal capabilities. "
+                    "Returns the LLM's analysis as text. Requires the active provider and model to support vision "
+                    "(Gemini or OpenAI vision models). Use this to analyse screenshots, diagrams, documents, or any image file."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Absolute or relative path to the image or document file.",
+                        },
+                        "prompt": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "What to ask the LLM about the file, e.g. 'Describe what you see' or 'What errors are shown?'",
+                        },
+                        "mime_type": {
+                            "type": "string",
+                            "description": "MIME type of the file (e.g. image/png). Auto-detected from extension if omitted.",
+                        },
+                    },
+                    "required": ["path", "prompt"],
+                },
+            ),
         ]
 
     def tool_call_system_reminder(self, tool_id: str, params: dict[str, str]) -> str:
@@ -102,6 +134,13 @@ class ShellAccessMCP(MCPPlugin):
                 "After calling share_file, include the returned download_url in your response exactly as returned. "
                 "Never invent or rewrite host/port for shared links. "
                 "For Telegram, keep the URL present in output so the integration can send the file as a document."
+            )
+        if tool_id == "analyze_file_with_vision":
+            return (
+                "analyze_file_with_vision uses the active LLM's vision capability to read a local file. "
+                "The 'analysis' field in the result contains the LLM's response — relay it directly to the user. "
+                "If the result contains ok=false with error='vision_not_supported', inform the user they need "
+                "to switch to a Gemini or OpenAI vision-capable model."
             )
         return ""
 
@@ -141,7 +180,97 @@ class ShellAccessMCP(MCPPlugin):
                 "download_url_absolute": _build_absolute_download_url(str(link_payload.get("download_url", "")), params),
             }
 
+        if tool_id == "analyze_file_with_vision":
+            return await _analyze_file_with_vision(arguments)
+
         raise RuntimeError(f"Unsupported Shell Access tool: {tool_id}")
+
+
+_VISION_MIME_TYPES: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+}
+
+_VISION_MAX_BYTES = 25 * 1024 * 1024
+
+
+async def _analyze_file_with_vision(arguments: dict[str, object]) -> dict[str, object]:
+    file_path = Path(_required_str(arguments, "path")).expanduser().resolve()
+    prompt = _required_str(arguments, "prompt")
+    mime_type_arg = _optional_str(arguments, "mime_type", "")
+
+    if not file_path.is_file():
+        raise RuntimeError(f"Path is not a file: {file_path}")
+
+    file_size = int(file_path.stat().st_size)
+    if file_size <= 0:
+        raise RuntimeError("Cannot analyse an empty file.")
+    if file_size > _VISION_MAX_BYTES:
+        raise RuntimeError(
+            f"File is too large to analyse ({file_size} bytes). Limit is {_VISION_MAX_BYTES} bytes."
+        )
+
+    if mime_type_arg:
+        mime_type = mime_type_arg
+    else:
+        suffix = file_path.suffix.lower()
+        mime_type = _VISION_MIME_TYPES.get(suffix, "") or mimetypes.guess_type(str(file_path))[0] or ""
+    if not mime_type:
+        raise RuntimeError(
+            f"Cannot determine MIME type for '{file_path.name}'. Provide it explicitly via the mime_type argument."
+        )
+
+    settings = await load_settings()
+    provider_id = settings.active_provider_id.strip()
+    if not provider_id:
+        raise RuntimeError("No active provider configured.")
+    provider_config = settings.provider_configs.get(provider_id)
+    if provider_config is None:
+        raise RuntimeError(f"Provider config not found for '{provider_id}'.")
+    model_id = provider_config.model.strip()
+    api_key = provider_config.api_key
+    if not model_id:
+        raise RuntimeError("Active provider model is not configured.")
+    if not api_key.strip():
+        raise RuntimeError(f"API key for provider '{provider_id}' is not configured.")
+
+    if not get_provider_model_supports_images(provider_id, model_id):
+        return {
+            "ok": False,
+            "action": "analyze_file_with_vision",
+            "path": str(file_path),
+            "error": "vision_not_supported",
+            "detail": (
+                f"The active model '{model_id}' on provider '{provider_id}' does not support vision/image input. "
+                "Switch to a Gemini or OpenAI vision-capable model and try again."
+            ),
+        }
+
+    image_bytes = await asyncio.to_thread(file_path.read_bytes)
+
+    analysis_text, tokens_used = await analyze_image(
+        provider_id=provider_id,
+        model=model_id,
+        api_key=api_key,
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        prompt=prompt,
+    )
+
+    return {
+        "ok": True,
+        "action": "analyze_file_with_vision",
+        "path": str(file_path),
+        "filename": file_path.name,
+        "mime_type": mime_type,
+        "size_bytes": file_size,
+        "analysis": analysis_text,
+        "tokens_used": tokens_used,
+    }
 
 
 def _execute_shell(command: str, workdir: Path, timeout_seconds: int) -> dict[str, object]:
