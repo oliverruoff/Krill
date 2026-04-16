@@ -2468,6 +2468,7 @@ button:disabled {
   display: grid;
   gap: 0.7rem;
   min-height: 0;
+  align-content: start;
 }
 
 .chat-bubble p,
