@@ -1816,6 +1816,9 @@ button:disabled {
 .mobile-side-header {
   display: none;
   position: relative;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .mobile-settings-btn {
@@ -3053,6 +3056,7 @@ button:disabled {
     display: flex;
     justify-content: flex-end;
     align-items: center;
+    gap: 0.4rem;
   }
 
   .mobile-settings-popover {
