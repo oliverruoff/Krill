@@ -174,9 +174,22 @@ async function renderActiveChat() {
       turn.role === "system"
       && activeChat.collapse_system_trace
       && turn.system_type !== "memory_compaction"
-      && !String(turn.system_type || "").startsWith("execution_")
     ) {
-      return;
+      const isExecutionUpdate = String(turn.system_type || "").startsWith("execution_");
+      if (!isExecutionUpdate) {
+        return;
+      }
+      // Only show execution updates while the request is still active.
+      // Once the assistant turn is done, collapse them with the rest of the trace.
+      const requestId = String(turn.request_id || "");
+      const isActiveRequest = requestId && activeChat.messages.some(
+        (msg) => msg.role === "assistant"
+          && msg.request_id === requestId
+          && (msg.status === "queued" || msg.status === "processing"),
+      );
+      if (!isActiveRequest) {
+        return;
+      }
     }
 
     const bubble = addMessage(
