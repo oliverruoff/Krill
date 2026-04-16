@@ -612,6 +612,9 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
                 f"{analysis_block}"
             )
 
+    async def _on_execution_event(event: ExecutionEvent) -> None:
+        await _persist_gateway_execution_update(chat_id=chat_id, request_id=request_id, event=event)
+
     try:
         result, _ = await generate_chat_response(
             settings=settings,
@@ -626,11 +629,7 @@ async def _process_gateway_chat_job(chat_id: str, job: dict[str, Any]) -> None:
             source_channel="gateway",
             source_chat_id=chat_id,
             source_request_id=request_id,
-            on_execution_event=lambda event: _persist_gateway_execution_update(
-                chat_id=chat_id,
-                request_id=request_id,
-                event=event,
-            ),
+            on_execution_event=_on_execution_event,
         )
     except asyncio.CancelledError:
         user_cancelled = request_id in _gateway_chat_user_cancelled_request_ids
