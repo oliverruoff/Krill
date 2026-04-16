@@ -66,7 +66,8 @@
           </label>
         </div>
         <div class="menu-wrap">
-          <button type="button" id="menu-btn" class="icon-btn" aria-expanded="false" aria-controls="menu-popover" aria-label="Open settings menu">⋯</button>
+          <a href="/setup?edit=1" class="icon-btn" aria-label="Settings" title="Settings">⚙</a>
+          <button type="button" id="menu-btn" class="icon-btn" aria-expanded="false" aria-controls="menu-popover" aria-label="Open Toolbox">⋯</button>
           <div id="menu-popover" class="menu-popover hidden" role="menu">
             <button type="button" id="memory-management-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◌</span>Memory Management</button>
             <button type="button" id="short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
@@ -76,7 +77,6 @@
             <button type="button" id="theme-toggle-btn" class="menu-item menu-item-button" role="menuitem" aria-label="Switch to Dark Mode" title="Switch to Dark Mode"><span class="menu-item-icon" aria-hidden="true">◐</span>Switch to Dark Mode</button>
             <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
             <button type="button" id="brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
-            <a href="/setup?edit=1" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>
           </div>
         </div>
         <button type="button" id="mobile-right-drawer-handle" class="mobile-drawer-handle mobile-drawer-handle-right" aria-label="Open tools and integrations panel">
@@ -168,7 +168,8 @@
 
         <aside class="mcp-side-panel" aria-label="Tools">
           <div class="mobile-side-header">
-            <button type="button" id="mobile-settings-menu-btn" class="mobile-settings-btn" aria-expanded="false" aria-controls="mobile-settings-popover">Settings</button>
+            <a href="/setup?edit=1" class="mobile-settings-btn" aria-label="Settings" title="Settings">⚙</a>
+            <button type="button" id="mobile-settings-menu-btn" class="mobile-settings-btn" aria-expanded="false" aria-controls="mobile-settings-popover">⋯</button>
             <div id="mobile-settings-popover" class="menu-popover mobile-settings-popover hidden" role="menu">
               <button type="button" id="mobile-memory-management-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◌</span>Memory Management</button>
               <button type="button" id="mobile-short-term-memory-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">◴</span>Short Term Memory</button>
@@ -178,7 +179,6 @@
               <button type="button" id="mobile-theme-toggle-btn" class="menu-item menu-item-button" role="menuitem" aria-label="Switch to Dark Mode" title="Switch to Dark Mode"><span class="menu-item-icon" aria-hidden="true">◐</span>Switch to Dark Mode</button>
               <a href="/api/braindump/download" class="menu-item" download="braindump.db" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⤓</span>Braindump</a>
               <button type="button" id="mobile-brain-view-btn" class="menu-item menu-item-button" role="menuitem"><span class="menu-item-icon" aria-hidden="true">▦</span>View Brain</button>
-              <a href="/setup?edit=1" class="menu-item" role="menuitem"><span class="menu-item-icon" aria-hidden="true">⚙</span>Settings</a>
             </div>
           </div>
           <div class="panel-section panel-section-tools">

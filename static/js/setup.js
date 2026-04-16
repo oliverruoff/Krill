@@ -957,6 +957,9 @@ function shouldOpenConfigViewFromLoadedState() {
 async function loadPage() {
   try {
     loadAppVersion();
+    if (shouldForceConfigViewFromQuery()) {
+      showConfigView();
+    }
     const [providersResponse, settingsResponse] = await Promise.all([
       fetch("/api/providers"),
       fetch("/api/settings"),
