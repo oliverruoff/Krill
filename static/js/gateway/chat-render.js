@@ -16,7 +16,7 @@ function getMessageRoleLabel(role, systemType = "") {
   if (role === "assistant") {
     return state.botName || "Krill";
   }
-  if (String(systemType || "").startsWith("execution_")) {
+  if (systemType === "execution_live" || String(systemType || "").startsWith("execution_")) {
     return "Update";
   }
   return "System";
@@ -30,7 +30,7 @@ function hasVisibleExecutionUpdate(chat, requestId = "") {
     message
     && message.role === "system"
     && message.request_id === requestId
-    && String(message.system_type || "").startsWith("execution_")
+    && (message.system_type === "execution_live" || String(message.system_type || "").startsWith("execution_"))
     && typeof message.content === "string"
     && message.content.trim()
   ));
@@ -175,7 +175,8 @@ async function renderActiveChat() {
       && activeChat.collapse_system_trace
       && turn.system_type !== "memory_compaction"
     ) {
-      const isExecutionUpdate = String(turn.system_type || "").startsWith("execution_");
+      const isLive = turn.system_type === "execution_live";
+      const isExecutionUpdate = isLive || String(turn.system_type || "").startsWith("execution_");
       if (!isExecutionUpdate) {
         return;
       }

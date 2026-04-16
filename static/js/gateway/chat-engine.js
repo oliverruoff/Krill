@@ -140,32 +140,47 @@ function processSseBlock(block, context) {
   }
 
   if (eventName === "tool_step" || eventName === "progress") {
-    const entry = {
-      system_type: typeof payload.system_type === "string" ? payload.system_type : "tool_step",
-      content: typeof payload.content === "string"
-        ? payload.content
-        : (typeof payload.message === "string" ? payload.message : ""),
-    };
+    const rawContent = typeof payload.content === "string"
+      ? payload.content
+      : (typeof payload.message === "string" ? payload.message : "");
+    const rawSystemType = typeof payload.system_type === "string" ? payload.system_type : "execution_progress";
 
-    if (entry.content) {
-      const duplicate = context.systemTrace.some(
-        (item) => item.system_type === entry.system_type && item.content === entry.content,
-      );
-      if (!duplicate) {
-        context.systemTrace.push(entry);
-        // Mirror the latest execution event in the status bar for immediate visibility.
+    if (rawContent) {
+      // Record in trace (for finalization / system_trace_messages at end).
+      context.systemTrace.push({ system_type: rawSystemType, content: rawContent });
+
+      // Mirror in status bar immediately.
+      if (state.activeChatId === context.chatId) {
+        setStatus(rawContent);
+      }
+
+      // Update a single live-progress system message in-place (not a new bubble each time).
+      const chat = state.chats.find((entryChat) => entryChat.id === context.chatId);
+      if (chat) {
+        const liveMsg = chat.messages.find(
+          (msg) => msg.role === "system"
+            && msg.request_id === context.requestId
+            && msg.system_type === "execution_live",
+        );
+        if (liveMsg) {
+          liveMsg.content = rawContent;
+          liveMsg.timestamp = createTimestamp();
+        } else {
+          chat.messages.push({
+            role: "system",
+            content: rawContent,
+            timestamp: createTimestamp(),
+            system_type: "execution_live",
+            tool_usage: [],
+            request_id: context.requestId,
+            status: "",
+          });
+        }
+        chat.updated_at = createTimestamp();
         if (state.activeChatId === context.chatId) {
-          setStatus(entry.content);
+          _renderActiveChat();
         }
-        const chat = state.chats.find((entryChat) => entryChat.id === context.chatId);
-        if (chat) {
-          appendSystemTraceMessages(chat, [entry], createTimestamp(), context.requestId);
-          chat.updated_at = createTimestamp();
-          if (state.activeChatId === context.chatId) {
-            _renderActiveChat();
-          }
-          _renderChatHistory();
-        }
+        _renderChatHistory();
       }
     }
     return { done: false, hasError: false };
@@ -228,6 +243,11 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
   if (!chat || !assistantMessage) {
     return;
   }
+
+  // Remove the single live-progress bubble — final trace entries replace it.
+  chat.messages = chat.messages.filter(
+    (msg) => !(msg.role === "system" && msg.request_id === context.requestId && msg.system_type === "execution_live"),
+  );
 
   const assistantTimestamp = createTimestamp();
   appendSystemTraceMessages(chat, context.systemTrace, assistantTimestamp, context.requestId);
@@ -610,6 +630,9 @@ async function sendMessage(event) {
   }
   state.pendingEnqueueByChat[chat.id] = draftKey;
 
+  // Build snapshot BEFORE pushing optimistic messages so history doesn't include the new turn.
+  const snapshot = buildQueueSnapshot(chat);
+
   const localRequestId = createLocalRequestId();
   const queuedTimestamp = createTimestamp();
   const optimisticUserMessage = {
@@ -647,7 +670,6 @@ async function sendMessage(event) {
   updateComposerState();
 
   // Stream directly instead of enqueue+poll so execution updates appear in real-time.
-  const snapshot = buildQueueSnapshot(chat);
   const job = {
     requestId: localRequestId,
     message,
