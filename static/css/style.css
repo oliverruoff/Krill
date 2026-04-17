@@ -1825,16 +1825,19 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2rem;
-  padding: 0.32rem 0.68rem;
+  box-sizing: border-box;
+  height: 2rem;
+  padding: 0 0.68rem;
   border: 1px solid var(--border);
   border-radius: 9px;
   text-decoration: none;
   color: var(--text);
   font-size: 0.8rem;
   font-weight: 700;
+  line-height: 1;
   background: #f7faff;
   cursor: pointer;
+  vertical-align: middle;
 }
 
 .mobile-settings-btn:hover {
