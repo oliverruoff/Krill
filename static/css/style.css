@@ -1828,6 +1828,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
+  align-self: stretch;
   box-sizing: border-box;
   margin: 0;
   padding: 0 0.68rem;
