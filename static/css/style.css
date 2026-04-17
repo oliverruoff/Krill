@@ -1822,10 +1822,13 @@ button:disabled {
 }
 
 .mobile-settings-btn {
+  -webkit-appearance: none;
+  appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
+  margin: 0;
   height: 2rem;
   padding: 0 0.68rem;
   border: 1px solid var(--border);
@@ -1834,10 +1837,9 @@ button:disabled {
   color: var(--text);
   font-size: 0.8rem;
   font-weight: 700;
-  line-height: 1;
+  line-height: 2rem;
   background: #f7faff;
   cursor: pointer;
-  vertical-align: middle;
 }
 
 .mobile-settings-btn:hover {
