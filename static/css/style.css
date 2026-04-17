@@ -1817,19 +1817,19 @@ button:disabled {
   display: none;
   position: relative;
   flex-direction: row;
-  align-items: center;
+  align-items: stretch;
   gap: 0.4rem;
+  min-height: 2rem;
 }
 
 .mobile-settings-btn {
   -webkit-appearance: none;
   appearance: none;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
   margin: 0;
-  height: 2rem;
   padding: 0 0.68rem;
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -1837,7 +1837,7 @@ button:disabled {
   color: var(--text);
   font-size: 0.8rem;
   font-weight: 700;
-  line-height: 2rem;
+  line-height: 1;
   background: #f7faff;
   cursor: pointer;
 }
@@ -3060,8 +3060,9 @@ button:disabled {
   .mobile-side-header {
     display: flex;
     justify-content: flex-end;
-    align-items: center;
+    align-items: stretch;
     gap: 0.4rem;
+    min-height: 2rem;
   }
 
   .mobile-settings-popover {
