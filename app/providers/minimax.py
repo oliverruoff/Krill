@@ -48,6 +48,9 @@ class MiniMaxProvider(LLMProvider):
 
         text = _extract_text(response_body)
         if not text:
+            detail = _extract_empty_reason(response_body)
+            if detail:
+                raise RuntimeError(f"MiniMax returned an empty response. {detail}")
             raise RuntimeError("MiniMax returned an empty response.")
 
         used_tokens = _extract_total_tokens(response_body)
@@ -147,6 +150,12 @@ def _post_json_return_body(payload: dict[str, object], api_key: str) -> dict[str
 
 
 def _extract_text(payload: dict[str, object]) -> str:
+    top_level_content = payload.get("content")
+    if isinstance(top_level_content, str):
+        sanitized_top_level = _sanitize_visible_text(top_level_content)
+        if sanitized_top_level:
+            return sanitized_top_level
+
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
         return ""
@@ -161,7 +170,9 @@ def _extract_text(payload: dict[str, object]) -> str:
 
     content = message.get("content")
     if isinstance(content, str):
-        return _sanitize_visible_text(content)
+        sanitized = _sanitize_visible_text(content)
+        if sanitized:
+            return sanitized
 
     if isinstance(content, list):
         visible_parts: list[str] = []
@@ -175,7 +186,9 @@ def _extract_text(payload: dict[str, object]) -> str:
                 sanitized = _sanitize_visible_text(text)
                 if sanitized:
                     visible_parts.append(sanitized)
-        return "\n".join(visible_parts).strip()
+        combined = "\n".join(visible_parts).strip()
+        if combined:
+            return combined
 
     return ""
 
@@ -199,6 +212,38 @@ def _extract_total_tokens(payload: dict[str, object]) -> int | None:
 def _sanitize_visible_text(content: str) -> str:
     stripped = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
     return stripped.strip()
+
+
+def _extract_empty_reason(payload: dict[str, object]) -> str:
+    base_resp = payload.get("base_resp")
+    details: list[str] = []
+    if isinstance(base_resp, dict):
+        status_code = base_resp.get("status_code")
+        status_msg = base_resp.get("status_msg")
+        if isinstance(status_code, int) and status_code != 0:
+            details.append(f"MiniMax status code: {status_code}.")
+        if isinstance(status_msg, str) and status_msg.strip():
+            details.append(f"MiniMax status message: {status_msg.strip()}.")
+
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0]
+        if isinstance(first_choice, dict):
+            finish_reason = first_choice.get("finish_reason")
+            if isinstance(finish_reason, str) and finish_reason.strip():
+                details.append(f"Finish reason: {finish_reason.strip()}.")
+
+            message = first_choice.get("message")
+            if isinstance(message, dict):
+                reasoning_content = message.get("reasoning_content")
+                if isinstance(reasoning_content, str) and reasoning_content.strip():
+                    details.append("MiniMax returned reasoning content without visible reply text.")
+
+    top_level_content = payload.get("content")
+    if isinstance(top_level_content, str) and top_level_content.strip():
+        details.append("Top-level content was present but no visible reply text could be parsed.")
+
+    return " ".join(details).strip()
 
 
 def _safe_read_error(exc: error.HTTPError) -> str:
