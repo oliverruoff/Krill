@@ -43,6 +43,8 @@ class IntegrationPlugin(ABC):
         job: "TimedJob",
         text: str,
         settings: "Settings",
+        *,
+        hidden: bool = False,
     ) -> None:
         """Deliver a timed job result via this integration.
 
@@ -53,6 +55,8 @@ class IntegrationPlugin(ABC):
             job: The timed job that was executed.
             text: The formatted output text to deliver.
             settings: Current application settings.
+            hidden: True when the timed job result is intentionally suppressed
+                from user-facing delivery and should stay Gateway-only.
         """
 
     def get_timed_job_channel_option(

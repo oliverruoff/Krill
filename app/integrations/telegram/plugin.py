@@ -61,8 +61,12 @@ class TelegramIntegration(IntegrationPlugin):
         job: TimedJob,
         text: str,
         settings: Settings,
+        *,
+        hidden: bool = False,
     ) -> None:
         """Send timed job output to the Telegram owner chat."""
+        if hidden:
+            return
         target = self._get_target(settings)
         if target is None:
             return

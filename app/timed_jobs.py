@@ -396,6 +396,7 @@ async def _dispatch_all(
     used_tools: list[dict[str, str]],
     trace_messages: list[dict[str, str]],
     executed_at: datetime,
+    hidden_from_history: bool = False,
 ) -> None:
     """Fan out job results to all requested channels."""
     settings = await load_settings()
@@ -414,7 +415,7 @@ async def _dispatch_all(
     for plugin in get_runtime_integrations():
         if plugin.integration_id in job.channels:
             with contextlib.suppress(Exception):
-                await plugin.dispatch_timed_job(job, safe_output, settings)
+                await plugin.dispatch_timed_job(job, safe_output, settings, hidden=hidden_from_history)
 
 
 async def _dispatch_gateway(
