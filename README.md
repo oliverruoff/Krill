@@ -83,6 +83,7 @@ Krill is provider-agnostic through a registry pattern:
 - `openai_codex_oauth` (ChatGPT/Codex OAuth)
 - `google_gemini_oauth` (Gemini OAuth, unofficial)
 - `gemini`
+- `minimax`
 - `openrouter`
 
 Provider modules live in `app/providers/`, with shared interface in `app/providers/base.py` and registration in `app/providers/registry.py`.
@@ -107,6 +108,12 @@ Gemini OAuth provider notes:
 - if import fails, paste OAuth JSON (or file path) in the manual completion field
 - this is an unofficial integration and may carry account-policy risk; use at your own risk
 - Gemini OAuth provider routes are isolated in `app/routers/gemini_oauth.py` and mounted from `app/main.py`
+
+MiniMax provider notes:
+
+- choose `minimax` in Setup and add a MiniMax API key from `https://platform.minimax.io/user-center/basic-information/interface-key`
+- supports both `MiniMax-M2.7` and `MiniMax-M2.5`, with `MiniMax-M2.7` as the default
+- MiniMax reasoning blocks are stripped from user-visible replies in Gateway and integrations
 
 ### 3) Tools (MCP layer)
 

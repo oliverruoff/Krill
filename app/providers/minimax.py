@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from urllib import error, request
 
 from .base import LLMProvider
@@ -12,7 +13,8 @@ class MiniMaxProvider(LLMProvider):
     display_name = "MiniMax"
     api_key_url = "https://platform.minimax.io/user-center/basic-information/interface-key"
     available_models = [
-        {"id": "MiniMax-M2.5", "label": "MiniMax-M2.5", "token_limit": 197000, "supports_images": False},
+        {"id": "MiniMax-M2.7", "label": "MiniMax-M2.7", "token_limit": 204800, "supports_images": False},
+        {"id": "MiniMax-M2.5", "label": "MiniMax-M2.5", "token_limit": 204800, "supports_images": False},
     ]
 
     async def generate(
@@ -30,6 +32,8 @@ class MiniMaxProvider(LLMProvider):
         payload = {
             "model": _resolve_model(model),
             "messages": _build_messages(history, prompt, system_prompt),
+            "temperature": 1.0,
+            "top_p": 0.95,
         }
 
         try:
@@ -57,7 +61,9 @@ class MiniMaxProvider(LLMProvider):
         payload = {
             "model": _resolve_model(model),
             "messages": [{"role": "user", "content": "Health check."}],
-            "max_tokens": 16,
+            "max_completion_tokens": 16,
+            "temperature": 1.0,
+            "top_p": 0.95,
         }
 
         try:
@@ -85,7 +91,7 @@ class MiniMaxProvider(LLMProvider):
 def _resolve_model(model: str) -> str:
     resolved = model.strip()
     if not resolved:
-        return "MiniMax-M2.5"
+        return "MiniMax-M2.7"
 
     return resolved
 
@@ -110,7 +116,7 @@ def _build_messages(history: list[dict[str, str]], prompt: str, system_prompt: s
 def _post_json_status(payload: dict[str, object], api_key: str) -> int:
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(
-        url="https://api.minimax.io/v1/chat/completions",
+        url="https://api.minimax.io/v1/text/chatcompletion_v2",
         data=body,
         headers={
             "Content-Type": "application/json",
@@ -127,7 +133,7 @@ def _post_json_status(payload: dict[str, object], api_key: str) -> int:
 def _post_json_return_body(payload: dict[str, object], api_key: str) -> dict[str, object]:
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(
-        url="https://api.minimax.io/v1/chat/completions",
+        url="https://api.minimax.io/v1/text/chatcompletion_v2",
         data=body,
         headers={
             "Content-Type": "application/json",
@@ -155,7 +161,21 @@ def _extract_text(payload: dict[str, object]) -> str:
 
     content = message.get("content")
     if isinstance(content, str):
-        return content.strip()
+        return _sanitize_visible_text(content)
+
+    if isinstance(content, list):
+        visible_parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "text":
+                continue
+            text = item.get("text")
+            if isinstance(text, str):
+                sanitized = _sanitize_visible_text(text)
+                if sanitized:
+                    visible_parts.append(sanitized)
+        return "\n".join(visible_parts).strip()
 
     return ""
 
@@ -169,7 +189,16 @@ def _extract_total_tokens(payload: dict[str, object]) -> int | None:
     if isinstance(total, int):
         return total
 
+    total = usage.get("output_tokens")
+    if isinstance(total, int):
+        return total
+
     return None
+
+
+def _sanitize_visible_text(content: str) -> str:
+    stripped = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
+    return stripped.strip()
 
 
 def _safe_read_error(exc: error.HTTPError) -> str:
