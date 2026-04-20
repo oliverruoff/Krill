@@ -5,13 +5,16 @@
 import { state } from "./state.js";
 import { themeToggleButton, mobileThemeToggleButton } from "./dom.js";
 
-const ICON_DEFAULT = "/static/img/krill_icon.png";
-const ICON_BUSINESS = "/static/img/krill_icon_business.png";
-const BANNER_DEFAULT = "/static/img/krill_banner.png";
-const BANNER_BUSINESS = "/static/img/krill_banner_business.png";
-
 export function themeIconPath(theme) {
-  return theme === "business" ? ICON_BUSINESS : ICON_DEFAULT;
+  const normalized = normalizeThemeMode(theme);
+  const background = normalized === "business"
+    ? "#19324a"
+    : normalized === "dark"
+      ? "#141c28"
+      : "#fff7f3";
+  return "data:image/svg+xml," + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="${background}"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-size="40">🦐</text></svg>`
+  );
 }
 
 export function normalizeThemeMode(value) {
@@ -45,18 +48,8 @@ export function applyThemeMode(theme) {
   } catch (_error) {
     // Ignore localStorage failures (private mode, blocked storage).
   }
-  // Swap icon assets for business theme.
-  const iconSrc = themeIconPath(normalized);
   const favicon = document.getElementById("favicon");
-  if (favicon) favicon.href = iconSrc;
-  document.querySelectorAll(".gateway-icon, .mobile-left-panel-icon").forEach((img) => {
-    img.src = iconSrc;
-  });
-  // Swap banner asset for business theme.
-  const bannerSrc = normalized === "business" ? BANNER_BUSINESS : BANNER_DEFAULT;
-  document.querySelectorAll(".gateway-banner").forEach((img) => {
-    img.src = bannerSrc;
-  });
+  if (favicon) favicon.href = themeIconPath(normalized);
   renderThemeToggleLabels();
 }
 

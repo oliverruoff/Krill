@@ -14,12 +14,15 @@
         }
         const theme = storedTheme === "dark" ? "dark" : storedTheme === "business" ? "business" : "light";
         document.documentElement.setAttribute("data-theme", theme);
-        var _iconPath = theme === "business" ? "/static/img/krill_icon_business.png" : "/static/img/krill_icon.png";
-        var _bannerPath = theme === "business" ? "/static/img/krill_banner_business.png" : null;
+        var _faviconHref = "data:image/svg+xml," + encodeURIComponent(
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="'
+          + (theme === "business" ? "#19324a" : theme === "dark" ? "#141c28" : "#fff7f3")
+          + '"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-size="40">🦐</text></svg>'
+        );
       })();
     </script>
-    <link id="favicon" rel="icon" type="image/png" href="/static/img/krill_icon.png" />
-    <script>if(typeof _iconPath==="string"){document.getElementById("favicon").href=_iconPath;}</script>
+    <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23fff7f3'/%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' dominant-baseline='middle' font-size='40'%3E%F0%9F%A6%90%3C/text%3E%3C/svg%3E" />
+    <script>if(typeof _faviconHref==="string"){document.getElementById("favicon").href=_faviconHref;}</script>
     <link rel="stylesheet" href="/static/css/style.css" />
   </head>
   <body class="gateway-page">
@@ -43,11 +46,10 @@
           <span class="mobile-drawer-handle-text">Chats</span>
         </button>
         <div class="mobile-brand-row">
-          <img src="/static/img/krill_icon.png" alt="Krill" class="gateway-icon" />
+          <span class="gateway-icon brand-shrimp" aria-hidden="true">🦐</span>
           <p id="mobile-assistant-name" class="mobile-assistant-name">Assistant</p>
         </div>
-        <img src="/static/img/krill_banner.png" alt="Krill" class="gateway-banner" />
-        <script>if(typeof _bannerPath==="string"){document.querySelector(".gateway-banner").src=_bannerPath;}</script>
+        <div class="gateway-wordmark" aria-label="Krill">KRILL</div>
         <div class="assistant-header">
           <p id="assistant-title" class="assistant-title">This is your personal assistant.</p>
           <p id="assistant-meta" class="assistant-meta">Loading assistant metadata...</p>
@@ -89,7 +91,7 @@
         <aside class="chat-history-panel">
           <div class="mobile-left-panel-header">
             <div class="mobile-left-panel-brand">
-              <img src="/static/img/krill_icon.png" alt="Krill" class="mobile-left-panel-icon" />
+              <span class="mobile-left-panel-icon brand-shrimp" aria-hidden="true">🦐</span>
               <p id="mobile-left-assistant-name" class="mobile-left-assistant-name">Assistant</p>
             </div>
             <div class="mobile-left-panel-switchers">

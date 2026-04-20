@@ -23,6 +23,9 @@
   --error: #b42318;
   --ok: #027a48;
   --shadow: 0 12px 28px rgba(18, 32, 51, 0.08);
+  --brand-wordmark-gradient: linear-gradient(135deg, #f58f78 0%, #f2b77f 45%, #5abfe4 100%);
+  --brand-wordmark-shadow: 0 6px 18px rgba(90, 191, 228, 0.22);
+  --brand-shrimp-shadow: 0 8px 20px rgba(251, 150, 130, 0.28);
   color-scheme: light;
 }
 
@@ -49,7 +52,16 @@
   --text-inverse: #f4f8ff;
   --menu-surface: #141c28;
   --shadow: 0 14px 32px rgba(0, 0, 0, 0.44);
+  --brand-wordmark-gradient: linear-gradient(135deg, #f0b08e 0%, #d58d6a 42%, #68b8d5 100%);
+  --brand-wordmark-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+  --brand-shrimp-shadow: 0 10px 24px rgba(104, 184, 213, 0.24);
   color-scheme: dark;
+}
+
+:root[data-theme="business"] {
+  --brand-wordmark-gradient: linear-gradient(135deg, #f3d48c 0%, #d8b466 36%, #8bb8c7 100%);
+  --brand-wordmark-shadow: 0 8px 22px rgba(17, 43, 68, 0.24);
+  --brand-shrimp-shadow: 0 10px 24px rgba(17, 43, 68, 0.22);
 }
 
 * {
@@ -690,16 +702,34 @@ button:disabled {
   box-shadow: var(--shadow);
 }
 
-.gateway-banner {
-  height: 56px;
-  width: auto;
+.gateway-wordmark {
+  font-family: Georgia, "Palatino Linotype", "Book Antiqua", Garamond, serif;
+  font-size: clamp(2rem, 2.8vw, 2.9rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.42rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: var(--brand-wordmark-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: var(--brand-wordmark-shadow);
+}
+
+.brand-shrimp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  filter: drop-shadow(var(--brand-shrimp-shadow));
 }
 
 .gateway-icon {
   display: none;
   width: 34px;
   height: 34px;
-  object-fit: contain;
+  font-size: 1.65rem;
 }
 
 .mobile-brand-row {
@@ -3178,7 +3208,7 @@ button:disabled {
   .mobile-left-panel-icon {
     width: 22px;
     height: 22px;
-    object-fit: contain;
+    font-size: 1.15rem;
     flex: 0 0 auto;
   }
 
@@ -3279,7 +3309,7 @@ button:disabled {
     border-color: color-mix(in srgb, var(--accent-strong) 38%, var(--border) 62%);
   }
 
-  .gateway-banner {
+  .gateway-wordmark {
     display: none;
   }
 
@@ -3292,6 +3322,7 @@ button:disabled {
     display: block;
     width: 27px;
     height: 27px;
+    font-size: 1.35rem;
     justify-self: center;
     flex: 0 0 auto;
   }

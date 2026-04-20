@@ -152,12 +152,16 @@ function applyThemeMode(theme) {
   } catch (_error) {
     // Ignore localStorage failures (private mode, blocked storage).
   }
-  // Swap favicon for business theme.
   const favicon = document.getElementById("favicon");
   if (favicon) {
-    favicon.href = normalized === "business"
-      ? "/static/img/krill_icon_business.png"
-      : "/static/img/krill_icon.png";
+    const background = normalized === "business"
+      ? "#19324a"
+      : normalized === "dark"
+        ? "#141c28"
+        : "#fff7f3";
+    favicon.href = "data:image/svg+xml," + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="${background}"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-size="40">🦐</text></svg>`
+    );
   }
 }
 
