@@ -304,68 +304,70 @@
         <div class="timed-jobs-layout">
           <section class="timed-jobs-editor" aria-labelledby="timed-jobs-editor-title">
             <h3 id="timed-jobs-editor-title">Job Editor</h3>
-            <div class="timed-job-field">
-              <label for="timed-job-title">Title</label>
-              <input id="timed-job-title" type="text" maxlength="120" placeholder="Morning digest" autocomplete="off" data-form-type="other" />
-            </div>
-            <div class="timed-job-field">
-              <label for="timed-job-prompt">Prompt</label>
-              <textarea id="timed-job-prompt" rows="6" maxlength="5000" placeholder="Summarize top tasks and blockers for today." autocomplete="off" data-form-type="other"></textarea>
-            </div>
-            <div class="timed-job-grid">
+            <div class="timed-jobs-editor-body">
               <div class="timed-job-field">
-                <label for="timed-job-interval">Interval</label>
-                <select id="timed-job-interval">
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="hourly">Hourly</option>
-                  <option value="every_2_hours">Every 2 hours</option>
-                  <option value="every_30_min">Every 30 min</option>
-                  <option value="every_15_min">Every 15 min</option>
-                  <option value="every_10_min">Every 10 min</option>
-                  <option value="every_5_min">Every 5 min</option>
-                  <option value="once">One-time</option>
-                </select>
+                <label for="timed-job-title">Title</label>
+                <input id="timed-job-title" type="text" maxlength="120" placeholder="Morning digest" autocomplete="off" data-form-type="other" />
               </div>
               <div class="timed-job-field">
-                <label for="timed-job-start-date">Start date</label>
-                <input id="timed-job-start-date" type="date" autocomplete="off" data-form-type="other" />
+                <label for="timed-job-prompt">Prompt</label>
+                <textarea id="timed-job-prompt" rows="6" maxlength="5000" placeholder="Summarize top tasks and blockers for today." autocomplete="off" data-form-type="other"></textarea>
+              </div>
+              <div class="timed-job-grid">
+                <div class="timed-job-field">
+                  <label for="timed-job-interval">Interval</label>
+                  <select id="timed-job-interval">
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="hourly">Hourly</option>
+                    <option value="every_2_hours">Every 2 hours</option>
+                    <option value="every_30_min">Every 30 min</option>
+                    <option value="every_15_min">Every 15 min</option>
+                    <option value="every_10_min">Every 10 min</option>
+                    <option value="every_5_min">Every 5 min</option>
+                    <option value="once">One-time</option>
+                  </select>
+                </div>
+                <div class="timed-job-field">
+                  <label for="timed-job-start-date">Start date</label>
+                  <input id="timed-job-start-date" type="date" autocomplete="off" data-form-type="other" />
+                </div>
+                <div class="timed-job-field">
+                  <label for="timed-job-time">Time</label>
+                  <input id="timed-job-time" type="time" step="60" autocomplete="off" data-form-type="other" />
+                </div>
+                <div class="timed-job-field timed-job-field-wide">
+                  <label for="timed-job-provider">Execution provider</label>
+                  <select id="timed-job-provider">
+                    <option value="">Use active provider/model</option>
+                  </select>
+                </div>
+                <div class="timed-job-field timed-job-field-wide">
+                  <label for="timed-job-model">Execution model</label>
+                  <select id="timed-job-model">
+                    <option value="">Use active provider model</option>
+                  </select>
+                </div>
+              </div>
+              <div class="timed-job-toggle-row">
+                <label class="timed-job-check" for="timed-job-enabled">
+                  <input id="timed-job-enabled" type="checkbox" checked />
+                  <span>Enabled</span>
+                </label>
+                <label class="timed-job-check" for="timed-job-output-decision-enabled">
+                  <input id="timed-job-output-decision-enabled" type="checkbox" />
+                  <span>Output decision (AI decides notify/no notify)</span>
+                </label>
               </div>
               <div class="timed-job-field">
-                <label for="timed-job-time">Time</label>
-                <input id="timed-job-time" type="time" step="60" autocomplete="off" data-form-type="other" />
+                <p class="timed-job-channel-title">Output channels</p>
+                <div id="timed-job-channels" class="timed-job-channels"></div>
               </div>
-              <div class="timed-job-field timed-job-field-wide">
-                <label for="timed-job-provider">Execution provider</label>
-                <select id="timed-job-provider">
-                  <option value="">Use active provider/model</option>
-                </select>
-              </div>
-              <div class="timed-job-field timed-job-field-wide">
-                <label for="timed-job-model">Execution model</label>
-                <select id="timed-job-model">
-                  <option value="">Use active provider model</option>
-                </select>
-              </div>
-            </div>
-            <div class="timed-job-toggle-row">
-              <label class="timed-job-check" for="timed-job-enabled">
-                <input id="timed-job-enabled" type="checkbox" checked />
-                <span>Enabled</span>
-              </label>
-              <label class="timed-job-check" for="timed-job-output-decision-enabled">
-                <input id="timed-job-output-decision-enabled" type="checkbox" />
-                <span>Output decision (AI decides notify/no notify)</span>
-              </label>
-            </div>
-            <div class="timed-job-field">
-              <p class="timed-job-channel-title">Output channels</p>
-              <div id="timed-job-channels" class="timed-job-channels"></div>
             </div>
             <div class="timed-job-actions">
               <button type="button" id="timed-job-save" class="secondary">Save job</button>
-              <button type="button" id="timed-job-reset" class="secondary">New job</button>
+              <button type="button" id="timed-job-reset" class="secondary">Cancel</button>
             </div>
           </section>
           <section class="timed-jobs-list-wrap" aria-labelledby="timed-jobs-list-title">

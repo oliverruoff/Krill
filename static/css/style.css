@@ -1120,6 +1120,7 @@ button:disabled {
 .timed-jobs-editor,
 .timed-jobs-list-wrap {
   min-height: 0;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: #fcfdff;
@@ -1127,6 +1128,19 @@ button:disabled {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 0.5rem;
+}
+
+.timed-jobs-editor {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.timed-jobs-editor-body {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 0.6rem;
+  padding-right: 0.18rem;
 }
 
 #timed-jobs-list {
@@ -1149,6 +1163,11 @@ button:disabled {
 .timed-job-field input,
 .timed-job-field select {
   margin: 0;
+}
+
+.timed-job-field textarea {
+  min-height: 8.5rem;
+  resize: vertical;
 }
 
 .timed-job-grid {
@@ -1206,11 +1225,18 @@ button:disabled {
 .timed-job-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.45rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent 12%);
+  background:
+    linear-gradient(to bottom, rgba(252, 253, 255, 0), rgba(252, 253, 255, 0.96) 38%, rgba(252, 253, 255, 1) 100%);
 }
 
 .timed-job-actions button {
   margin: 0;
+  min-width: 8.5rem;
 }
 
 .token-usage-modal-card {
@@ -1482,7 +1508,7 @@ button:disabled {
 .timed-job-item-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.45rem;
   flex-wrap: wrap;
 }
@@ -1494,12 +1520,17 @@ button:disabled {
   background: transparent;
   text-align: left;
   cursor: pointer;
-  width: 100%;
+  width: auto;
+  flex: 1 1 240px;
+  min-width: 0;
   font-size: 0.86rem;
   font-weight: 700;
   color: var(--text);
   box-shadow: none;
   margin-top: 0;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .timed-job-item-title:hover {
@@ -3537,6 +3568,12 @@ button:disabled {
   .timed-jobs-editor,
   .timed-jobs-list-wrap {
     display: block;
+    overflow: visible;
+  }
+
+  .timed-jobs-editor-body {
+    overflow: visible;
+    padding-right: 0;
   }
 
   .timed-jobs-list-wrap {
@@ -3551,6 +3588,17 @@ button:disabled {
   .timed-job-confirm-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .timed-job-actions {
+    position: sticky;
+    bottom: 0;
+    margin-top: 0.7rem;
+    padding-bottom: 0.1rem;
+  }
+
+  .timed-job-actions button {
+    flex: 1 1 160px;
   }
 
   .timed-job-confirm-actions .chat-history-action-btn,
@@ -3632,6 +3680,12 @@ button:disabled {
   border-color: rgba(216, 108, 108, 0.45);
   background: rgba(155, 43, 43, 0.16);
   color: #f3b5b5;
+}
+
+:root[data-theme="dark"] .timed-job-actions {
+  border-top-color: color-mix(in srgb, var(--border) 82%, transparent 18%);
+  background:
+    linear-gradient(to bottom, rgba(25, 28, 34, 0), rgba(25, 28, 34, 0.94) 38%, rgba(25, 28, 34, 1) 100%);
 }
 
 :root[data-theme="dark"] .menu-item,
@@ -4004,6 +4058,12 @@ button:disabled {
   border-color: #e7c4bd;
   background: #fbf1ee;
   color: #8b3f2e;
+}
+
+:root[data-theme="business"] .timed-job-actions {
+  border-top-color: color-mix(in srgb, var(--border) 84%, transparent 16%);
+  background:
+    linear-gradient(to bottom, rgba(250, 247, 242, 0), rgba(250, 247, 242, 0.96) 38%, rgba(250, 247, 242, 1) 100%);
 }
 
 :root[data-theme="business"] .menu-item,
