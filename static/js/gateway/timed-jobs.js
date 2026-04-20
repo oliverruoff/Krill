@@ -200,6 +200,7 @@ export function renderTimedJobModelOptions(providerId, selectedModel = "") {
 
 export function resetTimedJobEditor() {
   state.timedJobEditingId = "";
+  clearPendingTimedJobDelete();
   if (timedJobTitleInput instanceof HTMLInputElement) {
     timedJobTitleInput.value = "";
   }
@@ -333,6 +334,22 @@ function setTimedJobExpanded(jobId, expanded) {
   delete state.expandedTimedJobIds[normalizedJobId];
 }
 
+function getPendingTimedJobDeleteId() {
+  return String(state.pendingTimedJobDeleteId || "").trim();
+}
+
+function clearPendingTimedJobDelete() {
+  state.pendingTimedJobDeleteId = "";
+}
+
+function setPendingTimedJobDelete(jobId) {
+  const normalizedJobId = String(jobId || "").trim();
+  state.pendingTimedJobDeleteId = normalizedJobId;
+  if (normalizedJobId) {
+    setTimedJobExpanded(normalizedJobId, true);
+  }
+}
+
 export function renderTimedJobsList() {
   if (!(timedJobsListNode instanceof HTMLElement)) {
     return;
@@ -347,11 +364,13 @@ export function renderTimedJobsList() {
   }
 
   state.timedJobs.forEach((job) => {
-    const isExpanded = isTimedJobExpanded(job.id);
+    const isPendingDelete = getPendingTimedJobDeleteId() === job.id;
+    const isExpanded = isTimedJobExpanded(job.id) || isPendingDelete;
     const card = document.createElement("article");
     card.className = "timed-job-item";
     card.dataset.timedJobId = job.id;
     card.classList.toggle("is-expanded", isExpanded);
+    card.classList.toggle("is-pending-delete", isPendingDelete);
 
     const titleRow = document.createElement("div");
     titleRow.className = "timed-job-item-row";
@@ -365,34 +384,53 @@ export function renderTimedJobsList() {
     titleNode.setAttribute("aria-expanded", isExpanded ? "true" : "false");
 
     const actions = document.createElement("div");
-    actions.className = "short-term-item-actions";
+    actions.className = isPendingDelete ? "timed-job-confirm-actions" : "short-term-item-actions";
 
-    const triggerNowButton = document.createElement("button");
-    triggerNowButton.type = "button";
-    triggerNowButton.className = "timed-job-trigger-link";
-    triggerNowButton.dataset.timedJobAction = "trigger-now";
-    triggerNowButton.dataset.timedJobId = job.id;
-    triggerNowButton.textContent = "trigger";
+    if (isPendingDelete) {
+      const cancelDeleteButton = document.createElement("button");
+      cancelDeleteButton.type = "button";
+      cancelDeleteButton.className = "chat-history-action-btn";
+      cancelDeleteButton.dataset.timedJobAction = "cancel-delete";
+      cancelDeleteButton.dataset.timedJobId = job.id;
+      cancelDeleteButton.textContent = "Cancel";
 
-    const editButton = document.createElement("button");
-    editButton.type = "button";
-    editButton.className = "chat-history-action-btn";
-    editButton.dataset.timedJobAction = "edit";
-    editButton.dataset.timedJobId = job.id;
-    editButton.setAttribute("aria-label", "Edit timed job");
-    editButton.textContent = "\u270E";
+      const confirmDeleteButton = document.createElement("button");
+      confirmDeleteButton.type = "button";
+      confirmDeleteButton.className = "timed-job-confirm-delete-btn";
+      confirmDeleteButton.dataset.timedJobAction = "confirm-delete";
+      confirmDeleteButton.dataset.timedJobId = job.id;
+      confirmDeleteButton.textContent = "Delete job";
 
-    const deleteButton = document.createElement("button");
-    deleteButton.type = "button";
-    deleteButton.className = "chat-history-action-btn danger";
-    deleteButton.dataset.timedJobAction = "delete";
-    deleteButton.dataset.timedJobId = job.id;
-    deleteButton.setAttribute("aria-label", "Delete timed job");
-    deleteButton.textContent = "\u00D7";
+      actions.appendChild(cancelDeleteButton);
+      actions.appendChild(confirmDeleteButton);
+    } else {
+      const triggerNowButton = document.createElement("button");
+      triggerNowButton.type = "button";
+      triggerNowButton.className = "timed-job-trigger-link";
+      triggerNowButton.dataset.timedJobAction = "trigger-now";
+      triggerNowButton.dataset.timedJobId = job.id;
+      triggerNowButton.textContent = "trigger";
 
-    actions.appendChild(triggerNowButton);
-    actions.appendChild(editButton);
-    actions.appendChild(deleteButton);
+      const editButton = document.createElement("button");
+      editButton.type = "button";
+      editButton.className = "chat-history-action-btn";
+      editButton.dataset.timedJobAction = "edit";
+      editButton.dataset.timedJobId = job.id;
+      editButton.setAttribute("aria-label", "Edit timed job");
+      editButton.textContent = "\u270E";
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "chat-history-action-btn danger";
+      deleteButton.dataset.timedJobAction = "delete";
+      deleteButton.dataset.timedJobId = job.id;
+      deleteButton.setAttribute("aria-label", "Delete timed job");
+      deleteButton.textContent = "\u00D7";
+
+      actions.appendChild(triggerNowButton);
+      actions.appendChild(editButton);
+      actions.appendChild(deleteButton);
+    }
     titleRow.appendChild(titleNode);
     titleRow.appendChild(actions);
 
@@ -408,6 +446,13 @@ export function renderTimedJobsList() {
     detailsNode.className = "timed-job-item-details";
     detailsNode.classList.toggle("hidden", !isExpanded);
     detailsNode.appendChild(promptNode);
+
+    if (isPendingDelete) {
+      const confirmDeleteNotice = document.createElement("p");
+      confirmDeleteNotice.className = "timed-job-delete-confirmation";
+      confirmDeleteNotice.textContent = "Delete this timed job? This cannot be undone.";
+      detailsNode.appendChild(confirmDeleteNotice);
+    }
 
     card.appendChild(titleRow);
     card.appendChild(metaNode);
@@ -513,6 +558,9 @@ export async function loadTimedJobs(renderModal = false) {
     const payload = await fetchTimedJobs();
     state.timedJobs = normalizeIncomingTimedJobs(payload.jobs);
     state.timedJobChannels = normalizeTimedJobChannels(payload.channels);
+    if (!state.timedJobs.some((job) => job.id === getPendingTimedJobDeleteId())) {
+      clearPendingTimedJobDelete();
+    }
     if (renderModal) {
       renderTimedJobChannelOptions(Array.isArray(collectTimedJobPayload().channels) ? collectTimedJobPayload().channels : ["gateway"]);
       renderTimedJobsList();
@@ -599,6 +647,7 @@ export function closeTimedJobsModal() {
   if (!(timedJobsModal instanceof HTMLElement)) {
     return;
   }
+  clearPendingTimedJobDelete();
   timedJobsModal.classList.add("hidden");
   stopTimedJobsClock();
   if (
@@ -634,6 +683,7 @@ export async function handleTimedJobsListAction(event) {
   }
 
   if (action === "edit") {
+    clearPendingTimedJobDelete();
     populateTimedJobEditor(job);
     renderTimedJobsList();
     setStatus("Editing timed job.");
@@ -647,7 +697,22 @@ export async function handleTimedJobsListAction(event) {
   }
 
   if (action === "delete") {
+    setPendingTimedJobDelete(jobId);
+    renderTimedJobsList();
+    setStatus("Confirm deletion to remove the timed job.");
+    return;
+  }
+
+  if (action === "cancel-delete") {
+    clearPendingTimedJobDelete();
+    renderTimedJobsList();
+    setStatus("Timed job deletion cancelled.");
+    return;
+  }
+
+  if (action === "confirm-delete") {
     try {
+      clearPendingTimedJobDelete();
       await deleteTimedJob(jobId);
       await loadTimedJobs(true);
       if (state.timedJobEditingId === jobId) {

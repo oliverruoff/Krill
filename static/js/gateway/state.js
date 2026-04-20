@@ -72,6 +72,7 @@ export const state = {
   timedJobs: [],
   timedJobChannels: [],
   timedJobEditingId: "",
+  pendingTimedJobDeleteId: "",
   expandedTimedJobIds: {},
   timedJobsClockTimerId: null,
   serverTimezoneName: "UTC",

@@ -1484,6 +1484,7 @@ button:disabled {
   justify-content: space-between;
   align-items: center;
   gap: 0.45rem;
+  flex-wrap: wrap;
 }
 
 .timed-job-item-title {
@@ -1521,6 +1522,59 @@ button:disabled {
 .timed-job-item-details {
   display: grid;
   gap: 0.35rem;
+}
+
+.timed-job-confirm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+}
+
+.timed-job-confirm-actions .chat-history-action-btn {
+  padding: 0.34rem 0.7rem;
+  min-height: 2rem;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: #f5f8fc;
+  color: #516377;
+}
+
+.timed-job-confirm-actions .chat-history-action-btn:hover {
+  background: #e9eef6;
+  color: #33475d;
+}
+
+.timed-job-confirm-delete-btn {
+  margin: 0;
+  padding: 0.34rem 0.8rem;
+  min-width: auto;
+  min-height: 2rem;
+  border: 1px solid #c63f3f;
+  border-radius: 7px;
+  background: #d64545;
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.timed-job-confirm-delete-btn:hover {
+  background: #bf3737;
+  border-color: #b33636;
+}
+
+.timed-job-delete-confirmation {
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #f0c7c7;
+  border-radius: 9px;
+  background: #fff5f5;
+  color: #8e2d2d;
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 .timed-job-item-details.hidden {
@@ -3489,6 +3543,22 @@ button:disabled {
     margin-top: 0.7rem;
   }
 
+  .timed-job-item-row {
+    align-items: stretch;
+  }
+
+  .short-term-item-actions,
+  .timed-job-confirm-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .timed-job-confirm-actions .chat-history-action-btn,
+  .timed-job-confirm-delete-btn {
+    flex: 1 1 140px;
+    justify-content: center;
+  }
+
   #timed-jobs-list {
     max-height: 40vh;
     overflow-y: auto;
@@ -3550,11 +3620,18 @@ button:disabled {
 :root[data-theme="dark"] textarea,
 :root[data-theme="dark"] .mcp-contact-filter,
 :root[data-theme="dark"] .timed-job-check,
+:root[data-theme="dark"] .timed-job-confirm-actions .chat-history-action-btn,
 :root[data-theme="dark"] .token-usage-check,
 :root[data-theme="dark"] .short-term-item {
   background: var(--input-bg);
   border-color: var(--border);
   color: var(--text);
+}
+
+:root[data-theme="dark"] .timed-job-delete-confirmation {
+  border-color: rgba(216, 108, 108, 0.45);
+  background: rgba(155, 43, 43, 0.16);
+  color: #f3b5b5;
 }
 
 :root[data-theme="dark"] .menu-item,
@@ -3915,11 +3992,18 @@ button:disabled {
 :root[data-theme="business"] textarea,
 :root[data-theme="business"] .mcp-contact-filter,
 :root[data-theme="business"] .timed-job-check,
+:root[data-theme="business"] .timed-job-confirm-actions .chat-history-action-btn,
 :root[data-theme="business"] .token-usage-check,
 :root[data-theme="business"] .short-term-item {
   background: var(--input-bg);
   border-color: var(--border);
   color: var(--text);
+}
+
+:root[data-theme="business"] .timed-job-delete-confirmation {
+  border-color: #e7c4bd;
+  background: #fbf1ee;
+  color: #8b3f2e;
 }
 
 :root[data-theme="business"] .menu-item,
