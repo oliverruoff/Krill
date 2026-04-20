@@ -101,16 +101,23 @@ def _resolve_model(model: str) -> str:
 
 def _build_messages(history: list[dict[str, str]], prompt: str, system_prompt: str) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
+    system_parts: list[str] = []
 
     if system_prompt.strip():
-        messages.append({"role": "system", "content": system_prompt})
+        system_parts.append(system_prompt.strip())
 
     for item in history:
         role = item.get("role")
         content = item.get("content")
         if role not in {"system", "user", "assistant"} or not isinstance(content, str) or not content.strip():
             continue
+        if role == "system":
+            system_parts.append(content.strip())
+            continue
         messages.append({"role": role, "content": content})
+
+    if system_parts:
+        messages.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
 
     messages.append({"role": "user", "content": prompt})
     return messages
