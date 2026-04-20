@@ -10,6 +10,7 @@ from ..config import McpConfig, load_settings, save_settings
 from ..integrations.whatsapp.sidecar_manager import connect as whatsapp_connect
 from ..integrations.whatsapp.sidecar_manager import list_contacts as whatsapp_list_contacts
 from ..integrations.whatsapp.sidecar_manager import status as whatsapp_status
+from ..mcp_commands import execute_mcp_command, parse_mcp_chat_command
 from ..mcps import get_mcp, get_mcp_options, is_supported_mcp
 from ..mcps.git_ops import (
     SSH_PRIVATE_PARAM,
@@ -58,6 +59,10 @@ class WhatsAppStatusResponse(BaseModel):
     qr_data_url: str = ""
 
 
+class McpCommandExecuteRequest(BaseModel):
+    message: str = Field(default="", max_length=200)
+
+
 # ---------------------------------------------------------------------------
 # MCP listing and verification
 # ---------------------------------------------------------------------------
@@ -86,6 +91,25 @@ async def verify_mcp(payload: VerifyMcpRequest) -> VerifyMcpResponse:
         raise HTTPException(status_code=422, detail=detail)
 
     return VerifyMcpResponse(ok=True, detail=detail)
+
+
+@router.post("/api/mcps/commands")
+async def execute_mcp_chat_command(payload: McpCommandExecuteRequest) -> dict[str, object]:
+    parsed = parse_mcp_chat_command(payload.message)
+    if parsed is None:
+        raise HTTPException(status_code=422, detail="Unsupported MCP command.")
+
+    result = await execute_mcp_command(parsed.command_name, parsed.argument)
+    settings_payload = result.settings.model_dump() if result.settings is not None else None
+    return {
+        "ok": result.ok,
+        "text": result.text,
+        "command_name": result.command_name,
+        "mcp_id": result.mcp_id,
+        "mcp_name": result.mcp_name,
+        "enabled": result.enabled,
+        "settings": settings_payload,
+    }
 
 
 # ---------------------------------------------------------------------------

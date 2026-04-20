@@ -9,9 +9,11 @@ from typing import Any, Awaitable, Callable, TypedDict, cast
 from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
+from app.chat_summary import summarize_chat_context
 from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, load_settings, save_settings
 from app.debug_dumps import create_hidden_debug_chat
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed, is_over_context_threshold
+from app.mcp_commands import execute_mcp_command
 from app.providers import get_provider, get_provider_model_limit
 from app.providers.resilience import generate_with_retries
 from app.providers.vision import analyze_image
@@ -557,6 +559,10 @@ class TelegramBridgeWorker:
                 "Available commands:\n"
                 "/stop - Cancel the active task\n"
                 "/new - Create and switch to a new chat\n"
+                "/summarize - Summarize current chat context\n"
+                "/mcp_list - List all MCP ids\n"
+                "/mcp_enable <id> - Enable an MCP\n"
+                "/mcp_disable <id> - Disable an MCP\n"
                 "/chats - List recent Telegram chats\n"
                 "/use <number> - Switch active Telegram chat\n"
                 "/status - Show Telegram chat status\n"
@@ -572,6 +578,25 @@ class TelegramBridgeWorker:
             if stopped:
                 return _markdown_command_response("Stopped. Ready for the next task.")
             return _markdown_command_response("Nothing is currently running. Ready for the next task.")
+
+        if command in {"mcp_list", "mcp_enable", "mcp_disable"}:
+            result = await execute_mcp_command(command, argument)
+            return _markdown_command_response(result.text)
+
+        if command == "summarize":
+            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
+            self._active_chat_id = active.id if active is not None else ""
+            if active is None:
+                return _markdown_command_response("No active chat available to summarize.")
+            try:
+                summary, _used_tokens = await summarize_chat_context(
+                    settings=settings,
+                    history=build_model_history(active),
+                    memory_block=active.memory_block,
+                )
+            except Exception as exc:
+                return _markdown_command_response(f"Summarization failed: {exc}")
+            return _markdown_command_response(summary)
 
         if command == "debug":
             active = _get_active_chat(self._telegram_chats, self._active_chat_id)

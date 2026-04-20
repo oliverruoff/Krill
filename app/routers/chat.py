@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..chat_engine import generate_chat_response
+from ..chat_summary import summarize_chat_context
 from ..config import (
     ChatMessage,
     ChatSession,
@@ -95,6 +96,16 @@ class CompactChatRequest(BaseModel):
 class CompactChatResponse(BaseModel):
     memory_block: str
     history: list[ChatTurn]
+    used_tokens: int | None = None
+
+
+class SummarizeChatRequest(BaseModel):
+    history: list[ChatTurn] = Field(default_factory=list)
+    memory_block: str = Field(default="", max_length=8000)
+
+
+class SummarizeChatResponse(BaseModel):
+    summary: str
     used_tokens: int | None = None
 
 
@@ -483,6 +494,25 @@ async def compact_chat(payload: CompactChatRequest) -> CompactChatResponse:
         raise HTTPException(status_code=422, detail="Compaction failed: Provider returned empty compact memory.")
 
     return CompactChatResponse(memory_block=memory_block, history=[], used_tokens=used_tokens)
+
+
+@router.post("/api/chat/summarize", response_model=SummarizeChatResponse)
+async def summarize_chat(payload: SummarizeChatRequest) -> SummarizeChatResponse:
+    settings = await load_settings()
+    if not _is_setup_complete(settings):
+        raise HTTPException(status_code=422, detail="Setup is not complete.")
+
+    incoming_history = [turn.model_dump() for turn in payload.history]
+    try:
+        summary, used_tokens = await summarize_chat_context(
+            settings=settings,
+            history=incoming_history,
+            memory_block=payload.memory_block,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Summarization failed: {exc}") from exc
+
+    return SummarizeChatResponse(summary=summary, used_tokens=used_tokens)
 
 
 # ---------------------------------------------------------------------------

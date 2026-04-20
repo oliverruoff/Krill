@@ -32,6 +32,133 @@ function normalizeToolUsage(toolUsage) {
     .filter((entry) => entry.mcp_id && entry.tool_id);
 }
 
+function parseMcpCommand(message) {
+  const normalized = typeof message === "string" ? message.trim() : "";
+  if (!normalized.startsWith("/")) {
+    return null;
+  }
+
+  const [commandToken] = normalized.split(/\s+/, 1);
+  const commandName = commandToken.slice(1).trim().toLowerCase();
+  if (!["mcp_list", "mcp_enable", "mcp_disable"].includes(commandName)) {
+    return null;
+  }
+
+  return { commandName };
+}
+
+function isSummarizeCommand(message) {
+  return typeof message === "string" && message.trim().toLowerCase() === "/summarize";
+}
+
+async function syncGatewayMcpSettingsFromPayload(settingsPayload) {
+  if (!settingsPayload || typeof settingsPayload !== "object") {
+    return;
+  }
+
+  const { normalizeIncomingMcpConfigs, syncTelegramFlagsFromIntegrationConfig, updateTelegramStatusLabel } = await import("./mcp-handlers.js");
+  state.settings = settingsPayload;
+  state.mcpConfigs = normalizeIncomingMcpConfigs(settingsPayload.mcp_configs);
+  state.integrationConfigs = normalizeIncomingMcpConfigs(settingsPayload.integration_configs);
+  syncTelegramFlagsFromIntegrationConfig();
+  updateTelegramStatusLabel();
+  const { renderMcpPanel, renderIntegrationPanel } = await import("./mcp-panel.js");
+  renderMcpPanel();
+  renderIntegrationPanel();
+}
+
+async function runGatewayMcpCommand(chat, message) {
+  const response = await fetch("/api/mcps/commands", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!response.ok) {
+    const detail = await buildHttpErrorDetail(response, "Failed to run MCP command.");
+    throw new Error(detail);
+  }
+
+  const payload = await response.json();
+  const responseText = typeof payload?.text === "string" && payload.text.trim()
+    ? payload.text.trim()
+    : "MCP command completed.";
+  const timestamp = createTimestamp();
+  chat.messages.push({
+    role: "user",
+    content: message,
+    timestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: "",
+    status: "",
+  });
+  chat.messages.push({
+    role: "assistant",
+    content: responseText,
+    timestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: "",
+    status: "done",
+  });
+  chat.updated_at = timestamp;
+  await syncGatewayMcpSettingsFromPayload(payload?.settings);
+  const { persistChatsToSettings } = await import("./chat-sync.js");
+  await persistChatsToSettings();
+  const { renderActiveChat } = await import("./chat-render.js");
+  const { renderChatHistory } = await import("./chat-history.js");
+  renderActiveChat();
+  renderChatHistory();
+  setStatus(responseText);
+}
+
+async function runGatewaySummarizeCommand(chat, message) {
+  const response = await fetch("/api/chat/summarize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      history: toApiChatHistory(chat.messages),
+      memory_block: typeof chat.memory_block === "string" ? chat.memory_block : "",
+    }),
+  });
+  if (!response.ok) {
+    const detail = await buildHttpErrorDetail(response, "Failed to summarize chat context.");
+    throw new Error(detail);
+  }
+
+  const payload = await response.json();
+  const responseText = typeof payload?.summary === "string" && payload.summary.trim()
+    ? payload.summary.trim()
+    : "No summary was returned.";
+  const timestamp = createTimestamp();
+  chat.messages.push({
+    role: "user",
+    content: message,
+    timestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: "",
+    status: "",
+  });
+  chat.messages.push({
+    role: "assistant",
+    content: responseText,
+    timestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: "",
+    status: "done",
+  });
+  chat.updated_at = timestamp;
+  const { persistChatsToSettings } = await import("./chat-sync.js");
+  await persistChatsToSettings();
+  const { renderActiveChat } = await import("./chat-render.js");
+  const { renderChatHistory } = await import("./chat-history.js");
+  renderActiveChat();
+  renderChatHistory();
+  setStatus("Chat context summarized.");
+}
+
 function toApiChatHistory(messages) {
   return messages
     .filter((turn) => turn && (turn.role === "user" || turn.role === "assistant" || turn.role === "system"))
@@ -572,6 +699,8 @@ async function sendMessage(event) {
   const { getActiveChat } = await import("./chat-history.js");
   let chat = getActiveChat();
   const isDebugCommand = !pendingImage && message.toLowerCase() === "/debug";
+  const mcpCommand = !pendingImage ? parseMcpCommand(message) : null;
+  const summarizeCommand = !pendingImage && isSummarizeCommand(message);
   if (isDebugCommand) {
     if (!chat) {
       setStatus("No active chat available to debug.", true);
@@ -589,6 +718,48 @@ async function sendMessage(event) {
       chatInput.focus();
     } catch (error) {
       setStatus(normalizeErrorMessage(error, "Failed to create debug dump."), true);
+    }
+    return;
+  }
+
+  if (summarizeCommand) {
+    if (!chat) {
+      setStatus("No active chat available to summarize.", true);
+      return;
+    }
+
+    try {
+      await runGatewaySummarizeCommand(chat, message);
+      chatInput.value = "";
+      clearPendingImageAttachment();
+      syncChatInputHeight();
+      chatInput.focus();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to summarize chat context."), true);
+    }
+    return;
+  }
+
+  if (mcpCommand) {
+    if (!chat) {
+      const { createChatEntry, updateCurrentChatTitle, updateSystemTraceToggleLabel } = await import("./chat-history.js");
+      chat = createChatEntry(message);
+      state.chats.push(chat);
+      state.activeChatId = chat.id;
+      updateCurrentChatTitle();
+      updateSystemTraceToggleLabel();
+    } else if ((!Array.isArray(chat.messages) || chat.messages.length === 0) && normalizeChatTitle(chat.title).toLowerCase() === "new chat") {
+      chat.title = deriveChatTitle(message);
+    }
+
+    try {
+      await runGatewayMcpCommand(chat, message);
+      chatInput.value = "";
+      clearPendingImageAttachment();
+      syncChatInputHeight();
+      chatInput.focus();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to run MCP command."), true);
     }
     return;
   }
