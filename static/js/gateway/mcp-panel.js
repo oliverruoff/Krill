@@ -590,6 +590,40 @@ function renderConfigPanel(container, items, getConfig, options) {
       actions.appendChild(newScriptButton);
       actions.appendChild(verifyButton);
       cardBody.appendChild(actions);
+    } else if (options.kind === "mcp" && item.id === "unifi_network") {
+      const guideNode = document.createElement("div");
+      guideNode.className = "mcp-guide";
+
+      const guideTitle = document.createElement("p");
+      guideTitle.className = "mcp-guide-title";
+      guideTitle.textContent = "UniFi API key";
+      guideNode.appendChild(guideTitle);
+
+      const guideText = document.createElement("p");
+      guideText.className = "mcp-description";
+      guideText.textContent = "Create a read-only key in UniFi Site Manager, then paste it into the API Key field.";
+      guideNode.appendChild(guideText);
+
+      const guideLink = document.createElement("a");
+      guideLink.className = "mcp-guide-link";
+      guideLink.href = "https://unifi.ui.com/api";
+      guideLink.target = "_blank";
+      guideLink.rel = "noopener noreferrer";
+      guideLink.textContent = "Open UniFi API setup";
+      guideNode.appendChild(guideLink);
+
+      cardBody.appendChild(guideNode);
+
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "mcp-link-btn";
+      verifyButton.textContent = "Verify";
+      verifyButton.dataset.action = "verify";
+      verifyButton.dataset.configKind = options.kind;
+      verifyButton.dataset.configId = item.id;
+
+      actions.appendChild(verifyButton);
+      cardBody.appendChild(actions);
     } else if (options.kind === "mcp") {
       if (item.id === "shell_access") {
         card.appendChild(cardBody);

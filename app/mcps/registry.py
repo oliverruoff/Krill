@@ -11,6 +11,7 @@ from .opencode import OpenCodeMCP
 from .scripts import ScriptsMCP
 from .shell_access import ShellAccessMCP
 from .timed_jobs import TimedJobsMCP
+from .unifi_network import UniFiNetworkMCP
 from .whatsapp import WhatsAppMCP
 from .text_to_speech import TextToSpeechMCP
 from .youtube_summarizer import YouTubeSummarizerMCP
@@ -28,6 +29,7 @@ _MCPS: dict[str, MCPPlugin] = {
     "shell_access": ShellAccessMCP(),
     "text_to_speech": TextToSpeechMCP(),
     "timed_jobs": TimedJobsMCP(),
+    "unifi_network": UniFiNetworkMCP(),
     "whatsapp": WhatsAppMCP(),
     "youtube_summarizer": YouTubeSummarizerMCP(),
 }

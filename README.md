@@ -137,6 +137,7 @@ Current tools:
 - `home_assistant` (token-based Home Assistant access; defaults base URL to `http://homeassistant.local:8123`)
 - `google_services` (disabled by default, OAuth login, read-only/read-write modes for Gmail, Calendar, and Drive)
 - `shell_access` (enabled by default, generic shell command execution — ssh, grep, sed, python, scripts, scp, curl, etc. — plus `share_file` for temporary signed download links)
+- `unifi_network` (read-only UniFi Site Manager + Network API access for site discovery, hosts/consoles, devices, clients, and generic connector proxy reads)
   - set Shell Access `Public Base URL` to your reachable host:port (for example `http://192.168.1.126:8055`) so absolute links use the correct endpoint
   - Telegram `/debug` links auto-use `KRILL_PUBLIC_BASE_URL` when set; otherwise Krill falls back to a detected LAN IP with optional `KRILL_PUBLIC_PORT` override (default `8055`)
 - `memory_access` (enabled by default)
@@ -248,6 +249,15 @@ Home Assistant MCP notes:
 - supports listing entities, checking state, triggering/calling services (with optional `return_response`), full todo list item management, listing automations, finding automations by query, and creating/updating automations
 - includes automation YAML workflows: list configured automation YAML files, read one automation YAML block, update an existing automation YAML block, and create a new automation from YAML
 - automation YAML tools prefer filesystem mode when enabled (`Config Root Path` and/or `Automations File Path`), and gracefully fall back to Home Assistant API config endpoints when files are unavailable
+
+UniFi Network MCP notes:
+
+- read-only by design in the current release
+- authenticate with a UniFi Site Manager API key created at `https://unifi.ui.com/api`
+- supports Site Manager discovery (`list_sites`, `list_hosts`), Network connector reads (`list_network_sites`, `list_devices`, `list_clients`, `list_networks`, details lookups), and generic GET passthrough tools for unsupported read endpoints
+- includes WAN-focused reads: `list_wans`, `get_isp_metrics`, `query_isp_metrics`, `summarize_wan_health`, and `debug_wan_outage` for outage/debug workflows
+- best suited for structured diagnostics and inventory; raw console logs still require a future SSH-based or direct-console diagnostic path
+- standalone smoke script: `python test/test_unifi_network_mcp.py` (mocked mode) or `UNIFI_LIVE_TEST=1 UNIFI_API_KEY=... python test/test_unifi_network_mcp.py` for live verification
 
 Google Services MCP notes:
 
