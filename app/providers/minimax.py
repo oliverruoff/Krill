@@ -1,11 +1,14 @@
 """MiniMax provider implementation."""
 
 import asyncio
+from http.client import RemoteDisconnected
 import json
 import re
+import socket
 from urllib import error, request
 
 from .base import LLMProvider
+from .errors import ProviderRequestError
 
 
 class MiniMaxProvider(LLMProvider):
@@ -35,23 +38,55 @@ class MiniMaxProvider(LLMProvider):
             "temperature": 1.0,
             "top_p": 0.95,
         }
+        endpoint = "https://api.minimax.io/v1/text/chatcompletion_v2"
 
         try:
-            response_body = await asyncio.to_thread(_post_json_return_body, payload, cleaned_api_key)
+            response_body = await asyncio.to_thread(_post_json_return_body, endpoint, payload, cleaned_api_key)
+        except ProviderRequestError:
+            raise
         except error.HTTPError as exc:
-            response_text = _safe_read_error(exc)
-            raise RuntimeError(f"MiniMax request failed ({exc.code}): {response_text}") from exc
+            raise _http_error_as_provider_error(exc) from exc
         except error.URLError as exc:
-            raise RuntimeError("Network error while contacting MiniMax.") from exc
+            raise _network_error_from_exception(exc) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise _timeout_error(str(exc) or "Network timeout while contacting MiniMax.") from exc
+        except RemoteDisconnected as exc:
+            raise ProviderRequestError(
+                "Connection dropped while contacting MiniMax.",
+                provider_id=self.provider_id,
+                retry_class="network",
+                retryable=True,
+            ) from exc
         except Exception as exc:
-            raise RuntimeError("Unexpected error while contacting MiniMax.") from exc
+            raise ProviderRequestError(
+                "Unexpected error while contacting MiniMax.",
+                provider_id=self.provider_id,
+                retry_class="transient",
+                retryable=True,
+            ) from exc
 
         text = _extract_text(response_body)
         if not text:
-            detail = _extract_empty_reason(response_body)
-            if detail:
-                raise RuntimeError(f"MiniMax returned an empty response. {detail}")
-            raise RuntimeError("MiniMax returned an empty response.")
+            await asyncio.sleep(0.2)
+            try:
+                retry_body = await asyncio.to_thread(_post_json_return_body, endpoint, payload, cleaned_api_key)
+            except Exception:
+                retry_body = response_body
+
+            text = _extract_text(retry_body)
+            if not text:
+                detail = _extract_empty_reason(retry_body)
+                message = "MiniMax returned an empty response."
+                if detail:
+                    message = f"{message} {detail}"
+                raise ProviderRequestError(
+                    message,
+                    provider_id=self.provider_id,
+                    retry_class="empty_response",
+                    retryable=_empty_response_retryable(retry_body),
+                    response_preview=_payload_preview(retry_body),
+                )
+            response_body = retry_body
 
         used_tokens = _extract_total_tokens(response_body)
         return text, used_tokens
@@ -68,9 +103,10 @@ class MiniMaxProvider(LLMProvider):
             "temperature": 1.0,
             "top_p": 0.95,
         }
+        endpoint = "https://api.minimax.io/v1/text/chatcompletion_v2"
 
         try:
-            status_code = await asyncio.to_thread(_post_json_status, payload, cleaned_api_key)
+            status_code = await asyncio.to_thread(_post_json_status, endpoint, payload, cleaned_api_key)
         except error.HTTPError as exc:
             response_text = _safe_read_error(exc)
             if exc.code == 401:
@@ -78,10 +114,19 @@ class MiniMaxProvider(LLMProvider):
             if exc.code == 403:
                 detail = _extract_error_detail(response_text)
                 return False, f"MiniMax request was forbidden: {detail}"
+            if exc.code == 429:
+                detail = _extract_error_detail(response_text)
+                return False, f"MiniMax rate limited the request: {detail}"
 
             return False, f"MiniMax verification failed ({exc.code}): {response_text}"
-        except error.URLError:
-            return False, "Network error while contacting MiniMax."
+        except error.URLError as exc:
+            reason = str(getattr(exc, "reason", "") or "").strip()
+            detail = f" Details: {reason}" if reason else ""
+            return False, f"Network error while contacting MiniMax.{detail}"
+        except (TimeoutError, socket.timeout):
+            return False, "Network timeout while contacting MiniMax."
+        except ProviderRequestError as exc:
+            return False, str(exc)
         except Exception:
             return False, "Unexpected error while verifying MiniMax credentials."
 
@@ -123,10 +168,10 @@ def _build_messages(history: list[dict[str, str]], prompt: str, system_prompt: s
     return messages
 
 
-def _post_json_status(payload: dict[str, object], api_key: str) -> int:
+def _post_json_status(url: str, payload: dict[str, object], api_key: str) -> int:
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(
-        url="https://api.minimax.io/v1/text/chatcompletion_v2",
+        url=url,
         data=body,
         headers={
             "Content-Type": "application/json",
@@ -140,10 +185,10 @@ def _post_json_status(payload: dict[str, object], api_key: str) -> int:
         return response.status
 
 
-def _post_json_return_body(payload: dict[str, object], api_key: str) -> dict[str, object]:
+def _post_json_return_body(url: str, payload: dict[str, object], api_key: str) -> dict[str, object]:
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(
-        url="https://api.minimax.io/v1/text/chatcompletion_v2",
+        url=url,
         data=body,
         headers={
             "Content-Type": "application/json",
@@ -153,7 +198,43 @@ def _post_json_return_body(payload: dict[str, object], api_key: str) -> dict[str
     )
 
     with request.urlopen(req, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+        raw_text = response.read().decode("utf-8", errors="replace")
+
+    try:
+        payload_data = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise ProviderRequestError(
+            "MiniMax returned malformed JSON.",
+            provider_id="minimax",
+            retry_class="server_error",
+            retryable=True,
+            response_preview=_truncate_preview(raw_text),
+        ) from exc
+
+    if not isinstance(payload_data, dict):
+        raise ProviderRequestError(
+            "MiniMax returned an invalid response payload.",
+            provider_id="minimax",
+            retry_class="server_error",
+            retryable=True,
+            response_preview=_truncate_preview(raw_text),
+        )
+
+    base_resp = payload_data.get("base_resp")
+    if isinstance(base_resp, dict):
+        status_code = base_resp.get("status_code")
+        status_msg = str(base_resp.get("status_msg", "") or "").strip()
+        if isinstance(status_code, int) and status_code != 0:
+            raise ProviderRequestError(
+                _provider_status_message(status_code, status_msg),
+                provider_id="minimax",
+                status_code=status_code,
+                retry_class=_retry_class_for_base_status(status_code),
+                retryable=_base_status_retryable(status_code),
+                response_preview=_payload_preview(payload_data),
+            )
+
+    return payload_data
 
 
 def _extract_text(payload: dict[str, object]) -> str:
@@ -163,19 +244,36 @@ def _extract_text(payload: dict[str, object]) -> str:
         if sanitized_top_level:
             return sanitized_top_level
 
+    top_level_role = payload.get("role")
+    if isinstance(top_level_role, str) and top_level_role == "assistant":
+        top_level_parts = _extract_text_from_content_value(payload.get("content"))
+        if top_level_parts:
+            return top_level_parts
+
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
         return ""
 
-    first_choice = choices[0]
-    if not isinstance(first_choice, dict):
-        return ""
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
 
-    message = first_choice.get("message")
-    if not isinstance(message, dict):
-        return ""
+        message = choice.get("message")
+        if isinstance(message, dict):
+            extracted = _extract_text_from_content_value(message.get("content"))
+            if extracted:
+                return extracted
 
-    content = message.get("content")
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            extracted = _extract_text_from_content_value(delta.get("content"))
+            if extracted:
+                return extracted
+
+    return ""
+
+
+def _extract_text_from_content_value(content: object) -> str:
     if isinstance(content, str):
         sanitized = _sanitize_visible_text(content)
         if sanitized:
@@ -184,9 +282,15 @@ def _extract_text(payload: dict[str, object]) -> str:
     if isinstance(content, list):
         visible_parts: list[str] = []
         for item in content:
+            if isinstance(item, str):
+                sanitized = _sanitize_visible_text(item)
+                if sanitized:
+                    visible_parts.append(sanitized)
+                continue
             if not isinstance(item, dict):
                 continue
-            if item.get("type") != "text":
+            item_type = str(item.get("type", "") or "").strip().lower()
+            if item_type and item_type != "text":
                 continue
             text = item.get("text")
             if isinstance(text, str):
@@ -196,6 +300,14 @@ def _extract_text(payload: dict[str, object]) -> str:
         combined = "\n".join(visible_parts).strip()
         if combined:
             return combined
+
+    if isinstance(content, dict):
+        for key in ("text", "content"):
+            value = content.get(key)
+            if isinstance(value, str):
+                sanitized = _sanitize_visible_text(value)
+                if sanitized:
+                    return sanitized
 
     return ""
 
@@ -234,17 +346,19 @@ def _extract_empty_reason(payload: dict[str, object]) -> str:
 
     choices = payload.get("choices")
     if isinstance(choices, list) and choices:
-        first_choice = choices[0]
-        if isinstance(first_choice, dict):
-            finish_reason = first_choice.get("finish_reason")
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            finish_reason = choice.get("finish_reason")
             if isinstance(finish_reason, str) and finish_reason.strip():
                 details.append(f"Finish reason: {finish_reason.strip()}.")
 
-            message = first_choice.get("message")
+            message = choice.get("message")
             if isinstance(message, dict):
                 reasoning_content = message.get("reasoning_content")
                 if isinstance(reasoning_content, str) and reasoning_content.strip():
                     details.append("MiniMax returned reasoning content without visible reply text.")
+                    break
 
     top_level_content = payload.get("content")
     if isinstance(top_level_content, str) and top_level_content.strip():
@@ -283,3 +397,137 @@ def _extract_error_detail(response_text: str) -> str:
         return message.strip()
 
     return response_text
+
+
+def _http_error_as_provider_error(exc: error.HTTPError) -> ProviderRequestError:
+    response_text = _safe_read_error(exc)
+    detail = _extract_error_detail(response_text)
+    if exc.code in {401, 403}:
+        message = "MiniMax rejected the API key." if exc.code == 401 else f"MiniMax request was forbidden: {detail}"
+        retryable = False
+        retry_class = "auth"
+    elif exc.code == 429:
+        message = f"MiniMax request failed (429): {detail}"
+        retryable = True
+        retry_class = "rate_limit"
+    elif exc.code in {500, 502, 503, 504}:
+        message = f"MiniMax request failed ({exc.code}): {detail}"
+        retryable = True
+        retry_class = "server_error"
+    else:
+        message = f"MiniMax request failed ({exc.code}): {detail}"
+        retryable = False
+        retry_class = "http_error"
+    return ProviderRequestError(
+        message,
+        provider_id="minimax",
+        status_code=exc.code,
+        headers=_normalize_headers(getattr(exc, "headers", None)),
+        retry_class=retry_class,
+        retryable=retryable,
+        response_preview=_truncate_preview(response_text),
+    )
+
+
+def _network_error_from_exception(exc: error.URLError) -> ProviderRequestError:
+    reason = str(getattr(exc, "reason", "") or "").strip()
+    if isinstance(getattr(exc, "reason", None), TimeoutError):
+        return _timeout_error(reason or "Network timeout while contacting MiniMax.")
+    message = "Network error while contacting MiniMax."
+    if reason:
+        message = f"{message} Details: {reason}"
+    return ProviderRequestError(
+        message,
+        provider_id="minimax",
+        retry_class="network",
+        retryable=True,
+    )
+
+
+def _timeout_error(detail: str) -> ProviderRequestError:
+    message = "Network timeout while contacting MiniMax."
+    if detail and detail != message:
+        message = f"{message} Details: {detail}"
+    return ProviderRequestError(
+        message,
+        provider_id="minimax",
+        retry_class="timeout",
+        retryable=True,
+    )
+
+
+def _normalize_headers(headers: object) -> dict[str, str]:
+    if headers is None:
+        return {}
+    items_getter = getattr(headers, "items", None)
+    if callable(items_getter):
+        try:
+            return {str(key): str(value) for key, value in items_getter()}
+        except Exception:
+            return {}
+    if isinstance(headers, dict):
+        return {str(key): str(value) for key, value in headers.items()}
+    return {}
+
+
+def _provider_status_message(status_code: int, status_msg: str) -> str:
+    label = "MiniMax returned an error response"
+    if status_code == 1001:
+        label = "MiniMax request timed out"
+    elif status_code == 1002:
+        label = "MiniMax rate limited the request"
+    elif status_code == 1004:
+        label = "MiniMax rejected the API key"
+    elif status_code == 1008:
+        label = "MiniMax account balance is insufficient"
+    elif status_code == 1013:
+        label = "MiniMax reported an internal server error"
+    elif status_code == 1039:
+        label = "MiniMax request exceeded the token limit"
+    elif status_code == 2013:
+        label = "MiniMax rejected the request parameters"
+    if status_msg:
+        return f"{label}: {status_msg}"
+    return f"{label} (status code {status_code})."
+
+
+def _retry_class_for_base_status(status_code: int) -> str:
+    if status_code == 1002:
+        return "rate_limit"
+    if status_code == 1001:
+        return "timeout"
+    if status_code == 1013:
+        return "server_error"
+    if status_code in {1004, 1008, 2013, 1039}:
+        return "invalid_request"
+    return "server_error"
+
+
+def _base_status_retryable(status_code: int) -> bool:
+    return status_code in {1001, 1002, 1013}
+
+
+def _empty_response_retryable(payload: dict[str, object]) -> bool:
+    reason = _extract_empty_reason(payload).lower()
+    retryable_markers = (
+        "reasoning content",
+        "status code: 1001",
+        "status code: 1002",
+        "status code: 1013",
+    )
+    return any(marker in reason for marker in retryable_markers)
+
+
+def _payload_preview(payload: dict[str, object]) -> str:
+    try:
+        raw = json.dumps(payload, ensure_ascii=True, sort_keys=True)
+    except Exception:
+        raw = str(payload)
+    return _truncate_preview(raw)
+
+
+def _truncate_preview(text: str, limit: int = 500) -> str:
+    compact = str(text or "").strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit] + "..."

@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 from typing import Awaitable, Callable, TypedDict
 
 from .base import LLMProvider
+from .errors import ProviderRequestError
 from app.tooling.execution import CancellationToken
 
 
@@ -42,6 +43,7 @@ async def generate_with_retries(
 ) -> tuple[str, int | None]:
     """Calls provider.generate with retry/backoff on transient failures."""
     attempts = max(1, min(5, int(max_attempts)))
+    retry_history: list[dict[str, object]] = []
     for attempt in range(1, attempts + 1):
         if cancellation_token is not None:
             cancellation_token.raise_if_cancelled()
@@ -54,7 +56,9 @@ async def generate_with_retries(
                 history=history,
             )
         except Exception as exc:
-            if attempt >= attempts or not _is_retryable_provider_error(exc):
+            retryable = _is_retryable_provider_error(exc)
+            if attempt >= attempts or not retryable:
+                _attach_retry_history(exc, retry_history)
                 raise
 
             delay = _compute_retry_delay_seconds(exc, attempt)
@@ -65,6 +69,15 @@ async def generate_with_retries(
                 "delay_source": delay_source,
                 "next_retry_at": datetime.fromtimestamp(now.timestamp() + delay, tz=now.tzinfo).isoformat(),
             }
+            retry_history.append(
+                {
+                    "attempt": attempt,
+                    "max_attempts": attempts,
+                    "delay_seconds": round(delay, 3),
+                    "reason": _error_message(exc),
+                    **metadata,
+                }
+            )
             if on_retry is not None:
                 await on_retry(attempt, attempts, delay, _error_message(exc), metadata)
             if cancellation_token is not None:
@@ -80,6 +93,8 @@ async def generate_with_retries(
 
 
 def _is_retryable_provider_error(exc: Exception) -> bool:
+    if isinstance(exc, ProviderRequestError):
+        return bool(exc.retryable)
     if isinstance(exc, TimeoutError):
         return True
 
@@ -111,6 +126,8 @@ def _is_retryable_provider_error(exc: Exception) -> bool:
 
 
 def _classify_retryable_provider_error(exc: Exception) -> str:
+    if isinstance(exc, ProviderRequestError):
+        return str(exc.retry_class or "unknown")
     if isinstance(exc, TimeoutError):
         return "timeout"
 
@@ -139,6 +156,11 @@ def _compute_retry_delay_seconds(exc: Exception, attempt: int) -> float:
 
 
 def _retry_after_seconds_from_exception(exc: Exception) -> float | None:
+    if isinstance(exc, ProviderRequestError):
+        parsed = _retry_after_seconds_from_headers(exc.response_headers)
+        if parsed is not None:
+            return parsed
+
     # Common response header containers seen across provider clients.
     candidate_headers: list[object] = []
     for attr in ("response_headers", "headers"):
@@ -204,3 +226,16 @@ def _error_message(exc: Exception) -> str:
         return str(exc).strip()
     except Exception:
         return ""
+
+
+def _attach_retry_history(exc: Exception, retry_history: list[dict[str, object]]) -> None:
+    if not retry_history:
+        return
+    copied_history = [dict(entry) for entry in retry_history]
+    if isinstance(exc, ProviderRequestError):
+        exc.retry_history = copied_history
+        return
+    try:
+        setattr(exc, "retry_history", copied_history)
+    except Exception:
+        return

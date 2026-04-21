@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import html
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, TypedDict, cast
@@ -776,13 +777,15 @@ class TelegramBridgeWorker:
             used_tokens = engine_result["used_tokens"]
             used_tools = engine_result["used_mcp_tools"]
             trace_messages = engine_result["system_trace_messages"]
+            assistant_status = "done"
             if is_over_context_threshold(used_tokens, token_limit, threshold=0.75):
                 text_response = f"{text_response}\n\n{TELEGRAM_CONTEXT_WINDOW_WARNING}" if text_response else TELEGRAM_CONTEXT_WINDOW_WARNING
         except Exception as exc:
             text_response = f"Hard error: {exc}"
             used_tokens = None
             used_tools = []
-            trace_messages = []
+            trace_messages = _build_failure_trace_messages(exc)
+            assistant_status = "error"
 
         final_timestamp = _timestamp()
         for entry in trace_messages:
@@ -814,7 +817,7 @@ class TelegramBridgeWorker:
                     for entry in used_tools
                     if isinstance(entry, dict)
                 ],
-                status="done",
+                status=assistant_status,
             )
         )
 
@@ -866,6 +869,54 @@ def _extract_tts_audio_files(text: str) -> list[str]:
     """Return list of TTS audio filenames found in the response text."""
     import re
     return re.findall(_TTS_URL_PATTERN, text)
+
+
+def _build_failure_trace_messages(exc: Exception) -> list[dict[str, str]]:
+    trace_messages: list[dict[str, str]] = []
+    retry_history = getattr(exc, "retry_history", None)
+    if isinstance(retry_history, list) and retry_history:
+        try:
+            trace_messages.append(
+                {
+                    "system_type": "provider_retry",
+                    "content": json.dumps(retry_history, ensure_ascii=True),
+                }
+            )
+        except Exception:
+            pass
+
+    diagnostic_payload: dict[str, object] = {
+        "error_class": exc.__class__.__name__,
+        "detail": str(exc),
+    }
+    provider_id = getattr(exc, "provider_id", None)
+    if isinstance(provider_id, str) and provider_id.strip():
+        diagnostic_payload["provider_id"] = provider_id.strip()
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        diagnostic_payload["status_code"] = status_code
+    retry_class = getattr(exc, "retry_class", None)
+    if isinstance(retry_class, str) and retry_class.strip():
+        diagnostic_payload["retry_class"] = retry_class.strip()
+    response_preview = getattr(exc, "response_preview", None)
+    if isinstance(response_preview, str) and response_preview.strip():
+        diagnostic_payload["response_preview"] = response_preview.strip()
+
+    try:
+        trace_messages.append(
+            {
+                "system_type": "tool_error",
+                "content": json.dumps(diagnostic_payload, ensure_ascii=True),
+            }
+        )
+    except Exception:
+        trace_messages.append(
+            {
+                "system_type": "tool_error",
+                "content": str(exc),
+            }
+        )
+    return trace_messages
 
 
 def _extract_shared_file_tokens(text: str) -> list[str]:

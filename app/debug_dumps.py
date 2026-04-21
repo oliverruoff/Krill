@@ -11,9 +11,10 @@ import re
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
-from app.config import ChatMessage, ChatSession, DATA_DIR, Settings, save_settings
+from app.config import ChatMessage, ChatSession, DATA_DIR, SENSITIVE_KEYWORDS, Settings, save_settings
 from app.shared_files import create_shared_file_link
 from app.version import APP_VERSION
 
@@ -52,24 +53,19 @@ def build_debug_dump_payload(
 ) -> dict[str, object]:
     generated_at = datetime.now(timezone.utc).isoformat()
     latest_error_messages = [
-        {
+        _redact_debug_value({
             "role": message.role,
             "timestamp": message.timestamp,
             "request_id": message.request_id,
             "status": message.status,
             "content": message.content,
-        }
+        })
         for message in snapshot_chat.messages
         if message.status == "error"
     ]
 
-    return {
-        "kind": "chat_debug_dump",
-        "app_version": APP_VERSION,
-        "generated_at": generated_at,
-        "triggered_by": triggered_by,
-        "source_channel": source_channel,
-        "settings_snapshot": {
+    settings_snapshot = _redact_debug_value(
+        {
             "bot_name": settings.bot_name,
             "user_full_name": settings.user_full_name,
             "user_call_name": settings.user_call_name,
@@ -83,7 +79,16 @@ def build_debug_dump_payload(
                 for memory in settings.core_memories
                 if memory.content.strip()
             ],
-        },
+        }
+    )
+
+    return {
+        "kind": "chat_debug_dump",
+        "app_version": APP_VERSION,
+        "generated_at": generated_at,
+        "triggered_by": triggered_by,
+        "source_channel": source_channel,
+        "settings_snapshot": settings_snapshot,
         "chat": {
             "id": snapshot_chat.id,
             "title": snapshot_chat.title,
@@ -142,7 +147,7 @@ async def create_hidden_debug_chat(
 
 
 def _message_to_dump_dict(message: ChatMessage) -> dict[str, object]:
-    return {
+    return cast(dict[str, object], _redact_debug_value({
         "role": message.role,
         "content": message.content,
         "timestamp": message.timestamp,
@@ -150,7 +155,7 @@ def _message_to_dump_dict(message: ChatMessage) -> dict[str, object]:
         "tool_usage": [dict(entry) for entry in message.tool_usage],
         "request_id": message.request_id,
         "status": message.status,
-    }
+    }))
 
 
 def _prune_old_debug_dumps(keep_count: int = _DUMP_MAX_FILES) -> None:
@@ -282,6 +287,55 @@ def _sanitize_file_component(value: str) -> str:
     sanitized = re.sub(r"[^a-z0-9._-]+", "-", text)
     sanitized = sanitized.strip("-._")
     return sanitized[:80] or "chat"
+
+
+def _redact_debug_value(value: object, *, field_name: str = "") -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _is_sensitive_field_name(key_text):
+                redacted[key_text] = "[REDACTED]"
+            else:
+                redacted[key_text] = _redact_debug_value(item, field_name=key_text)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_debug_value(item, field_name=field_name) for item in value]
+    if isinstance(value, str):
+        return _redact_debug_text(value, field_name=field_name)
+    return value
+
+
+def _is_sensitive_field_name(field_name: str) -> bool:
+    lowered = str(field_name or "").strip().lower()
+    return any(keyword in lowered for keyword in SENSITIVE_KEYWORDS)
+
+
+def _redact_debug_text(text: str, *, field_name: str = "") -> str:
+    raw = str(text or "")
+    if not raw:
+        return ""
+    if _is_sensitive_field_name(field_name):
+        return "[REDACTED]"
+
+    redacted = raw
+    redacted = re.sub(
+        r"(?i)\b(api[_ -]?key|token|secret|password|private[_ -]?key|ssh[_ -]?private)\b\s*[:=]\s*([^\s,;]+)",
+        lambda match: f"{match.group(1)}: [REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)\b(password|token|secret)\b\s+(?:is\s+|for\s+)?(['\"]?)([^'\"\s,;]+)\2",
+        lambda match: f"{match.group(1)} [REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(user\s+['\"]?[^'\"\s]+['\"]?\s+with\s+password\s+)(['\"]?)[^'\"\s,;]+\2",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[REDACTED_EMAIL]", redacted, flags=re.IGNORECASE)
+    return redacted
 
 
 def _compact_timestamp(value: str) -> str:
