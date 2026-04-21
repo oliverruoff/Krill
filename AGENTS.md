@@ -17,7 +17,7 @@ Operational guide for agentic coding tools working in `Krill`.
 - `app/timed_jobs.py`: scheduled job runner (`run_due_timed_jobs_once`).
 - `app/memory_extraction.py`: background async worker for short-term memory extraction.
 - `app/providers/`: LLM provider protocol (`base.py`), registry, implementations (gemini, openai, openrouter, minimax, etc.), resilience helpers.
-- `app/mcps/`: MCP tool plugin protocol (`base.py`), registry, tools: `brave_search`, `git_ops`, `local_files`, `google_services`, `browser_control`, `youtube_summarizer`, `home_assistant`, `ssh_control`, `timed_jobs`, `memory_access`, `whatsapp`, `opencode`.
+- `app/mcps/`: MCP tool plugin protocol (`base.py`), registry, tools: `brave_search`, `git_ops`, `local_files`, `google_services`, `browser_control`, `youtube_summarizer`, `home_assistant`, `ssh_control`, `timed_jobs`, `brain_access`, `whatsapp`, `opencode`.
 - `app/tooling/orchestrator.py`: recursive tool-calling loop (`generate_with_tools`).
 - `app/tooling/runtime_context.py`: per-request runtime context for tool calls.
 - `app/integrations/`: integration protocol + registry + `telegram/` + `whatsapp/` + `chat_runtime.py`.

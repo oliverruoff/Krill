@@ -5,7 +5,7 @@ from .browser_control import BrowserControlMCP
 from .brave_search import BraveSearchMCP
 from .git_ops import GitOpsMCP
 from .home_assistant import HomeAssistantMCP
-from .memory_access import MemoryAccessMCP
+from .brain_access import BrainAccessMCP
 from .google_services import GoogleServicesMCP
 from .opencode import OpenCodeMCP
 from .scripts import ScriptsMCP
@@ -22,7 +22,7 @@ _MCPS: dict[str, MCPPlugin] = {
     "brave_search": BraveSearchMCP(),
     "git_ops": GitOpsMCP(),
     "home_assistant": HomeAssistantMCP(),
-    "memory_access": MemoryAccessMCP(),
+    "brain_access": BrainAccessMCP(),
     "google_services": GoogleServicesMCP(),
     "opencode": OpenCodeMCP(),
     "scripts": ScriptsMCP(),

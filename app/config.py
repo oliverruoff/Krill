@@ -2921,6 +2921,86 @@ async def view_braindump(*, show_secrets: bool = False) -> dict[str, object]:
         return await asyncio.to_thread(_view_braindump_sync, show_secrets)
 
 
+def _read_braindump_table_sync(table_name: str, limit: int, offset: int, show_secrets: bool) -> dict[str, object]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        normalized_table_name = str(table_name or "").strip()
+        if not normalized_table_name:
+            raise ValueError("Table name is required.")
+
+        table_rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name ASC"
+        ).fetchall()
+        available_table_names = {str(row["name"]) for row in table_rows}
+        if normalized_table_name not in available_table_names:
+            raise ValueError(f"Unknown braindump table: {normalized_table_name}")
+
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+        quoted = _quote_identifier(normalized_table_name)
+
+        column_rows = conn.execute(f"PRAGMA table_info({quoted})").fetchall()
+        columns = [
+            {
+                "name": str(column["name"]),
+                "type": str(column["type"] or ""),
+                "notnull": bool(column["notnull"]),
+                "pk": bool(column["pk"]),
+            }
+            for column in column_rows
+        ]
+
+        row_count = conn.execute(f"SELECT COUNT(*) AS count FROM {quoted}").fetchone()
+        total_rows = int(row_count["count"] if row_count else 0)
+        result_rows = conn.execute(
+            f"SELECT * FROM {quoted} LIMIT ? OFFSET ?",
+            (safe_limit, safe_offset),
+        ).fetchall()
+
+        rows: list[dict[str, object]] = []
+        for raw_row in result_rows:
+            entry: dict[str, object] = {}
+            for key in raw_row.keys():
+                raw_value: Any = raw_row[key]
+                if show_secrets or not _is_sensitive_column(str(key)):
+                    entry[str(key)] = raw_value
+                else:
+                    entry[str(key)] = _mask_value(raw_value)
+            rows.append(entry)
+
+        return {
+            "ok": True,
+            "table_name": normalized_table_name,
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "row_count": total_rows,
+            "returned_rows": len(rows),
+            "columns": columns,
+            "rows": rows,
+            "show_secrets": show_secrets,
+        }
+    finally:
+        conn.close()
+
+
+async def read_braindump_table(
+    *,
+    table_name: str,
+    limit: int = 100,
+    offset: int = 0,
+    show_secrets: bool = False,
+) -> dict[str, object]:
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        return await asyncio.to_thread(
+            _read_braindump_table_sync,
+            table_name,
+            limit,
+            offset,
+            show_secrets,
+        )
+
+
 def _load_whatsapp_session_blob_sync() -> str:
     conn = _get_conn(BRAINDUMP_PATH)
     try:

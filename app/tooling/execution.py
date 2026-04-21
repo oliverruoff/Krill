@@ -83,7 +83,7 @@ _CATEGORY_TOOL_PREFERENCES: dict[str, list[str]] = {
     "structured_data_fetch": ["google_services", "home_assistant", "brave_search", "browser_control"],
     "home_automation_change": ["home_assistant", "shell_access", "browser_control"],
     "communication_task": ["google_services", "whatsapp", "browser_control"],
-    "memory_task": ["memory_access"],
+    "memory_task": ["brain_access"],
 }
 
 

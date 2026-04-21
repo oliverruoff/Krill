@@ -140,17 +140,22 @@ Current tools:
 - `unifi_network` (read-only UniFi Site Manager + Network API access for site discovery, hosts/consoles, devices, clients, and generic connector proxy reads)
   - set Shell Access `Public Base URL` to your reachable host:port (for example `http://192.168.1.126:8055`) so absolute links use the correct endpoint
   - Telegram `/debug` links auto-use `KRILL_PUBLIC_BASE_URL` when set; otherwise Krill falls back to a detected LAN IP with optional `KRILL_PUBLIC_PORT` override (default `8055`)
-- `memory_access` (enabled by default)
+- `brain_access` (enabled by default)
 - `opencode` (disabled by default, delegates coding work to `npx opencode run`)
 - `scripts` (disabled by default, creates DB-backed Python scripts with metadata comments in `data/scripts`)
 - `timed_jobs` (manage timed jobs via tools: list/get/create/update/delete/trigger)
 - `youtube_summarizer` (enabled by default, fetches YouTube transcripts and summarizes videos)
 
-Memory Access MCP notes:
+Brain Access MCP notes:
 
 - enabled by default
 - supports `lookup_memories` for memory-grounded recall questions
 - supports `save_memory` for explicit remember intents (for example: remember, don't forget, memorize)
+- supports `read_all_configs` for masked full settings inspection
+- supports `inspect_braindump` for masked whole-database inspection
+- supports `read_braindump_table` for masked per-table inspection with pagination
+- supports `list_chats`, `read_chat`, and `search_chats` for stored chat access
+- supports `read_assistant_behavior` and `update_assistant_behavior` for the persisted assistant system prompt
 - `save_memory` accepts optional `memory_type` (`core` or `normal`); if omitted, it defaults to `normal` unless the content is high-confidence long-term identity/preference/constraint
 
 OpenCode MCP notes:
@@ -364,7 +369,7 @@ Exact message workflow (Gateway):
 3. `app/main.py` calls shared engine `generate_chat_response(...)`
 4. Shared engine composes runtime system prompt via `compose_runtime_system_prompt(...)` in `app/runtime_prompt.py`
 5. Runtime prompt includes current local server time (+ optional compacted `memory_block`); identity/behavior/core-memory instructions are seeded into chat history at chat start and after compaction
-6. Shared engine calls orchestrator `generate_with_tools(...)` (which can select `memory_access` for memory-grounded recall)
+6. Shared engine calls orchestrator `generate_with_tools(...)` (which can select `brain_access` for memory-grounded recall, braindump inspection, and assistant behavior updates)
 7. SSE streams back `tool_step`, `meta`, `token`, then `done` (or `error`)
 8. Gateway finalizes assistant message, tool usage, and token counters, then persists Gateway chat state
 

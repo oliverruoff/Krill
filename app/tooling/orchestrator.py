@@ -1183,7 +1183,7 @@ def _stage_for_mcp_id(mcp_id: str) -> str:
         return "fetching"
     if normalized in {"git_ops", "shell_access", "opencode", "scripts"}:
         return "updating"
-    if normalized in {"home_assistant", "whatsapp", "memory_access", "timed_jobs"}:
+    if normalized in {"home_assistant", "whatsapp", "brain_access", "timed_jobs"}:
         return "applying"
     return "working"
 
@@ -1321,7 +1321,7 @@ def _build_recursive_planner_prompt(
         "Your goal is to complete the user's original request end-to-end, not to stop at intermediate status updates.\n"
         "If user asks for live/external/private data (web, files, integrations, devices, Home Assistant, calendars, email), use a tool call first.\n"
         "Scripts catalog items are reference assets. To run one, call scripts.execute_script with its title.\n"
-        "If user asks you to remember/memorize/not forget something for future chats, call memory_access.save_memory before responding.\n"
+        "If user asks you to remember/memorize/not forget something for future chats, call brain_access.save_memory before responding.\n"
         "Do not claim you cannot access browsing/tools/devices when relevant tools are listed.\n"
         "Only ask the user for help if truly blocked by missing user-only input, explicit approval, or an external challenge that tools cannot resolve.\n"
         "If information can be fetched via enabled tools, fetch it yourself and continue.\n"
