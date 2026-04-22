@@ -497,6 +497,12 @@ export async function handleMcpActionClick(event) {
       return;
     }
 
+    if (action === "matrix-manage" && configKind === "integration" && configId === "matrix") {
+      const { openMatrixAccessModal } = await import("./matrix-access.js");
+      await openMatrixAccessModal();
+      return;
+    }
+
     if (action === "ssh-key") {
       const { fetchGitSshKey } = await import("./git-ssh.js");
       await fetchGitSshKey();
@@ -597,6 +603,10 @@ export async function handleMcpActionClick(event) {
         const message = detail ? `Integration verified: ${detail}` : "Integration verified.";
         setStatus(message);
         showToast(message);
+        const { syncIntegrationStatus } = await import("./chat-sync.js");
+        await syncIntegrationStatus();
+        const { renderIntegrationPanel } = await import("./mcp-panel.js");
+        renderIntegrationPanel();
         if (configId === "telegram" && timedJobsModal instanceof HTMLElement && !timedJobsModal.classList.contains("hidden")) {
           const { loadTimedJobs } = await import("./timed-jobs.js");
           await loadTimedJobs(true);

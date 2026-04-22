@@ -12,6 +12,11 @@ class RuntimeContext(TypedDict):
     source_request_id: str
     conversation_key: str
     cancellation_token: CancellationToken | None
+    source_user_id: str
+    source_user_role: str
+    source_room_id: str
+    source_room_mode: str
+    allowed_mcp_ids: list[str]
 
 
 _RUNTIME_CONTEXT: ContextVar[RuntimeContext] = ContextVar(
@@ -22,6 +27,11 @@ _RUNTIME_CONTEXT: ContextVar[RuntimeContext] = ContextVar(
         "source_request_id": "",
         "conversation_key": "gateway:",
         "cancellation_token": None,
+        "source_user_id": "",
+        "source_user_role": "",
+        "source_room_id": "",
+        "source_room_mode": "",
+        "allowed_mcp_ids": [],
     },
 )
 
@@ -32,6 +42,11 @@ def set_runtime_context(
     source_chat_id: str,
     source_request_id: str = "",
     cancellation_token: CancellationToken | None = None,
+    source_user_id: str = "",
+    source_user_role: str = "",
+    source_room_id: str = "",
+    source_room_mode: str = "",
+    allowed_mcp_ids: list[str] | None = None,
 ) -> Token[RuntimeContext]:
     payload: RuntimeContext = {
         "source_channel": str(source_channel or "gateway").strip() or "gateway",
@@ -39,6 +54,11 @@ def set_runtime_context(
         "source_request_id": str(source_request_id or "").strip(),
         "conversation_key": build_conversation_key(source_channel, source_chat_id),
         "cancellation_token": cancellation_token,
+        "source_user_id": str(source_user_id or "").strip(),
+        "source_user_role": str(source_user_role or "").strip(),
+        "source_room_id": str(source_room_id or "").strip(),
+        "source_room_mode": str(source_room_mode or "").strip(),
+        "allowed_mcp_ids": [str(item).strip() for item in (allowed_mcp_ids or []) if str(item).strip()],
     }
     return _RUNTIME_CONTEXT.set(payload)
 

@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 
+MOCK_UNIFI_CREDENTIAL = "mock-unifi-credential"
+
+
 async def _run_mocked_test() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in sys.path:
@@ -45,7 +48,7 @@ async def _run_mocked_test() -> None:
     original_request_json = unifi_module._request_json
 
     def fake_request_json(method: str, url: str, api_key: str, payload: Any = None) -> dict[str, object] | list[object]:
-        if api_key != "dummy-token":
+        if api_key != MOCK_UNIFI_CREDENTIAL:
             raise RuntimeError(f"Unexpected API key in mock: {api_key}")
         if method == "GET" and url.endswith("/v1/sites?pageSize=1"):
             return {"data": [{"id": "site-1", "name": "Home", "hostId": "host-1"}]}
@@ -99,18 +102,18 @@ async def _run_mocked_test() -> None:
 
     unifi_module._request_json = fake_request_json
     try:
-        ok, detail = await plugin.verify({"api_key": "dummy-token"})
+        ok, detail = await plugin.verify({"api_key": MOCK_UNIFI_CREDENTIAL})
         if not ok:
             raise RuntimeError(f"Expected mocked verify to succeed. Detail: {detail}")
 
-        sites = await plugin.call_tool("list_sites", {}, {"api_key": "dummy-token"})
+        sites = await plugin.call_tool("list_sites", {}, {"api_key": MOCK_UNIFI_CREDENTIAL})
         if sites.get("count") != 1:
             raise RuntimeError(f"Expected one mocked site. Got: {sites}")
 
         outage = await plugin.call_tool(
             "debug_wan_outage",
             {"type": "5m", "site_name": "Home"},
-            {"api_key": "dummy-token"},
+            {"api_key": MOCK_UNIFI_CREDENTIAL},
         )
         if outage.get("health") != "down":
             raise RuntimeError(f"Expected WAN outage health=down. Got: {outage}")

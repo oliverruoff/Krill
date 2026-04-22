@@ -453,6 +453,58 @@
       </section>
     </div>
 
+    <div id="matrix-access-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="matrix-access-title">
+      <div id="matrix-access-backdrop" class="brain-modal-backdrop"></div>
+      <section class="brain-modal-card">
+        <header class="brain-modal-header">
+          <div>
+            <h2 id="matrix-access-title">Matrix Access Management</h2>
+            <p class="brain-modal-meta">Manage Matrix users, approved rooms, and the MCP allowlist for assistant-level users.</p>
+          </div>
+          <button type="button" id="matrix-access-close" class="brain-modal-close" aria-label="Close Matrix access management">&times;</button>
+        </header>
+        <div class="brain-modal-toolbar">
+          <button type="button" id="matrix-access-refresh-identity" class="secondary">Refresh Bot Identity</button>
+          <button type="button" id="matrix-access-save" class="secondary">Save Access Rules</button>
+        </div>
+        <div class="brain-modal-body" style="display:block; overflow:auto;">
+          <section class="mcp-guide" style="margin-bottom:16px;">
+            <p class="mcp-guide-title">How Matrix usage works</p>
+            <ul class="mcp-guide-list">
+              <li><strong>admin_usage</strong>: full direct-message and group-room access, including slash commands.</li>
+              <li><strong>assistant_usage</strong>: no direct-message usage; allowed only in approved rooms and only with checked MCPs.</li>
+              <li><strong>no_assistant_usage</strong>: fully ignored everywhere, including approved rooms.</li>
+              <li>Approved rooms are activated when an admin invites the bot there.</li>
+              <li>In group rooms the bot answers only when mentioned or replied to.</li>
+            </ul>
+            <p id="matrix-access-bot-user" class="mcp-description">Bot user id: unknown</p>
+          </section>
+
+          <section class="mcp-guide" style="margin-bottom:16px;">
+            <div class="brain-modal-toolbar" style="padding:0; margin-bottom:12px;">
+              <p class="mcp-guide-title" style="margin:0;">Users</p>
+              <button type="button" id="matrix-access-add-user" class="secondary">Add User</button>
+            </div>
+            <div id="matrix-access-users-list" class="memory-modal-list" aria-live="polite"></div>
+          </section>
+
+          <section class="mcp-guide" style="margin-bottom:16px;">
+            <div class="brain-modal-toolbar" style="padding:0; margin-bottom:12px;">
+              <p class="mcp-guide-title" style="margin:0;">Approved Rooms</p>
+              <button type="button" id="matrix-access-add-room" class="secondary">Add Room</button>
+            </div>
+            <div id="matrix-access-rooms-list" class="memory-modal-list" aria-live="polite"></div>
+          </section>
+
+          <section class="mcp-guide">
+            <p class="mcp-guide-title">assistant_usage MCP allowlist</p>
+            <p class="mcp-description">Only these MCPs are exposed to assistant-level Matrix users. Leave unchecked for pure LLM-only behavior.</p>
+            <div id="matrix-access-allowed-mcps" class="mcp-multiselect"></div>
+          </section>
+        </div>
+      </section>
+    </div>
+
     <div id="script-editor-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="script-editor-title">
       <div id="script-editor-backdrop" class="brain-modal-backdrop"></div>
       <section class="brain-modal-card script-editor-modal-card">

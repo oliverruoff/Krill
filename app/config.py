@@ -96,6 +96,31 @@ class TelegramState(BaseModel):
     last_update_id: int = Field(default=0, ge=0)
 
 
+class MatrixUserAccess(BaseModel):
+    mxid: str = ""
+    role: Literal["no_assistant_usage", "assistant_usage", "admin_usage"] = "no_assistant_usage"
+    note: str = ""
+
+
+class MatrixRoomAccess(BaseModel):
+    room_id: str = ""
+    room_name: str = ""
+    approved_by_mxid: str = ""
+    is_direct: bool = False
+    active: bool = True
+
+
+class MatrixState(BaseModel):
+    bot_user_id: str = ""
+    last_sync_batch: str = ""
+    last_sync_error: str = ""
+    last_sync_at: str = ""
+    users: list[MatrixUserAccess] = Field(default_factory=list)
+    approved_rooms: list[MatrixRoomAccess] = Field(default_factory=list)
+    assistant_allowed_mcp_ids: list[str] = Field(default_factory=list)
+    denied_direct_message_room_ids: list[str] = Field(default_factory=list)
+
+
 TimedJobInterval = Literal[
     "daily",
     "weekly",
@@ -164,6 +189,7 @@ class Settings(BaseModel):
     active_chat_id: str = ""
     timed_job_auth_alert_provider_ids: list[str] = Field(default_factory=list)
     telegram_state: TelegramState = Field(default_factory=TelegramState)
+    matrix_state: MatrixState = Field(default_factory=MatrixState)
     theme: Literal["light", "dark", "business"] = "light"
     last_daily_summary_date: str = ""
 
@@ -342,6 +368,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           last_update_id INTEGER NOT NULL DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS matrix_state (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          bot_user_id TEXT NOT NULL DEFAULT '',
+          last_sync_batch TEXT NOT NULL DEFAULT '',
+          last_sync_error TEXT NOT NULL DEFAULT '',
+          last_sync_at TEXT NOT NULL DEFAULT '',
+          users_json TEXT NOT NULL DEFAULT '[]',
+          approved_rooms_json TEXT NOT NULL DEFAULT '[]',
+          assistant_allowed_mcp_ids_json TEXT NOT NULL DEFAULT '[]',
+          denied_direct_message_room_ids_json TEXT NOT NULL DEFAULT '[]'
+        );
+
         CREATE TABLE IF NOT EXISTS whatsapp_state (
           id INTEGER PRIMARY KEY CHECK (id = 1),
           session_blob TEXT NOT NULL DEFAULT ''
@@ -381,6 +419,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         
         INSERT OR IGNORE INTO settings_core (id) VALUES (1);
         INSERT OR IGNORE INTO telegram_state (id) VALUES (1);
+        INSERT OR IGNORE INTO matrix_state (id) VALUES (1);
         INSERT OR IGNORE INTO whatsapp_state (id) VALUES (1);
 
         CREATE TABLE IF NOT EXISTS short_term_memories (
@@ -450,6 +489,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_settings_core_column(conn, "last_daily_summary_date", "TEXT NOT NULL DEFAULT ''")
     _ensure_chats_column(conn, "hidden_from_history", "INTEGER NOT NULL DEFAULT 0 CHECK (hidden_from_history IN (0,1))")
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_matrix_state_column(conn, "bot_user_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_matrix_state_column(conn, "last_sync_batch", "TEXT NOT NULL DEFAULT ''")
+    _ensure_matrix_state_column(conn, "last_sync_error", "TEXT NOT NULL DEFAULT ''")
+    _ensure_matrix_state_column(conn, "last_sync_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_matrix_state_column(conn, "users_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_matrix_state_column(conn, "approved_rooms_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_matrix_state_column(conn, "assistant_allowed_mcp_ids_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_matrix_state_column(conn, "denied_direct_message_room_ids_json", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_whatsapp_state_column(conn, "session_blob", "TEXT NOT NULL DEFAULT ''")
     _ensure_timed_jobs_column(conn, "timezone_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
     _ensure_timed_jobs_column(conn, "output_decision_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK (output_decision_enabled IN (0,1))")
@@ -476,6 +523,14 @@ def _ensure_telegram_state_column(conn: sqlite3.Connection, column_name: str, de
     if column_name in existing:
         return
     conn.execute(f"ALTER TABLE telegram_state ADD COLUMN {column_name} {definition}")
+
+
+def _ensure_matrix_state_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
+    rows = conn.execute("PRAGMA table_info(matrix_state)").fetchall()
+    existing = {str(row["name"]) for row in rows}
+    if column_name in existing:
+        return
+    conn.execute(f"ALTER TABLE matrix_state ADD COLUMN {column_name} {definition}")
 
 
 def _ensure_chats_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
@@ -712,6 +767,21 @@ def _load_settings_sync() -> Settings:
             owner_chat_id=tg["owner_chat_id"],
             last_update_id=tg["last_update_id"],
         )
+        matrix_row = conn.execute("SELECT * FROM matrix_state WHERE id = 1").fetchone()
+        matrix_state = MatrixState(
+            bot_user_id=str(matrix_row["bot_user_id"]) if matrix_row is not None else "",
+            last_sync_batch=str(matrix_row["last_sync_batch"]) if matrix_row is not None else "",
+            last_sync_error=str(matrix_row["last_sync_error"]) if matrix_row is not None else "",
+            last_sync_at=str(matrix_row["last_sync_at"]) if matrix_row is not None else "",
+            users=_deserialize_matrix_users(matrix_row["users_json"] if matrix_row is not None else "[]"),
+            approved_rooms=_deserialize_matrix_rooms(matrix_row["approved_rooms_json"] if matrix_row is not None else "[]"),
+            assistant_allowed_mcp_ids=_deserialize_json_string_list(
+                matrix_row["assistant_allowed_mcp_ids_json"] if matrix_row is not None else "[]"
+            ),
+            denied_direct_message_room_ids=_deserialize_json_string_list(
+                matrix_row["denied_direct_message_room_ids_json"] if matrix_row is not None else "[]"
+            ),
+        )
         
         return Settings(
             bot_name=core["bot_name"],
@@ -735,6 +805,7 @@ def _load_settings_sync() -> Settings:
             daily_token_usage=usage,
             timed_job_auth_alert_provider_ids=_deserialize_provider_id_list(core["timed_job_auth_alert_provider_ids"]),
             telegram_state=telegram_state,
+            matrix_state=matrix_state,
             theme=_normalize_theme_mode(core["theme"]),
             last_daily_summary_date=str(core["last_daily_summary_date"]) if "last_daily_summary_date" in core.keys() else "",
         )
@@ -925,6 +996,25 @@ def _save_settings_sync(settings: Settings) -> None:
                 settings.telegram_state.owner_user_id,
                 settings.telegram_state.owner_chat_id,
                 settings.telegram_state.last_update_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE matrix_state
+            SET bot_user_id = ?, last_sync_batch = ?, last_sync_error = ?, last_sync_at = ?,
+                users_json = ?, approved_rooms_json = ?, assistant_allowed_mcp_ids_json = ?,
+                denied_direct_message_room_ids_json = ?
+            WHERE id = 1
+            """,
+            (
+                settings.matrix_state.bot_user_id,
+                settings.matrix_state.last_sync_batch,
+                settings.matrix_state.last_sync_error,
+                settings.matrix_state.last_sync_at,
+                json.dumps([entry.model_dump() for entry in settings.matrix_state.users]),
+                json.dumps([entry.model_dump() for entry in settings.matrix_state.approved_rooms]),
+                json.dumps(sorted({str(entry).strip() for entry in settings.matrix_state.assistant_allowed_mcp_ids if str(entry).strip()})),
+                json.dumps(sorted({str(entry).strip() for entry in settings.matrix_state.denied_direct_message_room_ids if str(entry).strip()})),
             ),
         )
             
@@ -1167,6 +1257,74 @@ def _deserialize_provider_id_list(raw_value: object) -> list[str]:
 def _serialize_provider_id_list(provider_ids: list[str]) -> str:
     normalized = sorted({str(entry).strip() for entry in provider_ids if str(entry).strip()})
     return json.dumps(normalized)
+
+
+def _deserialize_matrix_users(raw_value: object) -> list[MatrixUserAccess]:
+    items = _deserialize_json_list(raw_value)
+    normalized: list[MatrixUserAccess] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        mxid = str(item.get("mxid", "")).strip()
+        if not mxid or mxid in seen:
+            continue
+        raw_role = str(item.get("role", "no_assistant_usage")).strip().lower()
+        role: Literal["no_assistant_usage", "assistant_usage", "admin_usage"] = "no_assistant_usage"
+        if raw_role == "assistant_usage":
+            role = "assistant_usage"
+        elif raw_role == "admin_usage":
+            role = "admin_usage"
+        normalized.append(
+            MatrixUserAccess(
+                mxid=mxid,
+                role=role,
+                note=str(item.get("note", "")).strip(),
+            )
+        )
+        seen.add(mxid)
+    return sorted(normalized, key=lambda entry: entry.mxid.lower())
+
+
+def _deserialize_matrix_rooms(raw_value: object) -> list[MatrixRoomAccess]:
+    items = _deserialize_json_list(raw_value)
+    normalized: list[MatrixRoomAccess] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        room_id = str(item.get("room_id", "")).strip()
+        if not room_id or room_id in seen:
+            continue
+        normalized.append(
+            MatrixRoomAccess(
+                room_id=room_id,
+                room_name=str(item.get("room_name", "")).strip(),
+                approved_by_mxid=str(item.get("approved_by_mxid", "")).strip(),
+                is_direct=bool(item.get("is_direct")),
+                active=bool(item.get("active", True)),
+            )
+        )
+        seen.add(room_id)
+    return sorted(normalized, key=lambda entry: (entry.room_name or entry.room_id).lower())
+
+
+def _deserialize_json_string_list(raw_value: object) -> list[str]:
+    items = _deserialize_json_list(raw_value)
+    return sorted({str(item or "").strip() for item in items if str(item or "").strip()})
+
+
+def _deserialize_json_list(raw_value: object) -> list[object]:
+    if isinstance(raw_value, list):
+        return raw_value
+    text = str(raw_value or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _normalize_timezone_name(raw_timezone: object) -> str:

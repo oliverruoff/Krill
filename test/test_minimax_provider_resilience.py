@@ -132,7 +132,7 @@ async def main() -> None:
             prompt="hi",
             system_prompt="",
             model="MiniMax-M2.7",
-            api_key="dummy",
+            api_key="",
             history=[],
         )
     finally:

@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _oauth_fixture_json() -> str:
+    return json.dumps(
+        {
+            "access_token": "oauth-access-placeholder",
+            "refresh_token": "oauth-refresh-placeholder",
+            "account_id": "oauth-account-placeholder",
+            "expires_at_unix": 1,
+        }
+    )
 
 
 async def main() -> None:
@@ -34,7 +46,7 @@ async def main() -> None:
     settings.setup_completed = True
     settings.active_provider_id = "openai_codex_oauth"
     settings.provider_configs["openai_codex_oauth"] = ProviderConfig(
-        api_key='{"access_token":"x","refresh_token":"y","account_id":"a","expires_at_unix":1}',
+        api_key=_oauth_fixture_json(),
         model="gpt-5.3-codex",
     )
     await save_settings(settings)

@@ -70,6 +70,16 @@ import {
   changePasswordBackdrop,
   changePasswordCloseButton,
   changePasswordForm,
+  matrixAccessModal,
+  matrixAccessBackdrop,
+  matrixAccessCloseButton,
+  matrixAccessRefreshIdentityButton,
+  matrixAccessSaveButton,
+  matrixAccessAddUserButton,
+  matrixAccessAddRoomButton,
+  matrixAccessUsersList,
+  matrixAccessRoomsList,
+  matrixAccessAllowedMcps,
   mcpList,
   integrationList,
   systemTraceToggleButton,
@@ -148,6 +158,15 @@ import {
   handleChangePasswordSubmit,
   setChangePasswordFormEnabled,
 } from "./change-password.js";
+import {
+  closeMatrixAccessModal,
+  handleMatrixAccessInputChange,
+  handleMatrixAccessClick,
+  addMatrixAccessUser,
+  addMatrixApprovedRoom,
+  saveMatrixAccess,
+  refreshMatrixBotIdentity,
+} from "./matrix-access.js";
 import {
   renderChatHistory,
   maybeLoadMoreChatHistory,
@@ -276,6 +295,59 @@ if (changePasswordCloseButton instanceof HTMLButtonElement) {
 
 if (changePasswordBackdrop instanceof HTMLElement) {
   changePasswordBackdrop.addEventListener("click", closeChangePasswordModal);
+}
+
+if (matrixAccessCloseButton instanceof HTMLButtonElement) {
+  matrixAccessCloseButton.addEventListener("click", closeMatrixAccessModal);
+}
+
+if (matrixAccessBackdrop instanceof HTMLElement) {
+  matrixAccessBackdrop.addEventListener("click", closeMatrixAccessModal);
+}
+
+if (matrixAccessRefreshIdentityButton instanceof HTMLButtonElement) {
+  matrixAccessRefreshIdentityButton.addEventListener("click", async () => {
+    try {
+      await refreshMatrixBotIdentity();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to refresh Matrix identity."), true);
+    }
+  });
+}
+
+if (matrixAccessSaveButton instanceof HTMLButtonElement) {
+  matrixAccessSaveButton.addEventListener("click", async () => {
+    try {
+      await saveMatrixAccess();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to save Matrix access."), true);
+    }
+  });
+}
+
+if (matrixAccessAddUserButton instanceof HTMLButtonElement) {
+  matrixAccessAddUserButton.addEventListener("click", addMatrixAccessUser);
+}
+
+if (matrixAccessAddRoomButton instanceof HTMLButtonElement) {
+  matrixAccessAddRoomButton.addEventListener("click", addMatrixApprovedRoom);
+}
+
+if (matrixAccessUsersList instanceof HTMLElement) {
+  matrixAccessUsersList.addEventListener("input", handleMatrixAccessInputChange);
+  matrixAccessUsersList.addEventListener("change", handleMatrixAccessInputChange);
+  matrixAccessUsersList.addEventListener("click", handleMatrixAccessClick);
+}
+
+if (matrixAccessRoomsList instanceof HTMLElement) {
+  matrixAccessRoomsList.addEventListener("input", handleMatrixAccessInputChange);
+  matrixAccessRoomsList.addEventListener("change", handleMatrixAccessInputChange);
+  matrixAccessRoomsList.addEventListener("click", handleMatrixAccessClick);
+}
+
+if (matrixAccessAllowedMcps instanceof HTMLElement) {
+  matrixAccessAllowedMcps.addEventListener("input", handleMatrixAccessInputChange);
+  matrixAccessAllowedMcps.addEventListener("change", handleMatrixAccessInputChange);
 }
 
 if (changePasswordForm instanceof HTMLFormElement) {

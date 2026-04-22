@@ -575,17 +575,19 @@ export async function syncIntegrationStatus() {
 
 async function applyIntegrationStatusPayload(payload) {
   const statuses = payload?.statuses;
+  const matrixStatus = statuses && typeof statuses === "object" ? statuses.matrix : null;
   const telegramStatus = statuses && typeof statuses === "object" ? statuses.telegram : null;
-  if (!telegramStatus || typeof telegramStatus !== "object") {
-    return;
+  if (matrixStatus && typeof matrixStatus === "object") {
+    state.matrixStatus = matrixStatus;
   }
-
-  state.telegramEnabled = Boolean(telegramStatus.enabled);
-  state.telegramTokenConfigured = Boolean(telegramStatus.token_configured);
-  state.telegramOwnerUserId = typeof telegramStatus.owner_user_id === "string" ? telegramStatus.owner_user_id : "";
-  state.telegramOwnerChatId = typeof telegramStatus.owner_chat_id === "string" ? telegramStatus.owner_chat_id : "";
-  const { updateTelegramStatusLabel } = await import("./mcp-handlers.js");
-  updateTelegramStatusLabel();
+  if (telegramStatus && typeof telegramStatus === "object") {
+    state.telegramEnabled = Boolean(telegramStatus.enabled);
+    state.telegramTokenConfigured = Boolean(telegramStatus.token_configured);
+    state.telegramOwnerUserId = typeof telegramStatus.owner_user_id === "string" ? telegramStatus.owner_user_id : "";
+    state.telegramOwnerChatId = typeof telegramStatus.owner_chat_id === "string" ? telegramStatus.owner_chat_id : "";
+    const { updateTelegramStatusLabel } = await import("./mcp-handlers.js");
+    updateTelegramStatusLabel();
+  }
 }
 
 export function startIntegrationStatusSync() {

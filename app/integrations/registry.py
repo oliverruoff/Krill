@@ -1,11 +1,13 @@
 """Registry for runtime integrations such as Telegram."""
 
 from .base import IntegrationPlugin
+from .matrix import MatrixIntegration
 from .telegram import TelegramIntegration
 from .whatsapp.plugin import WhatsAppIntegration
 
 
 _INTEGRATIONS: dict[str, IntegrationPlugin] = {
+    "matrix": MatrixIntegration(),
     "telegram": TelegramIntegration(),
     "whatsapp": WhatsAppIntegration(),
 }

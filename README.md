@@ -27,6 +27,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
   - Git Operations (clone, status, branch, commit, pull/push, PR via `gh`)
   - Local Files (directory listing, glob/grep/search, file reads/writes/edits, copy/move/delete, command execution, and temporary shared download links)
 - Use integrations for chat ingress channels:
+  - Matrix (self-hosted Matrix bot with per-user access roles, approved-room controls, and assistant MCP allowlisting)
   - Telegram (bot token based Telegram chat ingress)
   - WhatsApp Web (allowlisted inbound messages bridged into Gateway automation chats)
 - Schedule timed jobs (daily/weekly/monthly/one-time/hourly/every 2h/every 30m/15m/10m/5m) with hidden prompts, channel fan-out (Gateway, Telegram), optional per-job provider/model override, and optional AI output-decision mode
@@ -128,6 +129,9 @@ Orchestration notes:
 - tool routing prefers stronger/native integrations first and keeps lower-confidence routes as fallback options
 - important tool results pass lightweight validation gates before the workflow advances
 - Gateway SSE and Telegram share the same execution event model for progress visibility and cancellation-aware execution
+- Matrix integration adds three access roles: `admin_usage`, `assistant_usage`, and `no_assistant_usage`
+- Matrix `assistant_usage` can be hard-limited to a checked MCP allowlist in the Gateway integration panel
+- Matrix direct messages from non-admin users get a static denial once; approved group rooms only respond on mention/reply
 
 Current tools:
 

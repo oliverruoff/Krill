@@ -43,7 +43,7 @@ async def main() -> None:
     settings.bot_name = "KrillDeutsch"
     settings.system_prompt = "Sprich nur Deutsch."
     settings.active_provider_id = "gemini"
-    settings.provider_configs["gemini"] = ProviderConfig(api_key="dummy", model="gemini-2.5-flash")
+    settings.provider_configs["gemini"] = ProviderConfig(api_key="", model="gemini-2.5-flash")
     settings.core_memories = [
         MemoryEntry(
             content="Die Lieblingsfarbe des Nutzers ist Gruen.",

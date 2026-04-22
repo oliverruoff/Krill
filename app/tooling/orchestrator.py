@@ -26,6 +26,7 @@ from .execution import (
     rank_tools_for_intent,
 )
 from .pipelines import PipelineSpec, get_pipeline_spec
+from .runtime_context import get_runtime_context
 from .validators import validate_tool_result
 
 
@@ -1212,8 +1213,17 @@ def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     all_mcps = get_all_mcps()
     tool_counts_by_mcp: dict[str, int] = {}
+    runtime_context = get_runtime_context()
+    source_user_role = str(runtime_context.get("source_user_role", "")).strip().lower()
+    allowed_mcp_ids = {
+        str(item).strip()
+        for item in runtime_context.get("allowed_mcp_ids", [])
+        if str(item).strip()
+    }
 
     for mcp_id, plugin in all_mcps.items():
+        if source_user_role == "assistant_usage" and mcp_id not in allowed_mcp_ids:
+            continue
         raw_config = settings.mcp_configs.get(mcp_id)
         if raw_config is None:
             config = McpConfig(enabled=bool(getattr(plugin, "default_enabled", False)), params={})

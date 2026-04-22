@@ -673,6 +673,70 @@ function renderConfigPanel(container, items, getConfig, options) {
 
       actions.appendChild(verifyButton);
       cardBody.appendChild(actions);
+    } else if (options.kind === "integration" && item.id === "matrix") {
+      const matrixStatus = state.matrixStatus && typeof state.matrixStatus === "object" ? state.matrixStatus : {};
+      const guideNode = document.createElement("div");
+      guideNode.className = "mcp-guide";
+
+      const guideTitle = document.createElement("p");
+      guideTitle.className = "mcp-guide-title";
+      guideTitle.textContent = "Matrix usage";
+      guideNode.appendChild(guideTitle);
+
+      const helpList = document.createElement("ol");
+      helpList.className = "mcp-guide-list";
+      [
+        "Use a dedicated Matrix bot account with a homeserver URL and access token.",
+        "Admin users can DM the bot directly and use all slash commands.",
+        "assistant_usage users can only trigger the bot in approved group rooms.",
+        "Group rooms only respond on mention or reply-to-bot.",
+      ].forEach((itemText) => {
+        const li = document.createElement("li");
+        li.textContent = itemText;
+        helpList.appendChild(li);
+      });
+      guideNode.appendChild(helpList);
+      cardBody.appendChild(guideNode);
+
+      const statusNode = document.createElement("p");
+      statusNode.className = "mcp-description";
+      const botUserId = typeof matrixStatus.bot_user_id === "string" ? matrixStatus.bot_user_id : "";
+      const roomCount = Number.isFinite(Number(matrixStatus.approved_room_count)) ? Number(matrixStatus.approved_room_count) : 0;
+      const userCount = Number.isFinite(Number(matrixStatus.user_count)) ? Number(matrixStatus.user_count) : 0;
+      const syncError = typeof matrixStatus.last_sync_error === "string" ? matrixStatus.last_sync_error.trim() : "";
+      statusNode.textContent = syncError
+        ? `Matrix sync issue: ${syncError}`
+        : `Bot: ${botUserId || "unknown"} | users: ${userCount} | approved rooms: ${roomCount}`;
+      cardBody.appendChild(statusNode);
+
+      const manageButton = document.createElement("button");
+      manageButton.type = "button";
+      manageButton.className = "mcp-link-btn";
+      manageButton.textContent = "Manage Access";
+      manageButton.dataset.action = "matrix-manage";
+      manageButton.dataset.configKind = options.kind;
+      manageButton.dataset.configId = item.id;
+
+      const saveButton = document.createElement("button");
+      saveButton.type = "button";
+      saveButton.className = "mcp-link-btn";
+      saveButton.textContent = "Save";
+      saveButton.dataset.action = "save";
+      saveButton.dataset.configKind = options.kind;
+      saveButton.dataset.configId = item.id;
+
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "mcp-link-btn";
+      verifyButton.textContent = "Verify";
+      verifyButton.dataset.action = "verify";
+      verifyButton.dataset.configKind = options.kind;
+      verifyButton.dataset.configId = item.id;
+
+      actions.appendChild(manageButton);
+      actions.appendChild(saveButton);
+      actions.appendChild(verifyButton);
+      cardBody.appendChild(actions);
     } else {
       const saveButton = document.createElement("button");
       saveButton.type = "button";

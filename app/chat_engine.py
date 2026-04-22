@@ -1,7 +1,7 @@
 """Shared chat execution engine used by Gateway SSE and Telegram integration."""
 
 import asyncio
-from typing import Awaitable, Callable, TypedDict
+from typing import Awaitable, Callable, TypedDict, cast
 
 from app.config import load_settings, save_settings, Settings
 from app.providers import get_provider, get_provider_model_limit
@@ -58,6 +58,11 @@ async def generate_chat_response(
     source_channel: str = "gateway",
     source_chat_id: str = "",
     source_request_id: str = "",
+    source_user_id: str = "",
+    source_user_role: str = "",
+    source_room_id: str = "",
+    source_room_mode: str = "",
+    allowed_mcp_ids: list[str] | None = None,
     on_execution_event: ExecutionEventCallback | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> tuple[ChatEngineResult, int | None]:
@@ -94,6 +99,11 @@ async def generate_chat_response(
         source_chat_id=source_chat_id,
         source_request_id=source_request_id,
         cancellation_token=token,
+        source_user_id=source_user_id,
+        source_user_role=source_user_role,
+        source_room_id=source_room_id,
+        source_room_mode=source_room_mode,
+        allowed_mcp_ids=allowed_mcp_ids,
     )
     try:
         orchestration = await generate_with_tools(
@@ -150,7 +160,7 @@ async def generate_chat_response(
         for entry in raw_events:
             if not isinstance(entry, dict):
                 continue
-            normalized_events.append({str(key): value for key, value in entry.items()})
+            normalized_events.append(cast(ExecutionEvent, {str(key): value for key, value in entry.items()}))
 
     used_tokens = orchestration.get("used_tokens")
     result: ChatEngineResult = {
