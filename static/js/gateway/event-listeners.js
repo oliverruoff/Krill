@@ -80,6 +80,12 @@ import {
   matrixAccessUsersList,
   matrixAccessRoomsList,
   matrixAccessAllowedMcps,
+  telegramAccessModal,
+  telegramAccessBackdrop,
+  telegramAccessCloseButton,
+  telegramAccessSaveButton,
+  telegramAccessGroupsList,
+  telegramAccessAllowedMcps,
   mcpList,
   integrationList,
   systemTraceToggleButton,
@@ -167,6 +173,12 @@ import {
   saveMatrixAccess,
   refreshMatrixBotIdentity,
 } from "./matrix-access.js";
+import {
+  closeTelegramAccessModal,
+  handleTelegramAccessInputChange,
+  handleTelegramAccessClick,
+  saveTelegramAccess,
+} from "./telegram-access.js";
 import {
   renderChatHistory,
   maybeLoadMoreChatHistory,
@@ -348,6 +360,33 @@ if (matrixAccessRoomsList instanceof HTMLElement) {
 if (matrixAccessAllowedMcps instanceof HTMLElement) {
   matrixAccessAllowedMcps.addEventListener("input", handleMatrixAccessInputChange);
   matrixAccessAllowedMcps.addEventListener("change", handleMatrixAccessInputChange);
+}
+
+if (telegramAccessCloseButton instanceof HTMLButtonElement) {
+  telegramAccessCloseButton.addEventListener("click", closeTelegramAccessModal);
+}
+
+if (telegramAccessBackdrop instanceof HTMLElement) {
+  telegramAccessBackdrop.addEventListener("click", closeTelegramAccessModal);
+}
+
+if (telegramAccessSaveButton instanceof HTMLButtonElement) {
+  telegramAccessSaveButton.addEventListener("click", async () => {
+    try {
+      await saveTelegramAccess();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to save Telegram access."), true);
+    }
+  });
+}
+
+if (telegramAccessGroupsList instanceof HTMLElement) {
+  telegramAccessGroupsList.addEventListener("click", handleTelegramAccessClick);
+}
+
+if (telegramAccessAllowedMcps instanceof HTMLElement) {
+  telegramAccessAllowedMcps.addEventListener("input", handleTelegramAccessInputChange);
+  telegramAccessAllowedMcps.addEventListener("change", handleTelegramAccessInputChange);
 }
 
 if (changePasswordForm instanceof HTMLFormElement) {

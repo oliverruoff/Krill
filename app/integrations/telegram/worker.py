@@ -77,14 +77,18 @@ def _extract_shared_file_token(text: str) -> str:
     return tokens[0] if tokens else ""
 
 
+class TelegramChatRuntime(TypedDict):
+    chats: list[ChatSession]
+    active_chat_id: str
+
+
 class TelegramBridgeWorker:
     def __init__(self) -> None:
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._bridge_active = False
         self._last_token = ""
-        self._telegram_chats: list[ChatSession] = []
-        self._active_chat_id = ""
+        self._chat_runtimes: dict[int, TelegramChatRuntime] = {}
         self._active_runs: dict[int, ActiveTelegramRun] = {}
 
     def start(self) -> None:
@@ -204,17 +208,34 @@ class TelegramBridgeWorker:
             await save_settings(settings)
             owner_user_id = str(sender_id)
 
-        if str(sender_id) != owner_user_id:
-            return
-
-        owner_chat_id = settings.telegram_state.owner_chat_id.strip()
-        if owner_chat_id != str(chat_id):
-            settings.telegram_state.owner_chat_id = str(chat_id)
-            await save_settings(settings)
-
+        is_owner = str(sender_id) == owner_user_id
         is_group = chat_type in {"group", "supergroup"}
-        if is_group and not _is_group_message_addressed_to_bot(message, bot_username, bot_id):
+
+        if not is_owner and not is_group:
+            # Non-owner in private chat: always ignore
             return
+
+        if is_group:
+            if not _is_group_message_addressed_to_bot(message, bot_username, bot_id):
+                return
+            if not is_owner:
+                approved_ids = {g.strip() for g in settings.telegram_state.approved_group_ids if g.strip()}
+                if str(chat_id) not in approved_ids:
+                    return
+
+        # Only update owner_chat_id when the owner is in a private chat,
+        # so timed job delivery continues to reach the owner DM, not a group.
+        if is_owner and not is_group:
+            owner_chat_id = settings.telegram_state.owner_chat_id.strip()
+            if owner_chat_id != str(chat_id):
+                settings.telegram_state.owner_chat_id = str(chat_id)
+                await save_settings(settings)
+
+        # Determine role for this sender
+        if is_owner:
+            sender_role = "owner"
+        else:
+            sender_role = "assistant_usage"
 
         text = message.get("text")
         caption = message.get("caption")
@@ -230,12 +251,16 @@ class TelegramBridgeWorker:
 
         command, command_arg = _parse_command(prompt_text, bot_username)
         if command:
+            if not is_owner:
+                # Non-owners cannot issue commands
+                return
             response_payload = await self._handle_command(
                 command,
                 command_arg,
                 settings,
                 token=token,
                 telegram_chat_id=chat_id,
+                is_group=is_group,
             )
             response_text = str(response_payload.get("text", "")).strip()
             response_parse_mode = str(response_payload.get("parse_mode", "MarkdownV2")).strip()
@@ -295,8 +320,9 @@ class TelegramBridgeWorker:
             )
             return
 
-        active_chat = self._ensure_active_chat(prompt_text)
+        active_chat = self._ensure_active_chat(chat_id, prompt_text)
         request_id = str(uuid4())
+        allowed_mcp_ids: list[str] | None = None if is_owner else list(settings.telegram_state.guest_allowed_mcp_ids)
         task = asyncio.create_task(
             self._run_user_message(
                 token=token,
@@ -306,6 +332,8 @@ class TelegramBridgeWorker:
                 image_payload=image_payload,
                 source_chat_id=active_chat.id,
                 source_request_id=request_id,
+                sender_role=sender_role,
+                allowed_mcp_ids=allowed_mcp_ids,
             )
         )
         self._active_runs[chat_id] = {
@@ -363,12 +391,18 @@ class TelegramBridgeWorker:
             "telegram_file_id": selected_file_id,
         }
 
-    def _ensure_active_chat(self, prompt: str) -> ChatSession:
-        active_chat = _get_active_chat(self._telegram_chats, self._active_chat_id)
+    def _get_or_create_runtime(self, chat_id: int) -> TelegramChatRuntime:
+        if chat_id not in self._chat_runtimes:
+            self._chat_runtimes[chat_id] = {"chats": [], "active_chat_id": ""}
+        return self._chat_runtimes[chat_id]
+
+    def _ensure_active_chat(self, chat_id: int, prompt: str) -> ChatSession:
+        runtime = self._get_or_create_runtime(chat_id)
+        active_chat = _get_active_chat(runtime["chats"], runtime["active_chat_id"])
         if active_chat is None:
             active_chat = _create_chat_entry(prompt)
-            self._telegram_chats.append(active_chat)
-            self._active_chat_id = active_chat.id
+            runtime["chats"].append(active_chat)
+            runtime["active_chat_id"] = active_chat.id
         elif not active_chat.messages and active_chat.title.strip().lower() == "new chat":
             active_chat.title = _derive_chat_title(prompt)
         return active_chat
@@ -438,14 +472,19 @@ class TelegramBridgeWorker:
         image_payload: dict[str, object] | None,
         source_chat_id: str,
         source_request_id: str,
+        sender_role: str = "owner",
+        allowed_mcp_ids: list[str] | None = None,
     ) -> None:
         try:
             response_text = await self._handle_user_message(
                 settings,
                 prompt_text,
+                telegram_chat_id=telegram_chat_id,
                 image=image_payload,
                 source_chat_id=source_chat_id,
                 source_request_id=source_request_id,
+                sender_role=sender_role,
+                allowed_mcp_ids=allowed_mcp_ids,
                 on_execution_event=lambda event: self._update_progress_message(
                     token=token,
                     telegram_chat_id=telegram_chat_id,
@@ -521,16 +560,19 @@ class TelegramBridgeWorker:
         *,
         token: str,
         telegram_chat_id: int,
+        is_group: bool = False,
     ) -> TelegramCommandResponse:
+        runtime = self._get_or_create_runtime(telegram_chat_id)
+
         if command == "new":
             chat = _create_chat_entry("New chat")
-            self._telegram_chats.append(chat)
-            self._active_chat_id = chat.id
+            runtime["chats"].append(chat)
+            runtime["active_chat_id"] = chat.id
             return _markdown_command_response(f"Started new chat: {chat.title}")
 
         if command in {"status", "where"}:
-            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
-            self._active_chat_id = active.id if active is not None else ""
+            active = _get_active_chat(runtime["chats"], runtime["active_chat_id"])
+            runtime["active_chat_id"] = active.id if active is not None else ""
             owner_bound = "yes" if settings.telegram_state.owner_user_id.strip() else "no"
             if active is None:
                 return _markdown_command_response(f"Status\nOwner bound: {owner_bound}\nActive chat: none")
@@ -539,8 +581,8 @@ class TelegramBridgeWorker:
             )
 
         if command == "usage":
-            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
-            self._active_chat_id = active.id if active is not None else ""
+            active = _get_active_chat(runtime["chats"], runtime["active_chat_id"])
+            runtime["active_chat_id"] = active.id if active is not None else ""
             context_tokens = _estimate_chat_context_tokens(active)
             provider_id = settings.active_provider_id.strip()
             provider_config = settings.provider_configs.get(provider_id)
@@ -571,6 +613,8 @@ class TelegramBridgeWorker:
                 "/usage - Show chat and daily token usage\n"
                 "/debug - Create a hidden full debug dump\n"
                 "/compaction - Compact active chat and start fresh\n"
+                "/approve - Approve this group for non-owner access\n"
+                "/unapprove - Remove this group's non-owner access\n"
                 "/help - Show this help"
             )
 
@@ -585,8 +629,8 @@ class TelegramBridgeWorker:
             return _markdown_command_response(result.text)
 
         if command == "summarize":
-            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
-            self._active_chat_id = active.id if active is not None else ""
+            active = _get_active_chat(runtime["chats"], runtime["active_chat_id"])
+            runtime["active_chat_id"] = active.id if active is not None else ""
             if active is None:
                 return _markdown_command_response("No active chat available to summarize.")
             try:
@@ -600,8 +644,8 @@ class TelegramBridgeWorker:
             return _markdown_command_response(summary)
 
         if command == "debug":
-            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
-            self._active_chat_id = active.id if active is not None else ""
+            active = _get_active_chat(runtime["chats"], runtime["active_chat_id"])
+            runtime["active_chat_id"] = active.id if active is not None else ""
             if active is None:
                 return _markdown_command_response("No active chat available to debug.")
 
@@ -632,8 +676,8 @@ class TelegramBridgeWorker:
             }
 
         if command == "compaction":
-            active = _get_active_chat(self._telegram_chats, self._active_chat_id)
-            self._active_chat_id = active.id if active is not None else ""
+            active = _get_active_chat(runtime["chats"], runtime["active_chat_id"])
+            runtime["active_chat_id"] = active.id if active is not None else ""
             if active is None:
                 return _markdown_command_response("No active chat available to compact.")
 
@@ -657,8 +701,8 @@ class TelegramBridgeWorker:
                     system_type="memory_compaction",
                 )
             )
-            self._telegram_chats.append(new_chat)
-            self._active_chat_id = new_chat.id
+            runtime["chats"].append(new_chat)
+            runtime["active_chat_id"] = new_chat.id
 
             used_suffix = f"\nCompaction tokens used: {used_tokens}" if isinstance(used_tokens, int) and used_tokens > 0 else ""
             return _markdown_command_response(
@@ -668,25 +712,47 @@ class TelegramBridgeWorker:
             )
 
         if command == "chats":
-            if not self._telegram_chats:
+            if not runtime["chats"]:
                 return _markdown_command_response("No Telegram chats yet.")
             lines = ["Recent Telegram chats:"]
-            sorted_chats = sorted(self._telegram_chats, key=_latest_timestamp_or_empty, reverse=True)
+            sorted_chats = sorted(runtime["chats"], key=_latest_timestamp_or_empty, reverse=True)
             for index, chat in enumerate(sorted_chats[:10], start=1):
-                active_marker = " *" if chat.id == self._active_chat_id else ""
+                active_marker = " *" if chat.id == runtime["active_chat_id"] else ""
                 lines.append(f"{index}. {chat.title} ({_short_chat_id(chat.id)}){active_marker}")
             lines.append("Use /use <number> to switch.")
             return _markdown_command_response("\n".join(lines))
 
         if command == "use":
-            if not self._telegram_chats:
+            if not runtime["chats"]:
                 return _markdown_command_response("No Telegram chats available.")
 
-            selected = _select_chat_by_argument(self._telegram_chats, argument)
+            selected = _select_chat_by_argument(runtime["chats"], argument)
             if selected is None:
                 return _markdown_command_response("Invalid chat selector. Use /chats first.")
-            self._active_chat_id = selected.id
+            runtime["active_chat_id"] = selected.id
             return _markdown_command_response(f"Switched active chat to: {selected.title}")
+
+        if command == "approve":
+            if not is_group:
+                return _markdown_command_response("This command can only be used in a group chat.")
+            fresh_settings = await load_settings()
+            group_id_str = str(telegram_chat_id)
+            if group_id_str not in fresh_settings.telegram_state.approved_group_ids:
+                fresh_settings.telegram_state.approved_group_ids.append(group_id_str)
+                await save_settings(fresh_settings)
+            return _markdown_command_response(f"Group {telegram_chat_id} approved for non-owner access.")
+
+        if command == "unapprove":
+            if not is_group:
+                return _markdown_command_response("This command can only be used in a group chat.")
+            fresh_settings = await load_settings()
+            group_id_str = str(telegram_chat_id)
+            try:
+                fresh_settings.telegram_state.approved_group_ids.remove(group_id_str)
+                await save_settings(fresh_settings)
+            except ValueError:
+                pass
+            return _markdown_command_response(f"Group {telegram_chat_id} access removed.")
 
         return _markdown_command_response("Unknown command. Use /help for available commands.")
 
@@ -695,18 +761,22 @@ class TelegramBridgeWorker:
         settings: Settings,
         text: str,
         *,
+        telegram_chat_id: int,
         image: dict[str, object] | None = None,
         source_chat_id: str = "",
         source_request_id: str = "",
+        sender_role: str = "owner",
+        allowed_mcp_ids: list[str] | None = None,
         on_execution_event: Callable[[ExecutionEvent], Awaitable[None]] | None = None,
     ) -> str:
         prompt = text.strip()
         if not prompt and image is None:
             return ""
 
-        active_chat = next((chat for chat in self._telegram_chats if chat.id == source_chat_id), None)
+        runtime = self._get_or_create_runtime(telegram_chat_id)
+        active_chat = next((chat for chat in runtime["chats"] if chat.id == source_chat_id), None)
         if active_chat is None:
-            active_chat = self._ensure_active_chat(prompt)
+            active_chat = self._ensure_active_chat(telegram_chat_id, prompt)
             source_chat_id = active_chat.id
 
         user_timestamp = _timestamp()
@@ -772,6 +842,7 @@ class TelegramBridgeWorker:
                 source_chat_id=active_chat.id,
                 source_request_id=source_request_id,
                 on_execution_event=on_execution_event,
+                allowed_mcp_ids=allowed_mcp_ids,
             )
             text_response = engine_result["text"]
             used_tokens = engine_result["used_tokens"]

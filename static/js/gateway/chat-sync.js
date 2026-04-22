@@ -585,6 +585,8 @@ async function applyIntegrationStatusPayload(payload) {
     state.telegramTokenConfigured = Boolean(telegramStatus.token_configured);
     state.telegramOwnerUserId = typeof telegramStatus.owner_user_id === "string" ? telegramStatus.owner_user_id : "";
     state.telegramOwnerChatId = typeof telegramStatus.owner_chat_id === "string" ? telegramStatus.owner_chat_id : "";
+    state.telegramApprovedGroupIds = Array.isArray(telegramStatus.approved_group_ids) ? telegramStatus.approved_group_ids : state.telegramApprovedGroupIds;
+    state.telegramGuestAllowedMcpIds = Array.isArray(telegramStatus.guest_allowed_mcp_ids) ? telegramStatus.guest_allowed_mcp_ids : state.telegramGuestAllowedMcpIds;
     const { updateTelegramStatusLabel } = await import("./mcp-handlers.js");
     updateTelegramStatusLabel();
   }

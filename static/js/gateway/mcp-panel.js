@@ -737,6 +737,43 @@ function renderConfigPanel(container, items, getConfig, options) {
       actions.appendChild(saveButton);
       actions.appendChild(verifyButton);
       cardBody.appendChild(actions);
+    } else if (options.kind === "integration" && item.id === "telegram") {
+      const telegramStatus = state.telegramStatus && typeof state.telegramStatus === "object" ? state.telegramStatus : {};
+      const groupCount = Number.isFinite(Number(telegramStatus.approved_group_count)) ? Number(telegramStatus.approved_group_count) : (state.telegramApprovedGroupIds || []).length;
+
+      const statusNode = document.createElement("p");
+      statusNode.className = "mcp-description";
+      statusNode.textContent = `Approved groups: ${groupCount}`;
+      cardBody.appendChild(statusNode);
+
+      const manageButton = document.createElement("button");
+      manageButton.type = "button";
+      manageButton.className = "mcp-link-btn";
+      manageButton.textContent = "Manage Group Access";
+      manageButton.dataset.action = "telegram-manage";
+      manageButton.dataset.configKind = options.kind;
+      manageButton.dataset.configId = item.id;
+
+      const saveButton = document.createElement("button");
+      saveButton.type = "button";
+      saveButton.className = "mcp-link-btn";
+      saveButton.textContent = "Save";
+      saveButton.dataset.action = "save";
+      saveButton.dataset.configKind = options.kind;
+      saveButton.dataset.configId = item.id;
+
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "mcp-link-btn";
+      verifyButton.textContent = "Verify";
+      verifyButton.dataset.action = "verify";
+      verifyButton.dataset.configKind = options.kind;
+      verifyButton.dataset.configId = item.id;
+
+      actions.appendChild(manageButton);
+      actions.appendChild(saveButton);
+      actions.appendChild(verifyButton);
+      cardBody.appendChild(actions);
     } else {
       const saveButton = document.createElement("button");
       saveButton.type = "button";

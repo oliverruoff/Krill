@@ -145,6 +145,12 @@ async function loadGatewayMeta() {
     state.telegramOwnerChatId = typeof settings?.telegram_state?.owner_chat_id === "string"
       ? settings.telegram_state.owner_chat_id
       : "";
+    state.telegramApprovedGroupIds = Array.isArray(settings?.telegram_state?.approved_group_ids)
+      ? settings.telegram_state.approved_group_ids
+      : [];
+    state.telegramGuestAllowedMcpIds = Array.isArray(settings?.telegram_state?.guest_allowed_mcp_ids)
+      ? settings.telegram_state.guest_allowed_mcp_ids
+      : [];
     state.matrixAccessUsers = Array.isArray(settings?.matrix_state?.users) ? settings.matrix_state.users : [];
     state.matrixApprovedRooms = Array.isArray(settings?.matrix_state?.approved_rooms) ? settings.matrix_state.approved_rooms : [];
     state.matrixAssistantAllowedMcpIds = Array.isArray(settings?.matrix_state?.assistant_allowed_mcp_ids)

@@ -503,6 +503,12 @@ export async function handleMcpActionClick(event) {
       return;
     }
 
+    if (action === "telegram-manage" && configKind === "integration" && configId === "telegram") {
+      const { openTelegramAccessModal } = await import("./telegram-access.js");
+      await openTelegramAccessModal();
+      return;
+    }
+
     if (action === "ssh-key") {
       const { fetchGitSshKey } = await import("./git-ssh.js");
       await fetchGitSshKey();

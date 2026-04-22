@@ -94,6 +94,8 @@ class TelegramState(BaseModel):
     owner_user_id: str = ""
     owner_chat_id: str = ""
     last_update_id: int = Field(default=0, ge=0)
+    approved_group_ids: list[str] = Field(default_factory=list)
+    guest_allowed_mcp_ids: list[str] = Field(default_factory=list)
 
 
 class MatrixUserAccess(BaseModel):
@@ -489,6 +491,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_settings_core_column(conn, "last_daily_summary_date", "TEXT NOT NULL DEFAULT ''")
     _ensure_chats_column(conn, "hidden_from_history", "INTEGER NOT NULL DEFAULT 0 CHECK (hidden_from_history IN (0,1))")
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_telegram_state_column(conn, "approved_group_ids_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_telegram_state_column(conn, "guest_allowed_mcp_ids_json", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_matrix_state_column(conn, "bot_user_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_matrix_state_column(conn, "last_sync_batch", "TEXT NOT NULL DEFAULT ''")
     _ensure_matrix_state_column(conn, "last_sync_error", "TEXT NOT NULL DEFAULT ''")
@@ -766,6 +770,8 @@ def _load_settings_sync() -> Settings:
             owner_user_id=tg["owner_user_id"],
             owner_chat_id=tg["owner_chat_id"],
             last_update_id=tg["last_update_id"],
+            approved_group_ids=_deserialize_json_string_list(tg["approved_group_ids_json"] if tg is not None else "[]"),
+            guest_allowed_mcp_ids=_deserialize_json_string_list(tg["guest_allowed_mcp_ids_json"] if tg is not None else "[]"),
         )
         matrix_row = conn.execute("SELECT * FROM matrix_state WHERE id = 1").fetchone()
         matrix_state = MatrixState(
@@ -991,11 +997,13 @@ def _save_settings_sync(settings: Settings) -> None:
             
         # 8. Telegram
         conn.execute(
-            "UPDATE telegram_state SET owner_user_id = ?, owner_chat_id = ?, last_update_id = ? WHERE id = 1",
+            "UPDATE telegram_state SET owner_user_id = ?, owner_chat_id = ?, last_update_id = ?, approved_group_ids_json = ?, guest_allowed_mcp_ids_json = ? WHERE id = 1",
             (
                 settings.telegram_state.owner_user_id,
                 settings.telegram_state.owner_chat_id,
                 settings.telegram_state.last_update_id,
+                json.dumps(sorted({str(g).strip() for g in settings.telegram_state.approved_group_ids if str(g).strip()})),
+                json.dumps(sorted({str(m).strip() for m in settings.telegram_state.guest_allowed_mcp_ids if str(m).strip()})),
             ),
         )
         conn.execute(

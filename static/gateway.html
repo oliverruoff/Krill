@@ -505,6 +505,46 @@
       </section>
     </div>
 
+    <div id="telegram-access-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="telegram-access-title">
+      <div id="telegram-access-backdrop" class="brain-modal-backdrop"></div>
+      <section class="brain-modal-card">
+        <header class="brain-modal-header">
+          <div>
+            <h2 id="telegram-access-title">Telegram Group Access</h2>
+            <p class="brain-modal-meta">Manage approved groups and the MCP allowlist for non-owner users in those groups.</p>
+          </div>
+          <button type="button" id="telegram-access-close" class="brain-modal-close" aria-label="Close Telegram access management">&times;</button>
+        </header>
+        <div class="brain-modal-toolbar">
+          <button type="button" id="telegram-access-save" class="secondary">Save Access Rules</button>
+        </div>
+        <div class="brain-modal-body" style="display:block; overflow:auto;">
+          <section class="mcp-guide" style="margin-bottom:16px;">
+            <p class="mcp-guide-title">How Telegram group access works</p>
+            <ul class="mcp-guide-list">
+              <li>The bot ignores all non-owners in private chats.</li>
+              <li>In groups, the bot only responds when directly mentioned (<strong>@botname</strong>) or replied to.</li>
+              <li>Use <strong>/approve@botname</strong> in a group to allow non-owners there to interact.</li>
+              <li>Use <strong>/unapprove@botname</strong> to remove a group's access.</li>
+              <li>Non-owners in approved groups can only call the MCPs checked below.</li>
+            </ul>
+          </section>
+
+          <section class="mcp-guide" style="margin-bottom:16px;">
+            <p class="mcp-guide-title">Approved Groups</p>
+            <div id="telegram-access-groups-list" class="memory-modal-list" aria-live="polite"></div>
+            <p class="mcp-description" style="margin-top:8px;">Approve groups via <code>/approve@botname</code> inside the group chat, or remove them here.</p>
+          </section>
+
+          <section class="mcp-guide">
+            <p class="mcp-guide-title">Guest MCP allowlist</p>
+            <p class="mcp-description">Only these MCPs are exposed to non-owner users in approved groups. Leave unchecked for pure LLM-only behavior.</p>
+            <div id="telegram-access-allowed-mcps" class="mcp-multiselect"></div>
+          </section>
+        </div>
+      </section>
+    </div>
+
     <div id="script-editor-modal" class="brain-modal hidden" role="dialog" aria-modal="true" aria-labelledby="script-editor-title">
       <div id="script-editor-backdrop" class="brain-modal-backdrop"></div>
       <section class="brain-modal-card script-editor-modal-card">

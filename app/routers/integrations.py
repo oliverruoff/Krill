@@ -52,6 +52,17 @@ class MatrixRefreshIdentityResponse(BaseModel):
     bot_user_id: str
 
 
+class TelegramAccessResponse(BaseModel):
+    approved_group_ids: list[str] = Field(default_factory=list)
+    guest_allowed_mcp_ids: list[str] = Field(default_factory=list)
+    available_mcps: list[dict[str, str]] = Field(default_factory=list)
+
+
+class UpdateTelegramAccessRequest(BaseModel):
+    approved_group_ids: list[str] = Field(default_factory=list)
+    guest_allowed_mcp_ids: list[str] = Field(default_factory=list)
+
+
 @router.get("/api/integrations")
 async def get_integrations() -> list[dict[str, object]]:
     return get_integration_options()
@@ -119,6 +130,8 @@ async def get_integration_status() -> IntegrationStatusResponse:
                 "owner_user_id": owner_user_id,
                 "owner_chat_id": owner_chat_id,
                 "owner_bound": bool(owner_user_id),
+                "approved_group_count": len(settings.telegram_state.approved_group_ids),
+                "guest_allowed_mcp_count": len(settings.telegram_state.guest_allowed_mcp_ids),
             },
             "whatsapp": {
                 "enabled": bool(whatsapp_config.enabled),
@@ -217,3 +230,32 @@ async def resolve_matrix_room(payload: dict[str, str]) -> dict[str, str]:
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Matrix room lookup failed: {exc}") from exc
     return {"room_id": room_id, "room_name": room_name}
+
+
+@router.get("/api/integrations/telegram/access", response_model=TelegramAccessResponse)
+async def get_telegram_access() -> TelegramAccessResponse:
+    settings = await load_settings()
+    available_mcps = [
+        {"id": mcp_id, "label": plugin.display_name}
+        for mcp_id, plugin in sorted(get_all_mcps().items())
+    ]
+    return TelegramAccessResponse(
+        approved_group_ids=list(settings.telegram_state.approved_group_ids),
+        guest_allowed_mcp_ids=list(settings.telegram_state.guest_allowed_mcp_ids),
+        available_mcps=available_mcps,
+    )
+
+
+@router.put("/api/integrations/telegram/access", response_model=TelegramAccessResponse)
+async def update_telegram_access(payload: UpdateTelegramAccessRequest) -> TelegramAccessResponse:
+    settings = await load_settings()
+    settings.telegram_state.approved_group_ids = [
+        gid.strip() for gid in payload.approved_group_ids if gid.strip()
+    ]
+    settings.telegram_state.guest_allowed_mcp_ids = sorted({
+        mcp_id.strip()
+        for mcp_id in payload.guest_allowed_mcp_ids
+        if mcp_id.strip() in get_all_mcps()
+    })
+    await save_settings(settings)
+    return await get_telegram_access()
