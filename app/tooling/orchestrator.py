@@ -362,6 +362,19 @@ async def generate_with_tools(
                     ensure_ascii=True,
                 ),
             )
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "planner_feedback": {
+                        "type": "planner_multi_json_detected",
+                        "message": (
+                            "Previous planner output contained multiple JSON objects. "
+                            "Return exactly one JSON object for the next step."
+                        ),
+                        "object_count": parse_result["object_count"],
+                    },
+                }
+            )
         invalid_planner_reason = _invalid_planner_reason(plan)
         if invalid_planner_reason:
             consecutive_invalid_planner_responses += 1
@@ -882,6 +895,13 @@ async def generate_with_tools(
                     "tool_error": {
                         "type": "duplicate_tool_call_blocked",
                         "message": "Duplicate MCP tool call with identical arguments was blocked in this run.",
+                    },
+                    "planner_feedback": {
+                        "type": "duplicate_tool_call_blocked",
+                        "message": (
+                            "Do not repeat the same tool call with identical arguments. "
+                            "Use the prior tool result, change arguments, choose a different tool, or respond to the user."
+                        ),
                     },
                 }
             )
@@ -2112,12 +2132,34 @@ def _redact_sensitive_payload(value: object) -> object:
         return redacted
     if isinstance(value, list):
         return [_redact_sensitive_payload(item) for item in value]
+    if isinstance(value, str):
+        return _redact_sensitive_text(value)
     return value
 
 
 def _is_sensitive_field_name(field_name: str) -> bool:
     lowered = field_name.strip().lower()
     return any(keyword in lowered for keyword in _SENSITIVE_FIELD_KEYWORDS)
+
+
+def _redact_sensitive_text(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+
+    redacted = text
+    redacted = re.sub(
+        r"(?i)\b(authorization)\b\s*[:=]\s*bearer\s+([^\s,;]+)",
+        lambda match: f"{match.group(1)}: Bearer [REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)\b(api[_ -]?key|token|secret|password|private[_ -]?key|ssh[_ -]?private)\b\s*[:=]\s*([^\s,;]+)",
+        lambda match: f"{match.group(1)}: [REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(r"\bsk-[A-Za-z0-9._-]{12,}\b", "[REDACTED]", redacted)
+    return redacted
 
 
 _PLANNER_RECENT_FULL_INTERACTIONS = 3

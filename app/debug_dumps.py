@@ -325,6 +325,11 @@ def _redact_debug_text(text: str, *, field_name: str = "") -> str:
         redacted,
     )
     redacted = re.sub(
+        r"(?i)\b(authorization)\b\s*[:=]\s*bearer\s+([^\s,;]+)",
+        lambda match: f"{match.group(1)}: Bearer [REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(
         r"(?i)\b(password|token|secret)\b\s+(?:is\s+|for\s+)?(['\"]?)([^'\"\s,;]+)\2",
         lambda match: f"{match.group(1)} [REDACTED]",
         redacted,
@@ -334,6 +339,7 @@ def _redact_debug_text(text: str, *, field_name: str = "") -> str:
         r"\1[REDACTED]",
         redacted,
     )
+    redacted = re.sub(r"\bsk-[A-Za-z0-9._-]{12,}\b", "[REDACTED]", redacted)
     redacted = re.sub(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[REDACTED_EMAIL]", redacted, flags=re.IGNORECASE)
     return redacted
 

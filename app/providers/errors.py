@@ -19,7 +19,7 @@ class ProviderRequestError(RuntimeError):
     retry_history: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        super().__init__(self.message)
+        RuntimeError.__init__(self, self.message)
 
     @property
     def response_headers(self) -> dict[str, str]:

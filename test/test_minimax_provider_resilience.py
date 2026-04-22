@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from typing import cast
 
 
 class _FakeResponse:
@@ -29,7 +30,12 @@ async def main() -> None:
 
     import app.providers.minimax as minimax  # pylint: disable=import-outside-toplevel
     import app.providers.resilience as resilience  # pylint: disable=import-outside-toplevel
+    from app.providers.base import LLMProvider  # pylint: disable=import-outside-toplevel
     from app.providers.errors import ProviderRequestError  # pylint: disable=import-outside-toplevel
+
+    constructor_error = ProviderRequestError("boom", provider_id="minimax", retryable=True)
+    if str(constructor_error) != "boom":
+        raise RuntimeError(f"ProviderRequestError should preserve its message, got: {constructor_error!r}")
 
     extracted = minimax._extract_text(
         {
@@ -88,10 +94,22 @@ async def main() -> None:
         recorded_delays.append(delay)
 
     class _RetryAfterProvider:
+        provider_id = "minimax"
+        display_name = "MiniMax"
+        api_key_url = "https://example.test"
+        available_models: list[dict[str, object]] = []
+
         def __init__(self) -> None:
             self.calls = 0
 
-        async def generate(self, **kwargs):
+        async def generate(
+            self,
+            prompt: str,
+            system_prompt: str,
+            model: str,
+            api_key: str,
+            history: list[dict[str, str]],
+        ) -> tuple[str, int | None]:
             self.calls += 1
             if self.calls == 1:
                 raise ProviderRequestError(
@@ -104,10 +122,13 @@ async def main() -> None:
                 )
             return "ok", 7
 
+        async def verify(self, model: str, api_key: str) -> tuple[bool, str]:
+            return True, "ok"
+
     resilience.asyncio.sleep = fake_sleep
     try:
         text, used_tokens = await resilience.generate_with_retries(
-            provider=_RetryAfterProvider(),
+            provider=cast(LLMProvider, _RetryAfterProvider()),
             prompt="hi",
             system_prompt="",
             model="MiniMax-M2.7",

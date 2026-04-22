@@ -32,6 +32,16 @@ def main() -> None:
         messages=[
             ChatMessage(role="user", content="normal prompt", timestamp="2026-04-21T00:00:00Z"),
             ChatMessage(
+                role="system",
+                content=(
+                    '{"mcp_id":"scripts","tool_id":"edit_script","arguments":'
+                    '{"body":"DEFAULT_API_KEY = \"sk-cp-AX-93_FcSnHOyYwlInoOh224DzMlqLL21gwG1AS1WNv2FKqI04l_3xkc91MJq4Z-Whx4W76AsfrThzbzQDdJlQXpYzEH0kCQ9AbLnZHpGVnnbhAjL8dQ4YU\"",'
+                    '"headers":{"Authorization":"Bearer sk-cp-AX-93_FcSnHOyYwlInoOh224DzMlqLL21gwG1AS1WNv2FKqI04l_3xkc91MJq4Z-Whx4W76AsfrThzbzQDdJlQXpYzEH0kCQ9AbLnZHpGVnnbhAjL8dQ4YU"}}}'
+                ),
+                timestamp="2026-04-21T00:00:30Z",
+                system_type="tool_call",
+            ),
+            ChatMessage(
                 role="assistant",
                 content="Hard error: password g3n4! email oliver93ruoff@gmail.com",
                 timestamp="2026-04-21T00:01:00Z",
@@ -69,6 +79,11 @@ def main() -> None:
         raise RuntimeError(f"Sensitive error content leaked into debug dump: {error_content!r}")
     if "normal prompt" not in str(payload.get("chat", {})):
         raise RuntimeError("Expected non-sensitive chat context to remain readable in debug dump payload.")
+    payload_text = str(payload)
+    if "sk-cp-AX-93_FcSnHOyYwlInoOh224DzMlqLL21gwG1AS1WNv2FKqI04l_3xkc91MJq4Z-Whx4W76AsfrThzbzQDdJlQXpYzEH0kCQ9AbLnZHpGVnnbhAjL8dQ4YU" in payload_text:
+        raise RuntimeError("Sensitive API key leaked into debug dump payload.")
+    if "Bearer sk-cp-AX-93_FcSnHOyYwlInoOh224DzMlqLL21gwG1AS1WNv2FKqI04l_3xkc91MJq4Z-Whx4W76AsfrThzbzQDdJlQXpYzEH0kCQ9AbLnZHpGVnnbhAjL8dQ4YU" in payload_text:
+        raise RuntimeError("Sensitive Authorization header leaked into debug dump payload.")
 
     print("PASS: Debug dump payload redacts sensitive memory and error content.")
 

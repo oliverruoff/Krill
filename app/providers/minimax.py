@@ -1,6 +1,7 @@
 """MiniMax provider implementation."""
 
 import asyncio
+from collections.abc import Mapping
 from http.client import RemoteDisconnected
 import json
 import re
@@ -35,8 +36,7 @@ class MiniMaxProvider(LLMProvider):
         payload = {
             "model": _resolve_model(model),
             "messages": _build_messages(history, prompt, system_prompt),
-            "temperature": 1.0,
-            "top_p": 0.95,
+            **_sampling_settings_for_request(prompt, system_prompt),
         }
         endpoint = "https://api.minimax.io/v1/text/chatcompletion_v2"
 
@@ -100,8 +100,7 @@ class MiniMaxProvider(LLMProvider):
             "model": _resolve_model(model),
             "messages": [{"role": "user", "content": "Health check."}],
             "max_completion_tokens": 16,
-            "temperature": 1.0,
-            "top_p": 0.95,
+            **_sampling_settings_for_request("Health check.", "verification"),
         }
         endpoint = "https://api.minimax.io/v1/text/chatcompletion_v2"
 
@@ -166,6 +165,35 @@ def _build_messages(history: list[dict[str, str]], prompt: str, system_prompt: s
 
     messages.append({"role": "user", "content": prompt})
     return messages
+
+
+def _sampling_settings_for_request(prompt: str, system_prompt: str) -> dict[str, object]:
+    if system_prompt.strip().lower() == "verification":
+        return {
+            "temperature": 0.1,
+            "top_p": 0.1,
+        }
+    if _looks_like_structured_generation(prompt, system_prompt):
+        return {
+            "temperature": 0.1,
+            "top_p": 0.1,
+        }
+    return {
+        "temperature": 0.7,
+        "top_p": 0.9,
+    }
+
+
+def _looks_like_structured_generation(prompt: str, system_prompt: str) -> bool:
+    combined = f"{system_prompt}\n{prompt}".lower()
+    markers = (
+        "tool selection phase",
+        "return exactly one json object only",
+        "no prose, no markdown, no code fences",
+        '"action":"call_tool"',
+        '"action":"respond"',
+    )
+    return any(marker in combined for marker in markers)
 
 
 def _post_json_status(url: str, payload: dict[str, object], api_key: str) -> int:
@@ -459,13 +487,7 @@ def _timeout_error(detail: str) -> ProviderRequestError:
 def _normalize_headers(headers: object) -> dict[str, str]:
     if headers is None:
         return {}
-    items_getter = getattr(headers, "items", None)
-    if callable(items_getter):
-        try:
-            return {str(key): str(value) for key, value in items_getter()}
-        except Exception:
-            return {}
-    if isinstance(headers, dict):
+    if isinstance(headers, Mapping):
         return {str(key): str(value) for key, value in headers.items()}
     return {}
 
