@@ -757,7 +757,12 @@ class TelegramBridgeWorker:
             if group_id_str not in fresh_settings.telegram_state.approved_group_ids:
                 fresh_settings.telegram_state.approved_group_ids.append(group_id_str)
                 await save_settings(fresh_settings)
-            return _markdown_command_response(f"Group {telegram_chat_id} approved for non-owner access.")
+            return _markdown_command_response(
+                f"Group {telegram_chat_id} approved for non-owner access.\n\n"
+                "Note: to receive @mention messages (e.g. '@bot hello'), privacy mode must be "
+                "disabled for this bot via BotFather (/setprivacy → Disable). "
+                "Without this, the bot only receives /commands and direct replies to its messages."
+            )
 
         if command == "unapprove":
             if not is_group:
