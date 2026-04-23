@@ -25,6 +25,14 @@ CONFIG_FIELDS = [
         placeholder="true",
         description="Enable MarkdownV2 formatting in messages (bold, italic, code, etc). Default: true",
     ),
+    IntegrationConfigField(
+        id="group_context_size",
+        label="Group context size",
+        type="text",
+        required=False,
+        placeholder="20",
+        description="Number of recent group messages (1-100) buffered as ambient context when the bot is pinged. Only applies to group chats. Default: 20",
+    ),
 ]
 
 

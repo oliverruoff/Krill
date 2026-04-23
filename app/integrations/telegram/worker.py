@@ -5,6 +5,7 @@ import contextlib
 import html
 import json
 import logging
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, TypedDict, cast
 from uuid import uuid4
@@ -42,6 +43,8 @@ TELEGRAM_POLL_TIMEOUT_SECONDS = 25
 TELEGRAM_DRAIN_BATCH_TIMEOUT_SECONDS = 0
 TELEGRAM_DRAIN_MAX_BATCHES = 40
 TELEGRAM_UPDATES_PER_CYCLE = 5
+TELEGRAM_GROUP_BUFFER_HARD_CAP = 100
+TELEGRAM_GROUP_CONTEXT_DEFAULT_SIZE = 20
 TELEGRAM_CONTEXT_WINDOW_WARNING = (
     "Heads up: this chat is above 75% of the model context window. "
     "Consider /new to start a fresh chat."
@@ -82,6 +85,11 @@ class TelegramChatRuntime(TypedDict):
     active_chat_id: str
 
 
+class GroupBufferEntry(TypedDict):
+    name: str
+    text: str
+
+
 class TelegramBridgeWorker:
     def __init__(self) -> None:
         self._task: asyncio.Task[None] | None = None
@@ -90,6 +98,7 @@ class TelegramBridgeWorker:
         self._last_token = ""
         self._chat_runtimes: dict[int, TelegramChatRuntime] = {}
         self._active_runs: dict[int, ActiveTelegramRun] = {}
+        self._group_message_buffers: dict[int, deque[GroupBufferEntry]] = {}
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -217,10 +226,28 @@ class TelegramBridgeWorker:
             logger.debug("telegram: ignoring non-owner private message from sender_id=%s", sender_id)
             return
 
+        # Buffer every group message (text or caption) before any addressed-to-bot
+        # check. This way the bot has ambient context of the conversation when it
+        # is eventually pinged. Bot's own messages are buffered separately after
+        # we send our reply (see _run_user_message).
+        if is_group:
+            buffer_text_raw = message.get("text")
+            buffer_caption_raw = message.get("caption")
+            buffer_text = ""
+            if isinstance(buffer_text_raw, str) and buffer_text_raw.strip():
+                buffer_text = buffer_text_raw.strip()
+            elif isinstance(buffer_caption_raw, str) and buffer_caption_raw.strip():
+                buffer_text = buffer_caption_raw.strip()
+            elif message.get("photo") or (isinstance(message.get("document"), dict)):
+                buffer_text = "[image]"
+            if buffer_text:
+                sender_display = _format_sender_name(sender)
+                self._buffer_group_message(chat_id, sender_display, buffer_text)
+
         if is_group:
             if not _is_group_message_addressed_to_bot(message, bot_username, bot_id):
                 logger.debug(
-                    "telegram: group message not addressed to bot (chat_id=%s, bot_username=%r, bot_id=%s)",
+                    "telegram: group message not addressed to bot (chat_id=%s, bot_username=%r, bot_id=%s) — buffered for context",
                     chat_id, bot_username, bot_id,
                 )
                 return
@@ -333,9 +360,22 @@ class TelegramBridgeWorker:
         active_chat = self._ensure_active_chat(chat_id, prompt_text)
         request_id = str(uuid4())
         allowed_mcp_ids: list[str] | None = None if is_owner else list(settings.telegram_state.guest_allowed_mcp_ids)
+
+        # For group chats, snapshot the recent ambient conversation as context.
+        # We exclude the very last entry because that is the current addressed
+        # message and it is already provided as the prompt itself.
+        group_context: list[GroupBufferEntry] | None = None
+        if is_group:
+            context_size = self._get_group_context_size(settings)
+            buffer = self._group_message_buffers.get(chat_id)
+            if buffer is not None and len(buffer) > 1:
+                context_entries = list(buffer)[:-1][-context_size:]
+                if context_entries:
+                    group_context = context_entries
+
         logger.debug(
-            "telegram: dispatching user message (chat_id=%s, is_owner=%s, allowed_mcp_ids=%s)",
-            chat_id, is_owner, allowed_mcp_ids,
+            "telegram: dispatching user message (chat_id=%s, is_owner=%s, allowed_mcp_ids=%s, group_context=%s msgs)",
+            chat_id, is_owner, allowed_mcp_ids, len(group_context) if group_context else 0,
         )
         task = asyncio.create_task(
             self._run_user_message(
@@ -348,6 +388,9 @@ class TelegramBridgeWorker:
                 source_request_id=request_id,
                 sender_role=sender_role,
                 allowed_mcp_ids=allowed_mcp_ids,
+                group_context=group_context,
+                bot_username=bot_username,
+                is_group=is_group,
             )
         )
         self._active_runs[chat_id] = {
@@ -409,6 +452,34 @@ class TelegramBridgeWorker:
         if chat_id not in self._chat_runtimes:
             self._chat_runtimes[chat_id] = {"chats": [], "active_chat_id": ""}
         return self._chat_runtimes[chat_id]
+
+    def _buffer_group_message(self, chat_id: int, sender_name: str, text: str) -> None:
+        """Append a message to the group's ambient context buffer.
+
+        The buffer is capped at TELEGRAM_GROUP_BUFFER_HARD_CAP entries; the
+        actual context window passed to the LLM is sliced to the user-configured
+        ``group_context_size`` at inject-time.
+        """
+        if not isinstance(chat_id, int):
+            return
+        cleaned_text = (text or "").strip()
+        if not cleaned_text:
+            return
+        cleaned_name = (sender_name or "").strip() or "Unknown"
+        buffer = self._group_message_buffers.get(chat_id)
+        if buffer is None:
+            buffer = deque(maxlen=TELEGRAM_GROUP_BUFFER_HARD_CAP)
+            self._group_message_buffers[chat_id] = buffer
+        buffer.append({"name": cleaned_name, "text": cleaned_text})
+
+    def _get_group_context_size(self, settings: Settings) -> int:
+        config = settings.integration_configs.get("telegram") or IntegrationConfig()
+        raw = config.params.get("group_context_size", TELEGRAM_GROUP_CONTEXT_DEFAULT_SIZE)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = TELEGRAM_GROUP_CONTEXT_DEFAULT_SIZE
+        return max(1, min(TELEGRAM_GROUP_BUFFER_HARD_CAP, value))
 
     def _ensure_active_chat(self, chat_id: int, prompt: str) -> ChatSession:
         runtime = self._get_or_create_runtime(chat_id)
@@ -488,6 +559,9 @@ class TelegramBridgeWorker:
         source_request_id: str,
         sender_role: str = "owner",
         allowed_mcp_ids: list[str] | None = None,
+        group_context: list[GroupBufferEntry] | None = None,
+        bot_username: str = "",
+        is_group: bool = False,
     ) -> None:
         try:
             response_text = await self._handle_user_message(
@@ -499,6 +573,7 @@ class TelegramBridgeWorker:
                 source_request_id=source_request_id,
                 sender_role=sender_role,
                 allowed_mcp_ids=allowed_mcp_ids,
+                group_context=group_context,
                 on_execution_event=lambda event: self._update_progress_message(
                     token=token,
                     telegram_chat_id=telegram_chat_id,
@@ -568,6 +643,12 @@ class TelegramBridgeWorker:
                 except Exception:
                     pass
             self._active_runs.pop(telegram_chat_id, None)
+
+        # Buffer the bot's own reply into the group context so future ambient
+        # context includes its previous contributions.
+        if is_group and response_text:
+            bot_display = bot_username.strip() if bot_username and bot_username.strip() else "bot"
+            self._buffer_group_message(telegram_chat_id, f"@{bot_display}", response_text)
 
     async def _handle_command(
         self,
@@ -789,6 +870,7 @@ class TelegramBridgeWorker:
         source_request_id: str = "",
         sender_role: str = "owner",
         allowed_mcp_ids: list[str] | None = None,
+        group_context: list[GroupBufferEntry] | None = None,
         on_execution_event: Callable[[ExecutionEvent], Awaitable[None]] | None = None,
     ) -> str:
         prompt = text.strip()
@@ -853,6 +935,11 @@ class TelegramBridgeWorker:
                 final_prompt = f"{final_prompt}\n\nImage analysis:\n{analysis_context}"
             else:
                 final_prompt = f"The user sent an image without text. Use this image analysis:\n{analysis_context}"
+
+        if group_context:
+            context_block = _format_group_context_block(group_context)
+            if context_block:
+                final_prompt = f"{context_block}\n\n{final_prompt}".strip() if final_prompt else context_block
 
         try:
             engine_result, token_limit = await generate_chat_response(
@@ -1106,6 +1193,44 @@ def _get_bot_token(settings: Settings) -> str:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _format_sender_name(sender: dict[str, Any]) -> str:
+    """Render a Telegram user dict as a short, log-friendly display name.
+
+    Preference order:
+      1. ``first_name`` + first letter of ``last_name`` (e.g. "Alice S.") if both present
+      2. ``first_name`` alone
+      3. ``@username`` if no first_name
+      4. "Unknown"
+    """
+    if not isinstance(sender, dict):
+        return "Unknown"
+    first_name = str(sender.get("first_name", "")).strip()
+    last_name = str(sender.get("last_name", "")).strip()
+    username = str(sender.get("username", "")).strip()
+    if first_name and last_name:
+        return f"{first_name} {last_name[0].upper()}."
+    if first_name:
+        return first_name
+    if username:
+        return f"@{username}"
+    return "Unknown"
+
+
+def _format_group_context_block(entries: list[GroupBufferEntry]) -> str:
+    """Render the buffered ambient group conversation as a prompt prefix."""
+    if not entries:
+        return ""
+    lines = [f"[Group conversation context — last {len(entries)} message(s):]"]
+    for entry in entries:
+        name = str(entry.get("name", "")).strip() or "Unknown"
+        text = str(entry.get("text", "")).strip()
+        if not text:
+            continue
+        lines.append(f"{name}: {text}")
+    lines.append("[End of context. Now answer the next message addressed to you.]")
+    return "\n".join(lines)
 
 
 def _derive_chat_title(first_message: str, max_len: int = 24) -> str:

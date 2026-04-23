@@ -79,7 +79,7 @@ async def main() -> None:
             "system_trace_messages": [],
         }, 1000
 
-    def fake_send_message(token: str, chat_id: int, text: str):
+    def fake_send_message(token: str, chat_id: int, text: str, parse_mode: str | None = None):
         if token != "dummy-token":
             raise RuntimeError("Unexpected token in telegram_send_message mock.")
         if chat_id != 456:
@@ -107,6 +107,12 @@ async def main() -> None:
             bot_username="krill_bot",
             bot_id=999,
         )
+
+        # Wait for any background run task spawned by _handle_message to finish
+        # so that sent_messages reflects the model reply.
+        pending = worker._active_runs.get(456)
+        if pending and pending.get("task") is not None:
+            await pending["task"]
     finally:
         telegram_worker.generate_chat_response = original_generate
         telegram_worker.telegram_send_message = original_send
