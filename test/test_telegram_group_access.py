@@ -147,6 +147,10 @@ async def main() -> None:
         assert last_call.get("allowed_mcp_ids") == ["brain_access"], (
             f"Guest should get restricted MCP list, got: {last_call.get('allowed_mcp_ids')}"
         )
+        assert last_call.get("source_user_role") == "assistant_usage", (
+            f"Guest should have source_user_role='assistant_usage' so orchestrator enforces allowlist, "
+            f"got: {last_call.get('source_user_role')!r}"
+        )
         print("PASS: Non-owner in approved group gets restricted MCP allowlist")
 
         # Test 5: owner_chat_id is NOT updated when owner sends from a group

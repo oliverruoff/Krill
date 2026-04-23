@@ -952,6 +952,7 @@ class TelegramBridgeWorker:
                 source_request_id=source_request_id,
                 on_execution_event=on_execution_event,
                 allowed_mcp_ids=allowed_mcp_ids,
+                source_user_role=sender_role,
             )
             text_response = engine_result["text"]
             used_tokens = engine_result["used_tokens"]
