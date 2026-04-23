@@ -1,6 +1,7 @@
 """Sequential tool-orchestration loop that plans, executes tools, and finalizes output."""
 
 import asyncio
+import html
 import json
 import logging
 import re
@@ -1497,6 +1498,15 @@ def _parse_planner_response(response_text: str) -> PlannerParseResult:
             "recovery_mode": "tool_call_wrapper",
         }
 
+    xml_tool_call = _extract_xml_tool_call_wrapper(response_text)
+    if xml_tool_call is not None:
+        return {
+            "plan": xml_tool_call,
+            "object_count": 1,
+            "selected_index": 0,
+            "recovery_mode": "xml_tool_call_wrapper",
+        }
+
     try:
         payload = json.loads(response_text)
         if isinstance(payload, dict):
@@ -1628,6 +1638,55 @@ def _extract_tool_call_wrapper(response_text: str) -> dict[str, object] | None:
     }
 
 
+def _extract_xml_tool_call_wrapper(response_text: str) -> dict[str, object] | None:
+    wrapper_match = re.search(r"<function_calls\b[^>]*>(.*?)</function_calls>", response_text, flags=re.DOTALL | re.IGNORECASE)
+    if wrapper_match is None:
+        return None
+
+    invoke_match = re.search(
+        r"<invoke\b[^>]*name=\"([^\"]+)\"[^>]*>(.*?)</invoke>",
+        wrapper_match.group(1),
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if invoke_match is None:
+        return None
+
+    raw_tool_name = invoke_match.group(1).strip()
+    if not raw_tool_name:
+        return None
+
+    arguments: dict[str, object] = {}
+    for arg_match in re.finditer(
+        r"<arg\b[^>]*name=\"([^\"]+)\"[^>]*>(.*?)</arg>",
+        invoke_match.group(2),
+        flags=re.DOTALL | re.IGNORECASE,
+    ):
+        raw_key = arg_match.group(1).strip()
+        if not raw_key:
+            continue
+        raw_value = html.unescape(arg_match.group(2).strip())
+        parsed_int = _safe_int(raw_value)
+        lowered_value = raw_value.lower()
+        if lowered_value == "true":
+            value: object = True
+        elif lowered_value == "false":
+            value = False
+        elif parsed_int is not None:
+            value = parsed_int
+        else:
+            value = raw_value
+        arguments[_normalize_tool_wrapper_token(raw_key)] = value
+
+    normalized_tool_name = _normalize_tool_wrapper_tool_name(raw_tool_name)
+    mcp_id, tool_id = _split_wrapped_tool_name(normalized_tool_name)
+    return {
+        "action": "call_tool",
+        "mcp_id": mcp_id,
+        "tool_id": tool_id,
+        "arguments": arguments,
+    }
+
+
 def _split_wrapped_tool_name(tool_name: str) -> tuple[str, str]:
     normalized = tool_name.strip()
     if "." in normalized:
@@ -1636,6 +1695,23 @@ def _split_wrapped_tool_name(tool_name: str) -> tuple[str, str]:
     if normalized.startswith("gmail_") or normalized.startswith("calendar_") or normalized.startswith("drive_"):
         return "google_services", normalized
     return "", normalized
+
+
+def _normalize_tool_wrapper_tool_name(tool_name: str) -> str:
+    normalized = _normalize_tool_wrapper_token(tool_name)
+    if not normalized:
+        return ""
+    if "." in normalized:
+        mcp_id, tool_id = normalized.split(".", 1)
+        return f"{mcp_id}.{tool_id}"
+    return normalized
+
+
+def _normalize_tool_wrapper_token(value: str) -> str:
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(value or "").strip())
+    normalized = re.sub(r"[^a-zA-Z0-9.]+", "_", normalized)
+    normalized = re.sub(r"_+", "_", normalized)
+    return normalized.strip("_").lower()
 
 
 def _parse_tool_call_wrapper_arguments(body: str) -> dict[str, object]:
@@ -1850,7 +1926,7 @@ def _repair_tool_arguments(
     if not isinstance(properties, dict):
         properties = {}
 
-    alias_map = {"q": "query"}
+    alias_map = {"q": "query", "search": "query"}
     for source_key, target_key in alias_map.items():
         if source_key in repaired and target_key not in repaired and target_key in properties:
             repaired[target_key] = repaired.pop(source_key)

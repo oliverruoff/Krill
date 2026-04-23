@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from typing import cast
 
 
 async def main() -> None:
@@ -28,9 +29,9 @@ async def main() -> None:
         },
         "required": ["message_id"],
     }
-    original_gmail_arguments = {"message_id": "abc123", "format": "full"}
-    rewritten_gmail_arguments = {"q": "from:makerworld.com", "max_results": 20}
-    repaired_gmail_arguments = _repair_tool_arguments(
+    original_gmail_arguments: dict[str, object] = {"message_id": "abc123", "format": "full"}
+    rewritten_gmail_arguments: dict[str, object] = {"q": "from:makerworld.com", "max_results": 20}
+    repaired_gmail_arguments: dict[str, object] = _repair_tool_arguments(
         mcp_id="google_services",
         tool_id="gmail_get_message",
         input_schema=gmail_schema,
@@ -59,24 +60,25 @@ async def main() -> None:
         },
         "required": ["title"],
     }
-    original_script_arguments = {
+    original_script_arguments: dict[str, object] = {
         "title": "github-issue-create-edit-delete",
         "input_json": {"operation": "list", "repo": "oliverruoff/krill"},
         "timeout_ms": 59000,
     }
-    rewritten_script_arguments = {
+    rewritten_script_arguments: dict[str, object] = {
         "title": "github-issue-create-edit-delete",
         "input_json": {"operation": "validate", "repo": "oliverruoff/krill"},
         "timeout_ms": 59000,
     }
-    repaired_script_arguments = _repair_tool_arguments(
+    repaired_script_arguments: dict[str, object] = _repair_tool_arguments(
         mcp_id="scripts",
         tool_id="execute_script",
         input_schema=scripts_schema,
         original_arguments=original_script_arguments,
         candidate_arguments=rewritten_script_arguments,
     )
-    if repaired_script_arguments.get("input_json", {}).get("operation") != "list":
+    repaired_script_input = cast(dict[str, object], repaired_script_arguments.get("input_json", {}))
+    if repaired_script_input.get("operation") != "list":
         raise RuntimeError(f"Expected script operation to stay stable. Got: {repaired_script_arguments}")
 
     wrapped_tool_call = _parse_planner_response(
@@ -92,6 +94,36 @@ async def main() -> None:
         raise RuntimeError(f"Expected wrapped query arguments to be recovered. Got: {wrapped_plan}")
     if wrapped_arguments.get("max_results") != 20:
         raise RuntimeError(f"Expected wrapped max_results argument to be recovered. Got: {wrapped_plan}")
+
+    xml_tool_call = _parse_planner_response(
+        '<function_calls><invoke name="Search_Entities"><arg name="search">EG Flur Licht</arg></invoke></function_calls>'
+    )
+    xml_plan = xml_tool_call["plan"]
+    if xml_plan.get("action") != "call_tool" or xml_plan.get("tool_id") != "search_entities":
+        raise RuntimeError(f"Expected XML tool call recovery. Got: {xml_plan}")
+    xml_arguments = xml_plan.get("arguments")
+    if not isinstance(xml_arguments, dict) or xml_arguments.get("search") != "EG Flur Licht":
+        raise RuntimeError(f"Expected XML tool arguments to be recovered. Got: {xml_plan}")
+
+    home_assistant_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "minLength": 1},
+        },
+        "required": ["query"],
+    }
+    repaired_home_assistant_arguments: dict[str, object] = _repair_tool_arguments(
+        mcp_id="home_assistant",
+        tool_id="search_entities",
+        input_schema=home_assistant_schema,
+        original_arguments={},
+        candidate_arguments=xml_arguments,
+    )
+    if repaired_home_assistant_arguments.get("query") != "EG Flur Licht":
+        raise RuntimeError(
+            "Expected search alias to normalize to query for Home Assistant search_entities. "
+            f"Got: {repaired_home_assistant_arguments}"
+        )
 
     plain_text = _parse_planner_response("Ja, heute kam genau eine MakerWorld-Mail rein.")
     plain_plan = plain_text["plan"]
