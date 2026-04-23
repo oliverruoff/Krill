@@ -63,6 +63,20 @@ class UpdateTelegramAccessRequest(BaseModel):
     guest_allowed_mcp_ids: list[str] = Field(default_factory=list)
 
 
+def _assistant_accessible_mcps(settings: object) -> list[dict[str, str]]:
+    available_mcps: list[dict[str, str]] = []
+    mcp_configs = getattr(settings, "mcp_configs", {})
+    if not isinstance(mcp_configs, dict):
+        return available_mcps
+
+    for mcp_id, plugin in sorted(get_all_mcps().items()):
+        config = mcp_configs.get(mcp_id)
+        if config is None or not bool(getattr(config, "enabled", False)):
+            continue
+        available_mcps.append({"id": mcp_id, "label": plugin.display_name})
+    return available_mcps
+
+
 @router.get("/api/integrations")
 async def get_integrations() -> list[dict[str, object]]:
     return get_integration_options()
@@ -235,13 +249,13 @@ async def resolve_matrix_room(payload: dict[str, str]) -> dict[str, str]:
 @router.get("/api/integrations/telegram/access", response_model=TelegramAccessResponse)
 async def get_telegram_access() -> TelegramAccessResponse:
     settings = await load_settings()
-    available_mcps = [
-        {"id": mcp_id, "label": plugin.display_name}
-        for mcp_id, plugin in sorted(get_all_mcps().items())
-    ]
+    available_mcps = _assistant_accessible_mcps(settings)
+    available_mcp_ids = {entry["id"] for entry in available_mcps}
     return TelegramAccessResponse(
         approved_group_ids=list(settings.telegram_state.approved_group_ids),
-        guest_allowed_mcp_ids=list(settings.telegram_state.guest_allowed_mcp_ids),
+        guest_allowed_mcp_ids=[
+            mcp_id for mcp_id in settings.telegram_state.guest_allowed_mcp_ids if mcp_id in available_mcp_ids
+        ],
         available_mcps=available_mcps,
     )
 
@@ -249,13 +263,14 @@ async def get_telegram_access() -> TelegramAccessResponse:
 @router.put("/api/integrations/telegram/access", response_model=TelegramAccessResponse)
 async def update_telegram_access(payload: UpdateTelegramAccessRequest) -> TelegramAccessResponse:
     settings = await load_settings()
+    available_mcp_ids = {entry["id"] for entry in _assistant_accessible_mcps(settings)}
     settings.telegram_state.approved_group_ids = [
         gid.strip() for gid in payload.approved_group_ids if gid.strip()
     ]
     settings.telegram_state.guest_allowed_mcp_ids = sorted({
         mcp_id.strip()
         for mcp_id in payload.guest_allowed_mcp_ids
-        if mcp_id.strip() in get_all_mcps()
+        if mcp_id.strip() in available_mcp_ids
     })
     await save_settings(settings)
     return await get_telegram_access()

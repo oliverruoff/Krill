@@ -329,7 +329,7 @@ Telegram integration notes:
 - in group chats, Krill responds only to explicit @mentions, `/commands`, or replies to the bot
 - non-owner messages in private DMs are silently ignored
 - non-owners in unapproved groups are silently ignored
-- non-owners in approved groups are limited to the guest MCP allowlist (configurable via Manage Group Access)
+- non-owners in approved groups are limited to the guest MCP allowlist, and that allowlist only exposes MCPs explicitly enabled in Krill's MCP settings
 - Telegram chat sessions are ephemeral and isolated from Gateway chats
 - Telegram chat history is not written to `braindump.db`, except when `/debug` is used to snapshot the active Telegram chat into a hidden persisted debug chat
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway

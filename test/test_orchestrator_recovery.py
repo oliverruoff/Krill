@@ -14,11 +14,14 @@ async def main() -> None:
         sys.path.insert(0, str(repo_root))
 
     from app.tooling.execution import rank_tools_for_intent  # pylint: disable=import-outside-toplevel
+    from app.tooling.runtime_context import reset_runtime_context, set_runtime_context  # pylint: disable=import-outside-toplevel
     from app.tooling.orchestrator import (  # pylint: disable=import-outside-toplevel
+        _collect_enabled_tools,
         _parse_planner_response,
         _repair_tool_arguments,
         _should_keep_rewritten_arguments,
     )
+    from app.config import McpConfig, Settings  # pylint: disable=import-outside-toplevel
 
     gmail_schema = {
         "type": "object",
@@ -124,6 +127,26 @@ async def main() -> None:
             "Expected search alias to normalize to query for Home Assistant search_entities. "
             f"Got: {repaired_home_assistant_arguments}"
         )
+
+    assistant_context = set_runtime_context(
+        source_channel="telegram",
+        source_chat_id="group-1",
+        source_user_role="assistant_usage",
+        allowed_mcp_ids=["shell_access", "git_ops"],
+    )
+    try:
+        implicit_default_settings = Settings(mcp_configs={"git_ops": McpConfig(enabled=True, params={})})
+        assistant_tools = _collect_enabled_tools(implicit_default_settings)
+    finally:
+        reset_runtime_context(assistant_context)
+    assistant_mcp_ids = {str(entry.get("mcp_id", "")) for entry in assistant_tools}
+    if "shell_access" in assistant_mcp_ids:
+        raise RuntimeError(
+            "Expected assistant_usage access to ignore implicitly default-enabled MCPs like shell_access. "
+            f"Got: {sorted(assistant_mcp_ids)}"
+        )
+    if "git_ops" not in assistant_mcp_ids:
+        raise RuntimeError(f"Expected explicitly enabled git_ops MCP to remain available. Got: {sorted(assistant_mcp_ids)}")
 
     plain_text = _parse_planner_response("Ja, heute kam genau eine MakerWorld-Mail rein.")
     plain_plan = plain_text["plan"]

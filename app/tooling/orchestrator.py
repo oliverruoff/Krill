@@ -613,6 +613,42 @@ async def generate_with_tools(
         mcp_id = resolved_mcp_id
         tool_id = resolved_tool_id
 
+        if source_user_role == "assistant_usage" and mcp_id not in allowed_mcp_ids:
+            redacted_arguments = _redact_sensitive_payload(tool_arguments)
+            unauthorized_payload = {
+                "mcp_id": mcp_id,
+                "tool_id": tool_id,
+                "arguments": redacted_arguments,
+                "step": step_index,
+                "error": "assistant_usage_selected_disallowed_mcp",
+                "allowed_mcp_ids": sorted(allowed_mcp_ids),
+            }
+            logger.warning(
+                "Blocked assistant_usage tool call at step=%s mcp=%s tool=%s allowed=%s",
+                step_index,
+                mcp_id,
+                tool_id,
+                sorted(allowed_mcp_ids),
+            )
+            await trace("tool_error", json.dumps(unauthorized_payload, ensure_ascii=True))
+            interaction_log.append(
+                {
+                    "step": step_index,
+                    "tool_call": {
+                        "mcp_id": mcp_id,
+                        "tool_id": tool_id,
+                        "arguments": redacted_arguments,
+                        "step": step_index,
+                    },
+                    "tool_error": {
+                        "type": "assistant_usage_selected_disallowed_mcp",
+                        "message": "This MCP is not allowed for assistant-usage access in this channel.",
+                        "allowed_mcp_ids": sorted(allowed_mcp_ids),
+                    },
+                }
+            )
+            continue
+
         tool_entry = next((entry for entry in enabled_tools if entry["mcp_id"] == mcp_id and entry["tool_id"] == tool_id), None)
         if tool_entry is None:
             available_for_mcp = sorted(
@@ -1226,6 +1262,9 @@ def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
         if source_user_role == "assistant_usage" and mcp_id not in allowed_mcp_ids:
             continue
         raw_config = settings.mcp_configs.get(mcp_id)
+        if source_user_role == "assistant_usage" and raw_config is None:
+            logger.debug("Skipping MCP %s for assistant_usage because it is not explicitly enabled", mcp_id)
+            continue
         if raw_config is None:
             config = McpConfig(enabled=bool(getattr(plugin, "default_enabled", False)), params={})
         else:
