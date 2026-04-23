@@ -149,7 +149,8 @@ class TelegramBridgeWorker:
                     await self._store_last_update_id(update_id)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                logger.warning("telegram: worker loop error: %s", exc, exc_info=True)
                 await asyncio.sleep(2)
 
     async def _drain_pending_updates(self, token: str, offset: int) -> None:
@@ -213,14 +214,23 @@ class TelegramBridgeWorker:
 
         if not is_owner and not is_group:
             # Non-owner in private chat: always ignore
+            logger.debug("telegram: ignoring non-owner private message from sender_id=%s", sender_id)
             return
 
         if is_group:
             if not _is_group_message_addressed_to_bot(message, bot_username, bot_id):
+                logger.debug(
+                    "telegram: group message not addressed to bot (chat_id=%s, bot_username=%r, bot_id=%s)",
+                    chat_id, bot_username, bot_id,
+                )
                 return
             if not is_owner:
                 approved_ids = {g.strip() for g in settings.telegram_state.approved_group_ids if g.strip()}
                 if str(chat_id) not in approved_ids:
+                    logger.debug(
+                        "telegram: group chat_id=%s not in approved list %s — ignoring non-owner message",
+                        chat_id, approved_ids,
+                    )
                     return
 
         # Only update owner_chat_id when the owner is in a private chat,
@@ -323,6 +333,10 @@ class TelegramBridgeWorker:
         active_chat = self._ensure_active_chat(chat_id, prompt_text)
         request_id = str(uuid4())
         allowed_mcp_ids: list[str] | None = None if is_owner else list(settings.telegram_state.guest_allowed_mcp_ids)
+        logger.debug(
+            "telegram: dispatching user message (chat_id=%s, is_owner=%s, allowed_mcp_ids=%s)",
+            chat_id, is_owner, allowed_mcp_ids,
+        )
         task = asyncio.create_task(
             self._run_user_message(
                 token=token,
@@ -504,7 +518,10 @@ class TelegramBridgeWorker:
             if clean_text.strip():
                 for chunk in chunk_telegram_text(clean_text):
                     html_chunk = markdown_to_html(chunk)
-                    await asyncio.to_thread(telegram_send_message, token, telegram_chat_id, html_chunk, "HTML")
+                    try:
+                        await asyncio.to_thread(telegram_send_message, token, telegram_chat_id, html_chunk, "HTML")
+                    except Exception as exc:
+                        logger.warning("telegram: failed to send response chunk to chat_id=%s: %s", telegram_chat_id, exc)
             for shared_token in shared_file_tokens:
                 try:
                     shared_payload = await _read_shared_file_payload(shared_token)
@@ -1171,11 +1188,13 @@ def _parse_command(text: str, bot_username: str) -> tuple[str, str]:
 
 def _is_group_message_addressed_to_bot(message: dict[str, Any], bot_username: str, bot_id: int) -> bool:
     text = message.get("text")
-    if not isinstance(text, str) or not text:
+    caption = message.get("caption")
+    content = text if isinstance(text, str) and text else (caption if isinstance(caption, str) and caption else None)
+    if content is None:
         return False
 
-    entities = message.get("entities")
-    if isinstance(entities, list) and bot_username:
+    entities = message.get("entities") or message.get("caption_entities")
+    if isinstance(entities, list):
         for entity in entities:
             if not isinstance(entity, dict):
                 continue
@@ -1184,15 +1203,30 @@ def _is_group_message_addressed_to_bot(message: dict[str, Any], bot_username: st
             length = entity.get("length")
             if not isinstance(offset, int) or not isinstance(length, int):
                 continue
-            if offset < 0 or length <= 0 or offset + length > len(text):
+            if offset < 0 or length <= 0 or offset + length > len(content):
                 continue
 
-            entity_text = text[offset : offset + length].strip().lower()
-            if entity_type == "mention" and entity_text == f"@{bot_username}":
-                return True
-            if entity_type == "bot_command" and entity_text.startswith("/"):
-                if "@" in entity_text and entity_text.split("@", 1)[1] == bot_username:
+            entity_text = content[offset : offset + length].strip().lower()
+            if entity_type == "mention":
+                # Match @botname if we know it; otherwise accept any @mention entity as addressed to bot
+                # (bot_username may be empty if telegram_get_me failed)
+                if bot_username and entity_text == f"@{bot_username}":
                     return True
+                if not bot_username and entity_text.startswith("@"):
+                    return True
+            if entity_type == "bot_command" and entity_text.startswith("/"):
+                if "@" in entity_text:
+                    cmd_target = entity_text.split("@", 1)[1]
+                    if bot_username and cmd_target == bot_username:
+                        return True
+                    if not bot_username and cmd_target:
+                        # We can't verify the username — allow any targeted command
+                        return True
+                else:
+                    # Un-targeted command in group — only accept if bot_username is unknown
+                    # (can't distinguish whose command it is)
+                    if not bot_username:
+                        return True
 
     reply_to = message.get("reply_to_message")
     if isinstance(reply_to, dict):
