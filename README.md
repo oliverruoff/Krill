@@ -314,11 +314,22 @@ WhatsApp integration notes:
 
 Telegram integration notes:
 
-- configure only the bot token in Gateway -> Integrations
+**Setup:**
+
+1. Open `@BotFather` on Telegram and send `/newbot`. Follow the prompts to receive a bot token.
+2. Paste the bot token in Gateway → Integrations → Telegram and save.
+3. Send any private message to your bot. The first sender is automatically bound as owner.
+4. **Group @mention support:** in `@BotFather` send `/setprivacy`, select your bot, choose `Disable`. Without this, Telegram only delivers `/commands` and direct replies to the bot — plain `@mention` messages are not delivered.
+5. Add the bot to a group. As owner, send `/approve@botname` inside the group to enable non-owner access.
+
+**Behaviour:**
+
 - first Telegram sender is auto-bound as owner
-- owner can use private chats and group chats
-- in group chats, Krill responds only to explicit mentions/replies to the bot
-- non-owner messages are silently ignored
+- owner can use private chats and any group chat (no approval needed)
+- in group chats, Krill responds only to explicit @mentions, `/commands`, or replies to the bot
+- non-owner messages in private DMs are silently ignored
+- non-owners in unapproved groups are silently ignored
+- non-owners in approved groups are limited to the guest MCP allowlist (configurable via Manage Group Access)
 - Telegram chat sessions are ephemeral and isolated from Gateway chats
 - Telegram chat history is not written to `braindump.db`, except when `/debug` is used to snapshot the active Telegram chat into a hidden persisted debug chat
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway

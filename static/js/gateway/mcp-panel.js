@@ -741,6 +741,58 @@ function renderConfigPanel(container, items, getConfig, options) {
       const telegramStatus = state.telegramStatus && typeof state.telegramStatus === "object" ? state.telegramStatus : {};
       const groupCount = Number.isFinite(Number(telegramStatus.approved_group_count)) ? Number(telegramStatus.approved_group_count) : (state.telegramApprovedGroupIds || []).length;
 
+      // --- Setup guide (expandable) ---
+      const guideNode = document.createElement("div");
+      guideNode.className = "mcp-guide";
+
+      const guideHeader = document.createElement("div");
+      guideHeader.className = "mcp-guide-header";
+      guideHeader.dataset.action = "telegram-guide-toggle";
+      guideHeader.dataset.configKind = options.kind;
+      guideHeader.dataset.configId = item.id;
+
+      const guideTitle = document.createElement("p");
+      guideTitle.className = "mcp-guide-title";
+      guideTitle.textContent = "Telegram setup";
+
+      const guideToggle = document.createElement("button");
+      guideToggle.type = "button";
+      guideToggle.className = "mcp-expand-btn";
+      guideToggle.textContent = state.telegramGuideExpanded ? "\u25B4" : "\u25BE";
+      guideToggle.setAttribute("aria-label", state.telegramGuideExpanded ? "Collapse Telegram setup" : "Expand Telegram setup");
+      guideToggle.title = state.telegramGuideExpanded ? "Collapse" : "Expand";
+      guideToggle.dataset.action = "telegram-guide-toggle";
+      guideToggle.dataset.configKind = options.kind;
+      guideToggle.dataset.configId = item.id;
+
+      guideHeader.appendChild(guideTitle);
+      guideHeader.appendChild(guideToggle);
+      guideNode.appendChild(guideHeader);
+
+      const guideBody = document.createElement("div");
+      guideBody.className = "mcp-guide-body";
+      guideBody.classList.toggle("hidden", !state.telegramGuideExpanded);
+
+      const guideList = document.createElement("ol");
+      guideList.className = "mcp-guide-list";
+      [
+        "Open @BotFather on Telegram and send /newbot. Follow the prompts to get a bot token.",
+        "Paste the bot token into the field above and save.",
+        "Send any message to your bot in a private Telegram chat. The first sender is auto-bound as owner.",
+        "For @mention support in groups: in @BotFather send /setprivacy, select your bot, choose Disable. Without this the bot only receives /commands and direct replies in groups.",
+        "Add the bot to a group. As owner, send /approve@botname inside the group to allow non-owner access. The owner can always use the bot in any group without approval.",
+        "Non-owners in approved groups can only use the MCPs listed in the guest MCP allowlist (Manage Group Access).",
+      ].forEach((stepText) => {
+        const li = document.createElement("li");
+        li.textContent = stepText;
+        guideList.appendChild(li);
+      });
+
+      guideBody.appendChild(guideList);
+      guideNode.appendChild(guideBody);
+      cardBody.appendChild(guideNode);
+      // --- end guide ---
+
       const statusNode = document.createElement("p");
       statusNode.className = "mcp-description";
       statusNode.textContent = `Approved groups: ${groupCount}`;

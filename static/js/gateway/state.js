@@ -99,6 +99,7 @@ export const state = {
   mcpAutosaveQueuedId: "",
   mcpAutosaveInFlight: false,
   googleGuideExpanded: false,
+  telegramGuideExpanded: false,
   expandedConfigs: {},
   coreMemories: [],
   normalMemories: [],

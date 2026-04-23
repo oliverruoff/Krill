@@ -491,6 +491,13 @@ export async function handleMcpActionClick(event) {
       return;
     }
 
+    if (action === "telegram-guide-toggle" && configKind === "integration" && configId === "telegram") {
+      state.telegramGuideExpanded = !Boolean(state.telegramGuideExpanded);
+      const { renderMcpPanel } = await import("./mcp-panel.js");
+      renderMcpPanel();
+      return;
+    }
+
     if (action === "save") {
       await persistMcpConfigsToSettings();
       setStatus(configKind === "integration" ? "Integration settings saved." : "Tool settings saved.");
