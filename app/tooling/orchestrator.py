@@ -125,6 +125,13 @@ async def generate_with_tools(
     token_values: list[int] = []
     started_at = monotonic()
     cancel_token = cancellation_token or CancellationToken()
+    runtime_context = get_runtime_context()
+    source_user_role = str(runtime_context.get("source_user_role", "")).strip().lower()
+    allowed_mcp_ids = {
+        str(item).strip()
+        for item in runtime_context.get("allowed_mcp_ids", [])
+        if str(item).strip()
+    }
 
     async def trace(system_type: str, content: str) -> None:
         entry: SystemTraceEntry = {"system_type": system_type, "content": content}
