@@ -40,6 +40,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - See concise live execution progress before meaningful tool calls instead of raw low-level trace spam, including fast-updating Gateway tool-selection and execution messages during queued runs
 - Stop running tool chains from Gateway or Telegram with `/stop`, then return to a clean ready state
 - Summarize the current chat context from Gateway or Telegram with `/summarize`
+- List and switch connected provider models from Gateway, Telegram, or Matrix with `/model` and `/model <provider>/<model>`
 - Create hidden `/debug` snapshots from Gateway or Telegram that capture the full live chat state, including system/tool traces, into a persisted hidden chat plus a downloadable JSON file
 - List and toggle MCPs from Gateway or Telegram chat with `/mcp_list`, `/mcp_enable <id>`, and `/mcp_disable <id>`
 - Attach one image in Gateway/Telegram messages for transient vision analysis (no image file persistence)
@@ -336,7 +337,7 @@ Telegram integration notes:
 - Telegram chat history is not written to `braindump.db`, except when `/debug` is used to snapshot the active Telegram chat into a hidden persisted debug chat
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway
 - Telegram replies include a context-window warning when usage reaches 75% of model limit (suggesting `/new`)
-- Telegram supports `/usage` (shows session context fill vs model window), `/summarize` (summarizes current chat context), `/compaction` (manual chat compaction into a fresh chat), `/debug` (creates a hidden persisted debug dump + downloadable JSON), and MCP control commands `/mcp_list`, `/mcp_enable <id>`, `/mcp_disable <id>`
+- Telegram supports `/usage` (shows session context fill vs model window), `/model` (lists/switches connected provider models), `/summarize` (summarizes current chat context), `/compaction` (manual chat compaction into a fresh chat), `/debug` (creates a hidden persisted debug dump + downloadable JSON), and MCP control commands `/mcp_list`, `/mcp_enable <id>`, `/mcp_disable <id>`
 - Telegram `/debug` sends the JSON as a native document and, when reachable, also includes a clickable LAN download link built from `KRILL_PUBLIC_BASE_URL` or the detected local network IP
 - Telegram accepts image messages (photo/image document) and emits an "Image analysis" assistant message before the final reply
 - Telegram converts `/api/files/shared/<token>` links in assistant output into native Telegram document attachments when possible
@@ -542,6 +543,7 @@ The script builds the image, starts fresh containers, configures setup with Gemi
 - `GET /gateway` -> gateway page
 - `GET /api/providers` -> provider + model metadata
 - `POST /api/providers/verify` -> provider credential/model verification
+- `POST /api/providers/model-command` -> execute the Gateway `/model` provider/model switch command
 - `GET /api/mcps` -> available tools metadata
 - `POST /api/mcps/verify` -> tool verification (when applicable)
 - `GET /api/mcps/google/oauth/status` -> Google OAuth connection status

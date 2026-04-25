@@ -16,6 +16,7 @@ from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, lo
 from app.debug_dumps import create_hidden_debug_chat
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed, is_over_context_threshold
 from app.mcp_commands import execute_mcp_command
+from app.model_commands import execute_model_command
 from app.providers import get_provider, get_provider_model_limit
 from app.providers.resilience import generate_with_retries
 from app.providers.vision import analyze_image
@@ -714,6 +715,7 @@ class TelegramBridgeWorker:
                 "/stop - Cancel the active task\n"
                 "/new - Create and switch to a new chat\n"
                 "/summarize - Summarize current chat context\n"
+                "/model - List or switch provider models\n"
                 "/mcp_list - List all MCP ids\n"
                 "/mcp_enable <id> - Enable an MCP\n"
                 "/mcp_disable <id> - Disable an MCP\n"
@@ -737,6 +739,10 @@ class TelegramBridgeWorker:
 
         if command in {"mcp_list", "mcp_enable", "mcp_disable"}:
             result = await execute_mcp_command(command, argument)
+            return _markdown_command_response(result.text)
+
+        if command == "model":
+            result = await execute_model_command(argument)
             return _markdown_command_response(result.text)
 
         if command == "summarize":

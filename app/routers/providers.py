@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from ..model_commands import execute_model_command, parse_model_chat_command
 from ..providers import get_provider, get_provider_options, is_supported_provider
 
 router = APIRouter()
@@ -35,9 +36,31 @@ class VerifyProviderResponse(BaseModel):
     detail: str
 
 
+class ModelCommandExecuteRequest(BaseModel):
+    message: str = Field(default="", max_length=200)
+
+
 @router.get("/api/providers", response_model=list[ProviderOption])
 async def get_providers() -> list[dict[str, object]]:
     return get_provider_options()
+
+
+@router.post("/api/providers/model-command")
+async def execute_model_chat_command(payload: ModelCommandExecuteRequest) -> dict[str, object]:
+    parsed = parse_model_chat_command(payload.message)
+    if parsed is None:
+        raise HTTPException(status_code=422, detail="Unsupported model command.")
+
+    result = await execute_model_command(parsed.argument)
+    settings_payload = result.settings.model_dump() if result.settings is not None else None
+    return {
+        "ok": result.ok,
+        "text": result.text,
+        "command_name": result.command_name,
+        "provider_id": result.provider_id,
+        "model_id": result.model_id,
+        "settings": settings_payload,
+    }
 
 
 @router.post("/api/providers/verify", response_model=VerifyProviderResponse)

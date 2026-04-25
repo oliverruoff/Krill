@@ -47,6 +47,21 @@ function parseMcpCommand(message) {
   return { commandName };
 }
 
+function parseModelCommand(message) {
+  const normalized = typeof message === "string" ? message.trim() : "";
+  if (!normalized.startsWith("/")) {
+    return null;
+  }
+
+  const [commandToken] = normalized.split(/\s+/, 1);
+  const commandName = commandToken.slice(1).trim().toLowerCase();
+  if (commandName !== "model") {
+    return null;
+  }
+
+  return { commandName };
+}
+
 function isSummarizeCommand(message) {
   return typeof message === "string" && message.trim().toLowerCase() === "/summarize";
 }
@@ -103,6 +118,81 @@ async function runGatewayMcpCommand(chat, message) {
   });
   chat.updated_at = timestamp;
   await syncGatewayMcpSettingsFromPayload(payload?.settings);
+  const { persistChatsToSettings } = await import("./chat-sync.js");
+  await persistChatsToSettings();
+  const { renderActiveChat } = await import("./chat-render.js");
+  const { renderChatHistory } = await import("./chat-history.js");
+  renderActiveChat();
+  renderChatHistory();
+  setStatus(responseText);
+}
+
+async function syncGatewayModelSettingsFromPayload(settingsPayload) {
+  if (!settingsPayload || typeof settingsPayload !== "object") {
+    return;
+  }
+
+  state.settings = settingsPayload;
+  state.activeProviderId = typeof settingsPayload.active_provider_id === "string" ? settingsPayload.active_provider_id : "";
+  state.activeModelId = typeof settingsPayload.active_model_id === "string" ? settingsPayload.active_model_id : "";
+
+  const {
+    getProviderById,
+    getModelTokenLimit,
+    syncSwitcherControls,
+    syncUsedTokensToContext,
+  } = await import("./providers.js");
+  const provider = getProviderById(state.activeProviderId);
+  state.modelTokenLimit = getModelTokenLimit(state.activeProviderId, state.activeModelId);
+  state.providerLabel = provider?.label ?? state.activeProviderId;
+  state.modelLabel = provider?.models?.find((model) => model.id === state.activeModelId)?.label ?? state.activeModelId;
+  syncSwitcherControls();
+
+  const { normalizeDailyTokenUsage } = await import("./chat-sync.js");
+  state.dailyTokenUsage = normalizeDailyTokenUsage(settingsPayload.daily_token_usage);
+  const { updateDailyTokenUsageLabel, updateMetaIndicators, updateAssistantHeader } = await import("./header.js");
+  updateDailyTokenUsageLabel();
+  updateMetaIndicators();
+  updateAssistantHeader(state.settings);
+  await syncUsedTokensToContext();
+}
+
+async function runGatewayModelCommand(chat, message) {
+  const response = await fetch("/api/providers/model-command", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!response.ok) {
+    const detail = await buildHttpErrorDetail(response, "Failed to run model command.");
+    throw new Error(detail);
+  }
+
+  const payload = await response.json();
+  const responseText = typeof payload?.text === "string" && payload.text.trim()
+    ? payload.text.trim()
+    : "Model command completed.";
+  const timestamp = createTimestamp();
+  chat.messages.push({
+    role: "user",
+    content: message,
+    timestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: "",
+    status: "",
+  });
+  chat.messages.push({
+    role: "assistant",
+    content: responseText,
+    timestamp,
+    system_type: "",
+    tool_usage: [],
+    request_id: "",
+    status: "done",
+  });
+  chat.updated_at = timestamp;
+  await syncGatewayModelSettingsFromPayload(payload?.settings);
   const { persistChatsToSettings } = await import("./chat-sync.js");
   await persistChatsToSettings();
   const { renderActiveChat } = await import("./chat-render.js");
@@ -700,6 +790,7 @@ async function sendMessage(event) {
   let chat = getActiveChat();
   const isDebugCommand = !pendingImage && message.toLowerCase() === "/debug";
   const mcpCommand = !pendingImage ? parseMcpCommand(message) : null;
+  const modelCommand = !pendingImage ? parseModelCommand(message) : null;
   const summarizeCommand = !pendingImage && isSummarizeCommand(message);
   if (isDebugCommand) {
     if (!chat) {
@@ -760,6 +851,30 @@ async function sendMessage(event) {
       chatInput.focus();
     } catch (error) {
       setStatus(normalizeErrorMessage(error, "Failed to run MCP command."), true);
+    }
+    return;
+  }
+
+  if (modelCommand) {
+    if (!chat) {
+      const { createChatEntry, updateCurrentChatTitle, updateSystemTraceToggleLabel } = await import("./chat-history.js");
+      chat = createChatEntry(message);
+      state.chats.push(chat);
+      state.activeChatId = chat.id;
+      updateCurrentChatTitle();
+      updateSystemTraceToggleLabel();
+    } else if ((!Array.isArray(chat.messages) || chat.messages.length === 0) && normalizeChatTitle(chat.title).toLowerCase() === "new chat") {
+      chat.title = deriveChatTitle(message);
+    }
+
+    try {
+      await runGatewayModelCommand(chat, message);
+      chatInput.value = "";
+      clearPendingImageAttachment();
+      syncChatInputHeight();
+      chatInput.focus();
+    } catch (error) {
+      setStatus(normalizeErrorMessage(error, "Failed to run model command."), true);
     }
     return;
   }

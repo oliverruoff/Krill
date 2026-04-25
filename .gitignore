@@ -12,6 +12,9 @@ braindump.json
 braindump.json.bak
 .env_test
 data/tts_audio/*
+tmp_verify_data/krill_model_command_test_*/
+tmp_verify_data/model_command_*.db*
+tmp_verify_data/tmpdoq6c83z/
 You
 run_Claude_Code.bat
 settings.local.json
