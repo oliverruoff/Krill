@@ -22,6 +22,7 @@ from .execution import (
     ExecutionEvent,
     TaskIntent,
     build_event_message,
+    build_step_started_message,
     classify_task_intent,
     execution_event,
     rank_tools_for_intent,
@@ -269,10 +270,11 @@ async def generate_with_tools(
     for step_index in range(1, normalized_recursion + 1):
         check_cancelled()
         await trace("tool_step_status", f"Step {step_index}/{normalized_recursion}")
+        step_label = pipeline["ordered_steps"][min(step_index - 1, len(pipeline["ordered_steps"]) - 1)]
         await emit_event(
             execution_event(
                 "step_started",
-                message=f"{pipeline['ordered_steps'][min(step_index - 1, len(pipeline['ordered_steps']) - 1)].capitalize()} via {pipeline['pipeline_id'].replace('_', ' ')}.",
+                message=build_step_started_message(pipeline["pipeline_id"], step_label),
                 stage=_event_stage_for_step_label(pipeline["ordered_steps"], step_index),
                 pipeline_id=pipeline["pipeline_id"],
                 categories=list(task_intent.get("categories", [])),

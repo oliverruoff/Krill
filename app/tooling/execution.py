@@ -86,6 +86,69 @@ _CATEGORY_TOOL_PREFERENCES: dict[str, list[str]] = {
     "memory_task": ["brain_access"],
 }
 
+_PIPELINE_PLANNING_MESSAGES: dict[str, str] = {
+    "fetch_validate_apply_verify_pipeline": "Planning how to fetch and apply the requested item.",
+    "repo_modify_diff_finalize_pipeline": "Planning how to update the code.",
+    "resolve_target_apply_confirm_pipeline": "Planning how to make and confirm the requested change.",
+    "fetch_transform_publish_verify_pipeline": "Planning how to prepare and deliver the requested item.",
+    "inspect_route_execute_verify_pipeline": "Planning how to complete this with the right tool.",
+}
+
+_PIPELINE_STEP_MESSAGES: dict[str, dict[str, str]] = {
+    "fetch_validate_apply_verify_pipeline": {
+        "resolve inputs": "Figuring out what needs to be fetched.",
+        "fetch": "Fetching the requested item.",
+        "validate": "Checking the fetched result.",
+        "apply": "Applying the requested item.",
+        "verify": "Verifying the result.",
+        "finalize": "Preparing the final response.",
+    },
+    "repo_modify_diff_finalize_pipeline": {
+        "inspect": "Looking through the repository.",
+        "modify": "Making the requested code changes.",
+        "validate diff": "Checking the repository changes.",
+        "finalize": "Preparing the final response.",
+        "verify": "Verifying the result.",
+    },
+    "resolve_target_apply_confirm_pipeline": {
+        "resolve target": "Finding the right target.",
+        "apply action": "Applying the requested change.",
+        "confirm state": "Checking that the change took effect.",
+        "finalize": "Preparing the final response.",
+    },
+    "fetch_transform_publish_verify_pipeline": {
+        "fetch": "Gathering the needed information.",
+        "transform": "Preparing the information for delivery.",
+        "publish": "Sending or publishing the result.",
+        "verify": "Verifying the result.",
+    },
+    "inspect_route_execute_verify_pipeline": {
+        "inspect": "Understanding the request.",
+        "route": "Choosing the best tool for the job.",
+        "execute": "Running the selected tool.",
+        "verify": "Verifying the result.",
+    },
+}
+
+_GENERIC_STEP_MESSAGES: dict[str, str] = {
+    "resolve inputs": "Figuring out what needs to be done.",
+    "fetch": "Gathering the needed information.",
+    "validate": "Checking the result.",
+    "apply": "Applying the requested change.",
+    "verify": "Verifying the result.",
+    "finalize": "Preparing the final response.",
+    "inspect": "Understanding the request.",
+    "modify": "Making the requested changes.",
+    "validate diff": "Checking the changes.",
+    "resolve target": "Finding the right target.",
+    "apply action": "Applying the requested change.",
+    "confirm state": "Checking that the change took effect.",
+    "transform": "Preparing the result.",
+    "publish": "Sending or publishing the result.",
+    "route": "Choosing the best tool for the job.",
+    "execute": "Running the selected tool.",
+}
+
 
 def build_conversation_key(source_channel: str, source_chat_id: str) -> str:
     normalized_channel = str(source_channel or "gateway").strip() or "gateway"
@@ -241,8 +304,12 @@ def build_event_message(event_type: str, payload: dict[str, Any]) -> str:
         return str(payload.get("message", "Starting work.")).strip() or "Starting work."
     if event_type == "task_classified":
         pipeline_id = str(payload.get("pipeline_id", "workflow")).strip()
-        return f"Planning with the {pipeline_id.replace('_', ' ')} workflow.".strip()
+        return _PIPELINE_PLANNING_MESSAGES.get(pipeline_id, "Planning how to complete this with the right tool.")
     if event_type == "step_started":
+        step_label = str(payload.get("step_label", "")).strip()
+        pipeline_id = str(payload.get("pipeline_id", "")).strip()
+        if step_label:
+            return build_step_started_message(pipeline_id, step_label)
         label = str(payload.get("message", "Working on the next step.")).strip()
         return label or "Working on the next step."
     if event_type == "tool_call_started":
@@ -264,6 +331,19 @@ def build_event_message(event_type: str, payload: dict[str, Any]) -> str:
     if stage:
         return stage
     return str(payload.get("message", "Working...")).strip() or "Working..."
+
+
+def build_step_started_message(pipeline_id: str, step_label: str) -> str:
+    normalized_pipeline_id = str(pipeline_id or "").strip()
+    normalized_step_label = str(step_label or "").strip().lower()
+    if not normalized_step_label:
+        return "Working on the next step."
+
+    pipeline_messages = _PIPELINE_STEP_MESSAGES.get(normalized_pipeline_id, {})
+    message = pipeline_messages.get(normalized_step_label) or _GENERIC_STEP_MESSAGES.get(normalized_step_label)
+    if message:
+        return message
+    return f"Working on {normalized_step_label.replace('_', ' ')}."
 
 
 def validate_tool_result(

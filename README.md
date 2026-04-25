@@ -38,7 +38,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Gateway and Setup show a visible warning banner while timed-job auth-expiry suppression is active
 - Reconnecting the affected OAuth provider clears the timed-job auth warning immediately, without waiting for the next successful scheduled run
 - Let Krill orchestrate multi-step tool flows automatically with intent classification, reusable execution pipelines, validation gates, and fallback routing
-- See concise live execution progress before meaningful tool calls instead of raw low-level trace spam, including fast-updating Gateway tool-selection and execution messages during queued runs
+- See plain-language live execution progress before meaningful tool calls instead of raw low-level trace spam or internal workflow labels, including fast-updating Gateway tool-selection and execution messages during queued runs
 - Stop running tool chains from Gateway or Telegram with `/stop`, then return to a clean ready state
 - Summarize the current chat context from Gateway or Telegram with `/summarize`
 - List and switch connected provider models from Gateway, Telegram, or Matrix with `/model` and `/model <provider>/<model>`
@@ -310,7 +310,7 @@ WhatsApp integration notes:
 - WhatsApp API endpoints are present, but runtime polling/auto-reply only runs when the WhatsApp integration and MCP are enabled
 - uses a local sidecar (`whatsapp-web.js`) with QR connect popup and allowlist filtering
 - the QR popup now advances to explicit post-scan progress states and clears stale QR images after a successful scan or failed attempt
-- Gateway execution progress updates are appended as small in-chat system messages during queued runs so they stay visible across refreshes and chat switches
+- Gateway execution progress updates are appended as small, plain-language in-chat system messages during queued runs so they stay visible across refreshes and chat switches
 - `Allowed numbers (Send / Read)` controls who the model can message and whose recent chat history it can load
 - `Allowed numbers (Trigger)` controls who can trigger WhatsApp auto-answer when Auto answer is enabled
 - auto-answer delay window is configurable via `Auto-reply min delay (s)` and `Auto-reply max delay (s)`
