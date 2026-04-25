@@ -95,6 +95,7 @@ Provider modules live in `app/providers/`, with shared interface in `app/provide
 OpenAI OAuth provider notes:
 
 - choose `openai_codex_oauth` in Setup and click **Connect OpenAI**
+- includes ChatGPT OAuth model candidates up through `gpt-5.5`
 - Krill opens an OAuth popup and stores subscription credentials in `provider_configs`
 - no owner-managed OAuth client id/secret required for this provider flow
 - automatic callback mode uses `KRILL_PUBLIC_BASE_URL` if set; manual mode is also supported by pasting the final redirect URL/code

@@ -21,6 +21,7 @@ OPENAI_CODEX_JWT_CLAIM_PATH = "https://api.openai.com/auth"
 
 _logger = logging.getLogger(__name__)
 OPENAI_CODEX_MODEL_CANDIDATES: list[dict[str, object]] = [
+    {"id": "gpt-5.5", "label": "GPT-5.5", "token_limit": 1050000, "supports_images": False},
     {"id": "gpt-5.4", "label": "GPT-5.4", "token_limit": 1050000, "supports_images": False},
     {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex", "token_limit": 400000, "supports_images": False},
     {
