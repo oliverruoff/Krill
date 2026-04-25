@@ -5,18 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from app.config import (
     add_short_term_memories,
     append_conversation_turn,
-    get_conversation_turns_for_date,
-    get_last_daily_summary_date,
     get_recent_conversation_turns,
     load_settings,
     register_user_message_event,
-    set_last_daily_summary_date,
 )
 from app.providers import get_provider
 from app.providers.resilience import generate_with_retries
@@ -304,103 +301,3 @@ async def run_memory_extraction(*, trigger_count: int, interval: int, source_cha
 
 
 LOGGER = logging.getLogger(__name__)
-
-
-def _build_daily_summary_prompt(date_str: str) -> str:
-    return (
-        f"Summarize what the assistant did on {date_str} based on the timed job conversation turns below.\n\n"
-        "Rules:\n"
-        "- Keep only NOTABLE outcomes, results, and actions that produced meaningful information.\n"
-        "- Skip routine check-ins that found nothing, produced no output, or had no meaningful result.\n"
-        "- If nothing notable happened, return exactly: {\"summary\": \"\"}\n"
-        "- Write the summary in third-person form (e.g., 'The assistant checked weather and found...').\n"
-        "- Be concise. One to three sentences maximum.\n"
-        "- Do not invent facts. Only summarize what is in the provided turns.\n\n"
-        "Return JSON only with this exact schema:\n"
-        '{\"summary\": \"...\"}'
-    )
-
-
-async def run_daily_summary_extraction() -> bool:
-    """Extract a daily activity summary from yesterday's timed job conversation turns.
-
-    Returns True if a summary was created and saved, False otherwise.
-    """
-    now_utc = datetime.now(timezone.utc)
-    yesterday = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
-
-    last_date = await get_last_daily_summary_date()
-    if last_date >= yesterday:
-        return False
-
-    turns = await get_conversation_turns_for_date(yesterday, source_channel="timed_job")
-    if not turns:
-        await set_last_daily_summary_date(yesterday)
-        return False
-
-    settings = await load_settings()
-    provider_id = settings.active_provider_id
-    provider_config = settings.provider_configs.get(provider_id)
-    if not provider_id or provider_config is None:
-        return False
-
-    provider = get_provider(provider_id)
-    if provider is None:
-        return False
-
-    history: list[dict[str, str]] = []
-    for turn in turns:
-        prompt = str(turn.get("user_message", "")).strip()
-        response = str(turn.get("assistant_message", "")).strip()
-        if prompt:
-            history.append({"role": "user", "content": f"[Timed job prompt]: {prompt}"})
-        if response:
-            history.append({"role": "assistant", "content": response})
-
-    if not history:
-        await set_last_daily_summary_date(yesterday)
-        return False
-
-    try:
-        response_text, _ = await generate_with_retries(
-            provider=provider,
-            prompt=_build_daily_summary_prompt(yesterday),
-            system_prompt="You are a concise activity summarizer. Return valid JSON only.",
-            model=provider_config.model,
-            api_key=provider_config.api_key,
-            history=history,
-        )
-    except Exception:
-        LOGGER.warning("Daily summary extraction LLM call failed for %s", yesterday)
-        return False
-
-    payload = _parse_json_payload(response_text)
-    summary = str(payload.get("summary", "")).strip()
-
-    await set_last_daily_summary_date(yesterday)
-
-    if not summary:
-        return False
-
-    memory_content = f"Daily activity summary ({yesterday}): {summary}"
-    await add_short_term_memories(
-        core_memories=[],
-        normal_memories=[memory_content],
-        source_channel="daily_summary",
-        source_chat_id="",
-        source_request_id=f"daily-{yesterday}",
-    )
-    LOGGER.info("Daily summary memory created for %s", yesterday)
-    return True
-
-
-async def maybe_run_daily_summary() -> bool:
-    """Check if a daily summary is due and run it if so. Safe to call frequently."""
-    now_utc = datetime.now(timezone.utc)
-    yesterday = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
-
-    last_date = await get_last_daily_summary_date()
-    if last_date >= yesterday:
-        return False
-
-    return await run_daily_summary_extraction()

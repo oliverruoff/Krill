@@ -2290,43 +2290,6 @@ def _get_recent_conversation_turns_sync(limit: int) -> list[dict[str, str]]:
         conn.close()
 
 
-async def get_last_daily_summary_date() -> str:
-    """Return the date string (YYYY-MM-DD) of the last daily summary extraction, or empty string."""
-    await ensure_settings_file()
-    async with _DB_LOCK:
-        return await asyncio.to_thread(_get_last_daily_summary_date_sync)
-
-
-def _get_last_daily_summary_date_sync() -> str:
-    conn = _get_conn(BRAINDUMP_PATH)
-    try:
-        row = conn.execute("SELECT last_daily_summary_date FROM settings_core WHERE id = 1").fetchone()
-        if row is None:
-            return ""
-        return str(row["last_daily_summary_date"]).strip()
-    finally:
-        conn.close()
-
-
-async def set_last_daily_summary_date(date_str: str) -> None:
-    """Persist the date string (YYYY-MM-DD) of the last daily summary extraction."""
-    await ensure_settings_file()
-    async with _DB_LOCK:
-        await asyncio.to_thread(_set_last_daily_summary_date_sync, date_str)
-
-
-def _set_last_daily_summary_date_sync(date_str: str) -> None:
-    conn = _get_conn(BRAINDUMP_PATH)
-    try:
-        conn.execute(
-            "UPDATE settings_core SET last_daily_summary_date = ? WHERE id = 1",
-            (str(date_str).strip(),),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
 async def get_conversation_turns_for_date(target_date: str, source_channel: str = "") -> list[dict[str, str]]:
     """Return conversation turns for a specific date (YYYY-MM-DD), optionally filtered by source_channel."""
     await ensure_settings_file()
