@@ -77,15 +77,51 @@ async def main() -> None:
             "system_trace_messages": [],
         }, 10000
 
-    def make_message(from_id: int, chat_id: int, chat_type: str, text: str, bot_username: str = "") -> dict[str, Any]:
+    async def wait_for_active_run(chat_id: int) -> None:
+        active_run = worker._active_runs.get(chat_id)
+        if active_run is not None:
+            task = active_run.get("task")
+            if task is not None:
+                await asyncio.wait_for(task, timeout=5.0)
+
+    def find_telegram_context(call: dict[str, Any]) -> str:
+        history = call.get("history")
+        assert isinstance(history, list), f"Expected history list, got: {history!r}"
+        contexts = [
+            str(entry.get("content", ""))
+            for entry in history
+            if isinstance(entry, dict)
+            and entry.get("role") == "system"
+            and "Telegram identity rules:" in str(entry.get("content", ""))
+        ]
+        assert contexts, f"Telegram integration context missing from history: {history!r}"
+        return contexts[-1]
+
+    def make_message(
+        from_id: int,
+        chat_id: int,
+        chat_type: str,
+        text: str,
+        bot_username: str = "",
+        first_name: str = "",
+        last_name: str = "",
+        username: str = "",
+    ) -> dict[str, Any]:
         entities = []
         if text.startswith("/") and "@" in text and bot_username:
             entities.append({"type": "bot_command", "offset": 0, "length": len(text.split()[0])})
         elif f"@{bot_username}" in text:
             idx = text.index(f"@{bot_username}")
             entities.append({"type": "mention", "offset": idx, "length": len(f"@{bot_username}")})
+        sender: dict[str, Any] = {"id": from_id, "is_bot": False}
+        if first_name:
+            sender["first_name"] = first_name
+        if last_name:
+            sender["last_name"] = last_name
+        if username:
+            sender["username"] = username
         return {
-            "from": {"id": from_id, "is_bot": False},
+            "from": sender,
             "chat": {"id": chat_id, "type": chat_type},
             "text": text,
             "entities": entities,
@@ -151,15 +187,20 @@ async def main() -> None:
         # Test 4: Non-owner in now-approved group gets LLM response with restricted allowed_mcp_ids
         sent_messages.clear()
         captured_calls.clear()
-        msg = make_message(NON_OWNER_USER_ID, GROUP_CHAT_ID, "supergroup", f"@{BOT_USERNAME} what can you do?", BOT_USERNAME)
+        msg = make_message(
+            NON_OWNER_USER_ID,
+            GROUP_CHAT_ID,
+            "supergroup",
+            f"@{BOT_USERNAME} do you know who I am?",
+            BOT_USERNAME,
+            first_name="Guest",
+            last_name="Person",
+            username="guestperson",
+        )
         # Run the task created by _handle_message
         await worker._handle_message(token, msg, BOT_USERNAME, BOT_ID)
         # Give the task a moment to complete
-        active_run = worker._active_runs.get(GROUP_CHAT_ID)
-        if active_run is not None:
-            task = active_run.get("task")
-            if task is not None:
-                await asyncio.wait_for(task, timeout=5.0)
+        await wait_for_active_run(GROUP_CHAT_ID)
         assert captured_calls, "LLM should be called for non-owner in approved group"
         last_call = captured_calls[-1]
         assert last_call.get("allowed_mcp_ids") == ["brain_access"], (
@@ -169,18 +210,45 @@ async def main() -> None:
             f"Guest should have source_user_role='assistant_usage' so orchestrator enforces allowlist, "
             f"got: {last_call.get('source_user_role')!r}"
         )
+        guest_context = find_telegram_context(last_call)
+        assert f"Telegram current sender id: {NON_OWNER_USER_ID}" in guest_context, guest_context
+        assert "Telegram current sender display name: Guest P." in guest_context, guest_context
+        assert "Telegram current sender username: @guestperson" in guest_context, guest_context
+        assert "Telegram current sender role: assistant_usage" in guest_context, guest_context
+        assert "This current sender is not the configured owner." in guest_context, guest_context
+        assert "Do not claim this sender is the owner" in guest_context, guest_context
         print("PASS: Non-owner in approved group gets restricted MCP allowlist")
+        print("PASS: Non-owner group request injects guest sender identity context")
 
         # Test 5: owner_chat_id is NOT updated when owner sends from a group
+        captured_calls.clear()
         settings = await load_settings()
         original_owner_chat_id = settings.telegram_state.owner_chat_id
-        msg = make_message(OWNER_USER_ID, GROUP_CHAT_ID, "supergroup", f"@{BOT_USERNAME} hello owner", BOT_USERNAME)
+        msg = make_message(
+            OWNER_USER_ID,
+            GROUP_CHAT_ID,
+            "supergroup",
+            f"@{BOT_USERNAME} hello owner",
+            BOT_USERNAME,
+            first_name="Olive",
+            last_name="Owner",
+            username="oliveowner",
+        )
         await worker._handle_message(token, msg, BOT_USERNAME, BOT_ID)
+        await wait_for_active_run(GROUP_CHAT_ID)
         settings = await load_settings()
         assert settings.telegram_state.owner_chat_id == original_owner_chat_id, (
             f"owner_chat_id should not be updated from group. Got: {settings.telegram_state.owner_chat_id}"
         )
+        assert captured_calls, "Owner group message should call the LLM"
+        owner_context = find_telegram_context(captured_calls[-1])
+        assert f"Telegram current sender id: {OWNER_USER_ID}" in owner_context, owner_context
+        assert "Telegram current sender display name: Olive O." in owner_context, owner_context
+        assert "Telegram current sender username: @oliveowner" in owner_context, owner_context
+        assert "Telegram current sender role: owner" in owner_context, owner_context
+        assert "This current sender is not the configured owner." not in owner_context, owner_context
         print("PASS: owner_chat_id not updated from group message")
+        print("PASS: Owner group request injects owner sender identity context")
 
         # Test 6: /unapprove removes group from approved list
         sent_messages.clear()

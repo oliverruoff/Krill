@@ -335,6 +335,7 @@ Telegram integration notes:
 - non-owners in unapproved groups are silently ignored
 - non-owners in approved groups are limited to the guest MCP allowlist, and that allowlist only exposes MCPs explicitly enabled in Krill's MCP settings
 - non-owner group requests never receive script catalog context unless the `scripts` MCP is in the guest allowlist
+- Telegram group requests inject the current sender id, display name, username, and owner/guest role so identity questions refer to the active speaker, not automatically to the configured owner
 - Telegram chat sessions are ephemeral and isolated from Gateway chats
 - Telegram chat history is not written to `braindump.db`, except when `/debug` is used to snapshot the active Telegram chat into a hidden persisted debug chat
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway
