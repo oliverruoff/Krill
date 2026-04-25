@@ -62,7 +62,12 @@ class ScriptsMCP(MCPPlugin):
             McpToolSpec(
                 id="edit_script",
                 label="Edit Script",
-                description="Edits an existing stored script by title.",
+                description=(
+                    "Edits an existing stored script by title. Security guard: only use this tool when "
+                    "the user's current request explicitly says that a script should be edited. Do not "
+                    "use it from implication, troubleshooting guesses, suggestions, or because a script "
+                    "looks outdated; first ask for explicit confirmation that the script should be edited."
+                ),
                 input_schema={
                     "type": "object",
                     "properties": {

@@ -433,6 +433,100 @@ SSE events include:
 
 ## Quick Start
 
+### Coding Agent Deployment Prompt
+
+Use this section when asking a coding agent to install or redeploy Krill on a host. These instructions assume the agent has shell access to the target machine and should prefer the published Docker image over building from source.
+
+Copy/paste prompt for the agent:
+
+```text
+Install and run Krill on this machine using Docker.
+
+Requirements:
+- Confirm Docker Engine is installed and the current user can run `docker`.
+- If Docker is missing, install Docker first using the host OS package manager or Docker's official install instructions, then verify with `docker version`.
+- Pull the published image: `ghcr.io/oliverruoff/krill:latest`.
+- Run a single long-lived container named `krill-app`.
+- Persist Krill state by mounting a Docker volume or host directory to `/app/data`; this stores `braindump.db` and must survive container replacement.
+- Publish the app on the host so the Gateway is reachable in a browser.
+- Configure the container to restart automatically after daemon or system reboot.
+- If OAuth callbacks, reverse proxy, Tailscale, or public access are used, set `KRILL_PUBLIC_BASE_URL` to the browser-reachable base URL.
+- After starting, verify the container is healthy enough to serve `http://<host>:<port>/`, then report the URL, container name, image, data volume/path, restart policy, and any environment variables used.
+
+Recommended command:
+
+docker pull ghcr.io/oliverruoff/krill:latest
+docker rm -f krill-app 2>/dev/null || true
+docker run -d \
+  --name krill-app \
+  --restart unless-stopped \
+  -p 8055:8055 \
+  -v krill_data:/app/data \
+  ghcr.io/oliverruoff/krill:latest
+
+If the service should be available on standard HTTP port 80 instead of 8055, use `-p 80:8055`.
+If the deployment has a public URL, add `-e KRILL_PUBLIC_BASE_URL=https://your-krill.example.com`.
+Do not delete the mounted data volume or host data directory during updates.
+```
+
+Agent checklist:
+
+1. Verify Docker is installed:
+
+```bash
+docker version
+docker info
+```
+
+2. Pull the current image:
+
+```bash
+docker pull ghcr.io/oliverruoff/krill:latest
+```
+
+3. Run Krill with persistent data and automatic restart:
+
+```bash
+docker run -d \
+  --name krill-app \
+  --restart unless-stopped \
+  -p 8055:8055 \
+  -v krill_data:/app/data \
+  ghcr.io/oliverruoff/krill:latest
+```
+
+4. Confirm the restart policy and container state:
+
+```bash
+docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' krill-app
+docker ps --filter name=krill-app
+```
+
+5. Open `http://<host>:8055` and complete the first-run setup.
+
+For a public HTTPS or reverse-proxy deployment, include the external browser URL:
+
+```bash
+docker run -d \
+  --name krill-app \
+  --restart unless-stopped \
+  -p 8055:8055 \
+  -v krill_data:/app/data \
+  -e KRILL_PUBLIC_BASE_URL=https://krill.example.com \
+  ghcr.io/oliverruoff/krill:latest
+```
+
+The `--restart unless-stopped` policy is what makes Docker start Krill again after the Docker daemon or host machine reboots. The `krill_data:/app/data` mount keeps the SQLite state file (`braindump.db`) outside the disposable container filesystem.
+
+To update an existing Docker deployment, back up `braindump.db`, pull the image again, recreate the container with the same data mount, and keep the restart policy:
+
+```bash
+docker cp krill-app:/app/data/braindump.db ./braindump.db.backup
+docker pull ghcr.io/oliverruoff/krill:latest
+docker rm -f krill-app
+docker run -d --name krill-app --restart unless-stopped -p 8055:8055 -v krill_data:/app/data ghcr.io/oliverruoff/krill:latest
+```
+
 ```bash
 python -m venv .venv
 ```
@@ -457,16 +551,16 @@ Open `http://127.0.0.1:8055`.
 
 ## Docker
 
-Build:
+Pull the published image:
 
 ```bash
-docker build -t krill:latest .
+docker pull ghcr.io/oliverruoff/krill:latest
 ```
 
 Run:
 
 ```bash
-docker run --name krill -p 8055:8055 -v krill_data:/app/data krill:latest
+docker run -d --name krill-app --restart unless-stopped -p 8055:8055 -v krill_data:/app/data ghcr.io/oliverruoff/krill:latest
 ```
 
 The container image includes Node.js/npm and Git tooling (`git`, `ssh`, `ssh-keygen`, `gh`) so OpenCode/Git MCP workflows run end-to-end.
@@ -475,7 +569,14 @@ It also starts `Xvfb` by default (`KRILL_ENABLE_XVFB=1`) so Browser Control head
 Optional (disable virtual display/Xvfb):
 
 ```bash
-docker run --name krill -p 8055:8055 -e KRILL_ENABLE_XVFB=0 -v krill_data:/app/data krill:latest
+docker run -d --name krill-app --restart unless-stopped -p 8055:8055 -e KRILL_ENABLE_XVFB=0 -v krill_data:/app/data ghcr.io/oliverruoff/krill:latest
+```
+
+Local source build, if you are developing Krill itself:
+
+```bash
+docker build -t krill:latest .
+docker run -d --name krill-dev --restart unless-stopped -p 8055:8055 -v krill_data:/app/data krill:latest
 ```
 
 ### Updating Krill (Docker)
