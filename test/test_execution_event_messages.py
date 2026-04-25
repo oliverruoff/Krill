@@ -46,6 +46,7 @@ def main() -> None:
         ("resolve_target_apply_confirm_pipeline", "confirm state"): "Checking that the change took effect.",
         ("fetch_transform_publish_verify_pipeline", "publish"): "Sending or publishing the result.",
         ("inspect_route_execute_verify_pipeline", "route"): "Choosing the best tool for the job.",
+        ("inspect_route_execute_verify_pipeline", "execute"): "Preparing to run the selected tool.",
     }
     for (pipeline_id, step_label), expected in step_cases.items():
         direct_message = build_step_started_message(pipeline_id, step_label)
@@ -65,6 +66,16 @@ def main() -> None:
         raise RuntimeError(f"Confusing internal workflow phrase is still visible: {confusing_phrase}")
     if any("pipeline" in message.lower() for message in all_messages):
         raise RuntimeError(f"Internal pipeline wording leaked into user messages: {all_messages!r}")
+
+    tool_call_message = build_event_message(
+        "tool_call_started",
+        {
+            "mcp_label": "Git Operations",
+            "tool_label": "Repository Status",
+        },
+    )
+    if tool_call_message != "Running Repository Status with Git Operations.":
+        raise RuntimeError(f"Tool call message did not include the selected tool name: {tool_call_message!r}")
 
     print("PASS: Execution event messages are human-readable.")
 

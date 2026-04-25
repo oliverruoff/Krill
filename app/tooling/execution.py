@@ -125,7 +125,7 @@ _PIPELINE_STEP_MESSAGES: dict[str, dict[str, str]] = {
     "inspect_route_execute_verify_pipeline": {
         "inspect": "Understanding the request.",
         "route": "Choosing the best tool for the job.",
-        "execute": "Running the selected tool.",
+        "execute": "Preparing to run the selected tool.",
         "verify": "Verifying the result.",
     },
 }
@@ -146,7 +146,7 @@ _GENERIC_STEP_MESSAGES: dict[str, str] = {
     "transform": "Preparing the result.",
     "publish": "Sending or publishing the result.",
     "route": "Choosing the best tool for the job.",
-    "execute": "Running the selected tool.",
+    "execute": "Preparing to run the selected tool.",
 }
 
 
@@ -315,7 +315,7 @@ def build_event_message(event_type: str, payload: dict[str, Any]) -> str:
     if event_type == "tool_call_started":
         why = str(payload.get("reason", "")).strip()
         suffix = f" {why}" if why else ""
-        return f"Using {mcp_label} ({tool_label}).{suffix}".strip()
+        return f"Running {tool_label} with {mcp_label}.{suffix}".strip()
     if event_type == "validation_passed":
         return str(payload.get("message", "Validated the result.")).strip() or "Validated the result."
     if event_type == "validation_failed":
