@@ -162,7 +162,8 @@ Brain Access MCP notes:
 - supports `read_braindump_table` for masked per-table inspection with pagination
 - supports `list_chats`, `read_chat`, and `search_chats` for stored chat access
 - supports `read_assistant_behavior` and `update_assistant_behavior` for the persisted assistant system prompt
-- `save_memory` accepts optional `memory_type` (`core` or `normal`); if omitted, it defaults to `normal` unless the content is high-confidence long-term identity/preference/constraint
+- Explicit remember requests are persisted directly through Brain Access into the same permanent core/normal memories shown in Memory Management
+- `save_memory` accepts optional `memory_type` (`core` or `normal`); when omitted, explicit user intent is parsed semantically across languages before automatic classification
 
 OpenCode MCP notes:
 

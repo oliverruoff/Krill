@@ -54,7 +54,8 @@ class BrainAccessMCP(MCPPlugin):
                 label="Save Memory",
                 description=(
                     "Stores a new memory for future conversations. Use this when the user asks to remember "
-                    "something (for example: remember, don't forget, memorize, keep this in mind), regardless of language."
+                    "something (for example: remember, don't forget, memorize, keep this in mind), regardless of language. "
+                    "If the user explicitly asks for a core or normal memory, pass that value as memory_type."
                 ),
                 input_schema={
                     "type": "object",
@@ -64,8 +65,9 @@ class BrainAccessMCP(MCPPlugin):
                             "type": "string",
                             "enum": ["core", "normal"],
                             "description": (
-                                "Optional memory type. If omitted, defaults to normal unless content is very "
-                                "clearly a stable long-term core memory."
+                                "Optional memory type. Set to core or normal whenever the user explicitly asks "
+                                "for that memory type in any language. If omitted, the tool semantically parses "
+                                "the request, then classifies the memory."
                             ),
                         },
                     },
@@ -183,8 +185,9 @@ class BrainAccessMCP(MCPPlugin):
         if tool_id == "save_memory":
             return (
                 "Memory-save intent is language-agnostic; trigger save_memory based on semantic intent, not specific keywords. "
-                "When saving memory: provide the memory text. The system will automatically classify it as core or normal. "
-                "You may specify memory_type if you are confident, but it is not required."
+                "When saving memory: provide the memory text. If the user semantically asks for core or normal memory "
+                "in any language, pass memory_type exactly as requested. If the user does not specify a type, omit "
+                "memory_type and the system will parse/classify it."
             )
         if tool_id == "update_assistant_behavior":
             return (
@@ -421,18 +424,28 @@ async def _save_memory(arguments: dict[str, object]) -> dict[str, object]:
     if not isinstance(raw_memory_text, str) or not raw_memory_text.strip():
         raise RuntimeError("Save Memory requires a non-empty 'memory_text'.")
 
-    memory_text = _clean_text(_strip_memory_intent_prefix(raw_memory_text))
+    explicit_type = _coerce_memory_type(arguments.get("memory_type"))
+    semantic_parse = await _parse_memory_save_request_via_llm(raw_memory_text)
+    semantic_text = _clean_text(semantic_parse.get("memory_text"))
+    semantic_type = _coerce_memory_type(semantic_parse.get("requested_memory_type"))
+    requested_type = explicit_type or semantic_type or _infer_requested_memory_type_from_text(raw_memory_text)
+    memory_text = semantic_text or _clean_text(_strip_memory_intent_prefix(raw_memory_text))
     if not memory_text:
         raise RuntimeError("Save Memory requires a non-empty 'memory_text'.")
 
-    explicit_type = _coerce_memory_type(arguments.get("memory_type"))
     inferred_type = "normal"
     inference_reason = "Defaulted to normal memory."
     confidence = "default"
-    if explicit_type:
-        target_type = explicit_type
+    if requested_type:
+        target_type = requested_type
+        inferred_type = target_type
         confidence = "explicit"
-        inference_reason = "Memory type provided explicitly by tool arguments."
+        if explicit_type:
+            inference_reason = "Memory type provided explicitly by tool arguments."
+        elif semantic_type:
+            inference_reason = _clean_text(semantic_parse.get("reason")) or "Memory type inferred semantically from explicit user request."
+        else:
+            inference_reason = "Memory type inferred from fallback explicit wording in memory_text."
     else:
         inferred_type, confidence, inference_reason = await _infer_memory_type_via_llm(memory_text)
         target_type = inferred_type
@@ -443,6 +456,7 @@ async def _save_memory(arguments: dict[str, object]) -> dict[str, object]:
     existing_type = existing_map.get(key)
     if existing_type:
         return {
+            "ok": True,
             "status": "duplicate_skipped",
             "memory_text": memory_text,
             "memory_type": existing_type,
@@ -467,6 +481,7 @@ async def _save_memory(arguments: dict[str, object]) -> dict[str, object]:
 
     persisted = await save_settings(settings)
     return {
+        "ok": True,
         "status": "saved",
         "memory_text": memory_text,
         "memory_type": target_type,
@@ -652,6 +667,96 @@ def _coerce_memory_type(value: object) -> str:
     return ""
 
 
+async def _parse_memory_save_request_via_llm(raw_text: str) -> dict[str, str]:
+    """Extract memory content and explicit requested type semantically.
+
+    This is intentionally language-agnostic and asks the active model to interpret
+    the user's request instead of expanding keyword lists for each language.
+    """
+    try:
+        settings = await load_settings()
+        provider_id = settings.active_provider_id.strip()
+        if not provider_id:
+            return {}
+        provider_config = settings.provider_configs.get(provider_id)
+        if provider_config is None or not provider_config.model.strip() or not provider_config.api_key.strip():
+            return {}
+        provider = get_provider(provider_id)
+        if provider is None:
+            return {}
+
+        prompt = (
+            "Analyze this memory-save tool input semantically in any language.\n"
+            "Extract the actual memory content that should be stored, removing command wording like requests to remember, "
+            "save, store, not forget, or instructions about whether the memory is core/normal.\n"
+            "If the user explicitly requested the memory type, set requested_memory_type to \"core\" or \"normal\". "
+            "Do not classify the content yourself for this field; only use an explicit user request. "
+            "If no type was explicitly requested, use an empty string.\n"
+            "Keep the memory content in the user's original meaning/language unless the input already uses a third-person form.\n"
+            "Return JSON only with this schema:\n"
+            '{"memory_text":"...", "requested_memory_type":"core|normal|", "confidence":"high|medium|low", "reason":"..."}\n\n'
+            f"Input:\n{raw_text}"
+        )
+        response_text, _ = await generate_with_retries(
+            provider=provider,
+            prompt=prompt,
+            system_prompt="You extract memory-save requests semantically across languages. Return valid JSON only.",
+            model=provider_config.model,
+            api_key=provider_config.api_key,
+            history=[],
+            max_attempts=2,
+        )
+        parsed = _parse_json_object(response_text)
+        memory_text = _clean_text(parsed.get("memory_text"))
+        requested_type = _coerce_memory_type(parsed.get("requested_memory_type"))
+        confidence = str(parsed.get("confidence", "")).strip().lower()
+        if confidence not in {"high", "medium", "low"}:
+            confidence = ""
+        reason = _clean_text(parsed.get("reason"))
+        result: dict[str, str] = {}
+        if memory_text:
+            result["memory_text"] = memory_text
+        if requested_type:
+            result["requested_memory_type"] = requested_type
+        if confidence:
+            result["confidence"] = confidence
+        if reason:
+            result["reason"] = reason
+        return result
+    except Exception:
+        LOGGER.debug("Semantic memory-save parsing failed, falling back to local parsing")
+        return {}
+
+
+def _infer_requested_memory_type_from_text(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+
+    lowered = _clean_text(value).lower()
+    core_patterns = (
+        "as core memory",
+        "as a core memory",
+        "as core",
+        "core memory",
+    )
+    normal_patterns = (
+        "as normal memory",
+        "as a normal memory",
+        "as normal",
+        "normal memory",
+    )
+    core_index = min((lowered.find(pattern) for pattern in core_patterns if pattern in lowered), default=-1)
+    normal_index = min((lowered.find(pattern) for pattern in normal_patterns if pattern in lowered), default=-1)
+
+    if core_index == -1 and normal_index == -1:
+        return ""
+    if core_index == -1:
+        return "normal"
+    if normal_index == -1:
+        return "core"
+    return "core" if core_index < normal_index else "normal"
+
+
 def _existing_memory_lookup(settings: Settings) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for item in getattr(settings, "core_memories", []):
@@ -781,17 +886,58 @@ def _strip_memory_intent_prefix(value: str) -> str:
 
     lowered = text.lower()
     separators = [":", "-", "\n"]
-    remember_markers = [
+    remember_markers = (
         "remember",
         "don't forget",
         "dont forget",
         "memorize",
         "keep this in mind",
-    ]
+    )
     if any(marker in lowered for marker in remember_markers):
         for separator in separators:
             if separator in text:
                 tail = text.split(separator, 1)[1].strip()
                 if tail:
                     return tail
+
+        prefix_patterns = (
+            "please remember",
+            "remember",
+            "please memorize",
+            "memorize",
+            "please don't forget",
+            "don't forget",
+            "please dont forget",
+            "dont forget",
+            "please keep this in mind",
+            "keep this in mind",
+        )
+        type_phrases = (
+            "this as a core memory",
+            "this as core memory",
+            "this as core",
+            "as a core memory",
+            "as core memory",
+            "as core",
+            "this as a normal memory",
+            "this as normal memory",
+            "this as normal",
+            "as a normal memory",
+            "as normal memory",
+            "as normal",
+            "this",
+            "that",
+            "it",
+        )
+        lowered_text = text.lower()
+        for prefix in prefix_patterns:
+            if not lowered_text.startswith(prefix):
+                continue
+            candidate = text[len(prefix):].strip()
+            for phrase in type_phrases:
+                if candidate.lower().startswith(phrase):
+                    candidate = candidate[len(phrase):].strip()
+                    break
+            if candidate:
+                return candidate
     return text

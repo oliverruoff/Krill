@@ -32,6 +32,11 @@ function normalizeToolUsage(toolUsage) {
     .filter((entry) => entry.mcp_id && entry.tool_id);
 }
 
+function didUseTool(toolUsage, mcpId, toolId) {
+  return Array.isArray(toolUsage)
+    && toolUsage.some((entry) => entry?.mcp_id === mcpId && entry?.tool_id === toolId);
+}
+
 function parseMcpCommand(message) {
   const normalized = typeof message === "string" ? message.trim() : "";
   if (!normalized.startsWith("/")) {
@@ -507,6 +512,15 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
   } catch (error) {
     setStatus(`Response complete, but chat history was not saved: ${error.message}`, true);
     return;
+  }
+
+  if (didUseTool(context.toolUsage, "brain_access", "save_memory")) {
+    try {
+      const { refreshMemoriesFromServer } = await import("./memory.js");
+      await refreshMemoriesFromServer();
+    } catch {
+      // Best-effort sync only; the memory was already saved by the tool.
+    }
   }
 
   try {
