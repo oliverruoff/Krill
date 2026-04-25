@@ -324,12 +324,13 @@ Telegram integration notes:
 
 **Behaviour:**
 
-- first Telegram sender is auto-bound as owner
+- first private Telegram sender is auto-bound as owner; group messages cannot bind ownership
 - owner can use private chats and any group chat (no approval needed)
 - in group chats, Krill responds only to explicit @mentions, `/commands`, or replies to the bot
 - non-owner messages in private DMs are silently ignored
 - non-owners in unapproved groups are silently ignored
 - non-owners in approved groups are limited to the guest MCP allowlist, and that allowlist only exposes MCPs explicitly enabled in Krill's MCP settings
+- non-owner group requests never receive script catalog context unless the `scripts` MCP is in the guest allowlist
 - Telegram chat sessions are ephemeral and isolated from Gateway chats
 - Telegram chat history is not written to `braindump.db`, except when `/debug` is used to snapshot the active Telegram chat into a hidden persisted debug chat
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway

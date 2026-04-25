@@ -207,19 +207,26 @@ class TelegramBridgeWorker:
         if not isinstance(sender_id, int) or not isinstance(chat_id, int):
             return
 
+        is_group = chat_type in {"group", "supergroup"}
         settings = await load_settings()
         if not _bridge_is_enabled(settings, _get_bot_token(settings)):
             return
 
         owner_user_id = settings.telegram_state.owner_user_id.strip()
         if not owner_user_id:
+            if is_group:
+                logger.warning(
+                    "telegram: ignoring group message from sender_id=%s while owner is unbound; "
+                    "bind the owner from a private chat first",
+                    sender_id,
+                )
+                return
             settings.telegram_state.owner_user_id = str(sender_id)
             settings.telegram_state.owner_chat_id = str(chat_id)
             await save_settings(settings)
             owner_user_id = str(sender_id)
 
         is_owner = str(sender_id) == owner_user_id
-        is_group = chat_type in {"group", "supergroup"}
 
         if not is_owner and not is_group:
             # Non-owner in private chat: always ignore
@@ -386,11 +393,13 @@ class TelegramBridgeWorker:
                 image_payload=image_payload,
                 source_chat_id=active_chat.id,
                 source_request_id=request_id,
+                sender_user_id=str(sender_id),
                 sender_role=sender_role,
                 allowed_mcp_ids=allowed_mcp_ids,
                 group_context=group_context,
                 bot_username=bot_username,
                 is_group=is_group,
+                chat_type=chat_type,
             )
         )
         self._active_runs[chat_id] = {
@@ -557,11 +566,13 @@ class TelegramBridgeWorker:
         image_payload: dict[str, object] | None,
         source_chat_id: str,
         source_request_id: str,
+        sender_user_id: str = "",
         sender_role: str = "owner",
         allowed_mcp_ids: list[str] | None = None,
         group_context: list[GroupBufferEntry] | None = None,
         bot_username: str = "",
         is_group: bool = False,
+        chat_type: str = "",
     ) -> None:
         try:
             response_text = await self._handle_user_message(
@@ -571,9 +582,11 @@ class TelegramBridgeWorker:
                 image=image_payload,
                 source_chat_id=source_chat_id,
                 source_request_id=source_request_id,
+                sender_user_id=sender_user_id,
                 sender_role=sender_role,
                 allowed_mcp_ids=allowed_mcp_ids,
                 group_context=group_context,
+                chat_type=chat_type,
                 on_execution_event=lambda event: self._update_progress_message(
                     token=token,
                     telegram_chat_id=telegram_chat_id,
@@ -868,9 +881,11 @@ class TelegramBridgeWorker:
         image: dict[str, object] | None = None,
         source_chat_id: str = "",
         source_request_id: str = "",
+        sender_user_id: str = "",
         sender_role: str = "owner",
         allowed_mcp_ids: list[str] | None = None,
         group_context: list[GroupBufferEntry] | None = None,
+        chat_type: str = "",
         on_execution_event: Callable[[ExecutionEvent], Awaitable[None]] | None = None,
     ) -> str:
         prompt = text.strip()
@@ -952,7 +967,10 @@ class TelegramBridgeWorker:
                 source_request_id=source_request_id,
                 on_execution_event=on_execution_event,
                 allowed_mcp_ids=allowed_mcp_ids,
+                source_user_id=sender_user_id,
                 source_user_role=sender_role,
+                source_room_id=str(telegram_chat_id) if chat_type in {"group", "supergroup"} else "",
+                source_room_mode=chat_type,
             )
             text_response = engine_result["text"]
             used_tokens = engine_result["used_tokens"]

@@ -16,12 +16,14 @@ async def main() -> None:
     from app.tooling.execution import rank_tools_for_intent  # pylint: disable=import-outside-toplevel
     from app.tooling.runtime_context import reset_runtime_context, set_runtime_context  # pylint: disable=import-outside-toplevel
     from app.tooling.orchestrator import (  # pylint: disable=import-outside-toplevel
+        _collect_script_catalog,
         _collect_enabled_tools,
         _parse_planner_response,
         _repair_tool_arguments,
         _should_keep_rewritten_arguments,
     )
-    from app.config import McpConfig, Settings  # pylint: disable=import-outside-toplevel
+    from app.config import McpConfig, ScriptDefinition, Settings  # pylint: disable=import-outside-toplevel
+    import app.tooling.orchestrator as orchestrator  # pylint: disable=import-outside-toplevel
 
     gmail_schema = {
         "type": "object",
@@ -147,6 +149,37 @@ async def main() -> None:
         )
     if "git_ops" not in assistant_mcp_ids:
         raise RuntimeError(f"Expected explicitly enabled git_ops MCP to remain available. Got: {sorted(assistant_mcp_ids)}")
+
+    async def fake_list_scripts() -> list[ScriptDefinition]:
+        return [
+            ScriptDefinition(
+                id="script-1",
+                title="Danger Script",
+                description="Does something sensitive",
+                instructions="Use only when scripts access is allowed.",
+                file_name="danger-script.py",
+            )
+        ]
+
+    original_list_scripts = orchestrator.list_scripts
+    orchestrator.list_scripts = fake_list_scripts
+    script_context = set_runtime_context(
+        source_channel="telegram",
+        source_chat_id="group-1",
+        source_user_role="assistant_usage",
+        allowed_mcp_ids=["brain_access"],
+    )
+    try:
+        scripts_settings = Settings(mcp_configs={"scripts": McpConfig(enabled=True, params={})})
+        blocked_scripts_catalog = await _collect_script_catalog(scripts_settings)
+    finally:
+        reset_runtime_context(script_context)
+        orchestrator.list_scripts = original_list_scripts
+    if blocked_scripts_catalog:
+        raise RuntimeError(
+            "Expected assistant_usage script catalog to be hidden when scripts MCP is not allowed. "
+            f"Got: {blocked_scripts_catalog}"
+        )
 
     plain_text = _parse_planner_response("Ja, heute kam genau eine MakerWorld-Mail rein.")
     plain_plan = plain_text["plan"]

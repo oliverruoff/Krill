@@ -1253,20 +1253,29 @@ def _stage_for_mcp_id(mcp_id: str) -> str:
     return "working"
 
 
+def _runtime_allows_mcp(mcp_id: str) -> bool:
+    runtime_context = get_runtime_context()
+    source_user_role = str(runtime_context.get("source_user_role", "")).strip().lower()
+    if source_user_role != "assistant_usage":
+        return True
+
+    allowed_mcp_ids = {
+        str(item).strip()
+        for item in runtime_context.get("allowed_mcp_ids", [])
+        if str(item).strip()
+    }
+    return str(mcp_id or "").strip() in allowed_mcp_ids
+
+
 def _collect_enabled_tools(settings: Settings) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     all_mcps = get_all_mcps()
     tool_counts_by_mcp: dict[str, int] = {}
     runtime_context = get_runtime_context()
     source_user_role = str(runtime_context.get("source_user_role", "")).strip().lower()
-    allowed_mcp_ids = {
-        str(item).strip()
-        for item in runtime_context.get("allowed_mcp_ids", [])
-        if str(item).strip()
-    }
 
     for mcp_id, plugin in all_mcps.items():
-        if source_user_role == "assistant_usage" and mcp_id not in allowed_mcp_ids:
+        if not _runtime_allows_mcp(mcp_id):
             continue
         raw_config = settings.mcp_configs.get(mcp_id)
         if source_user_role == "assistant_usage" and raw_config is None:
@@ -1435,6 +1444,9 @@ def _build_recursive_planner_prompt(
 
 
 async def _collect_script_catalog(settings: Settings) -> list[dict[str, str]]:
+    if not _runtime_allows_mcp("scripts"):
+        return []
+
     scripts_config = settings.mcp_configs.get("scripts")
     if scripts_config is None:
         scripts_enabled = False

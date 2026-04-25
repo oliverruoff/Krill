@@ -102,6 +102,24 @@ async def main() -> None:
         patch("app.integrations.telegram.worker.add_daily_usage"),
         patch("app.integrations.telegram.worker.ensure_runtime_context_seed"),
     ):
+        # Test 0: First contact from a group must not bind that sender as owner
+        settings = await load_settings()
+        settings.telegram_state.owner_user_id = ""
+        settings.telegram_state.owner_chat_id = ""
+        await save_settings(settings)
+        sent_messages.clear()
+        captured_calls.clear()
+        msg = make_message(NON_OWNER_USER_ID, GROUP_CHAT_ID, "supergroup", f"@{BOT_USERNAME} hello", BOT_USERNAME)
+        await worker._handle_message(token, msg, BOT_USERNAME, BOT_ID)
+        settings = await load_settings()
+        assert settings.telegram_state.owner_user_id == "", "Group sender should not be auto-bound as owner"
+        assert not sent_messages, "Unbound group contact should be ignored"
+        assert not captured_calls, "No LLM call should happen before owner private binding"
+        settings.telegram_state.owner_user_id = str(OWNER_USER_ID)
+        settings.telegram_state.owner_chat_id = str(OWNER_CHAT_ID)
+        await save_settings(settings)
+        print("PASS: Group message cannot auto-bind owner")
+
         # Test 1: Non-owner in private DM is ignored
         sent_messages.clear()
         captured_calls.clear()
