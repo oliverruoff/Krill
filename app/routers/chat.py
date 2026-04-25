@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 class ChatTurn(BaseModel):
     role: Literal["user", "assistant", "system"]
-    content: str = Field(min_length=1, max_length=5000)
+    content: str = Field(min_length=1, max_length=1000000)
 
 
 class ChatRequest(BaseModel):
@@ -59,7 +59,7 @@ class ChatRequest(BaseModel):
     model: str = ""
     api_key: str = ""
     bot_name: str = Field(default="", max_length=30)
-    system_prompt: str = Field(default="", max_length=1000)
+    system_prompt: str = Field(default="", max_length=5000)
     source_channel: str = "gateway"
     source_chat_id: str = ""
     source_request_id: str = ""
@@ -74,7 +74,7 @@ class ChatEnqueueRequest(BaseModel):
     model: str = ""
     api_key: str = ""
     bot_name: str = Field(default="", max_length=30)
-    system_prompt: str = Field(default="", max_length=1000)
+    system_prompt: str = Field(default="", max_length=5000)
     image: dict[str, str] | None = None
 
 
