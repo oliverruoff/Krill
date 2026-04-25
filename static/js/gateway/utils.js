@@ -6,6 +6,29 @@
 import { state, CHAT_TITLE_MAX_LENGTH, EDITABLE_CHAT_TITLE_MAX_LENGTH, CHAT_INPUT_MAX_HEIGHT_PX } from "./state.js";
 import { statusNode, chatInput } from "./dom.js";
 
+export function syncGatewayViewportHeight() {
+  const visualViewportHeight = Number(window.visualViewport?.height);
+  const fallbackHeight = Number(window.innerHeight);
+  const viewportHeight = Number.isFinite(visualViewportHeight) && visualViewportHeight > 0
+    ? visualViewportHeight
+    : fallbackHeight;
+
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) {
+    return;
+  }
+
+  document.documentElement.style.setProperty("--gateway-viewport-height", `${viewportHeight}px`);
+}
+
+export function scheduleGatewayViewportSync() {
+  syncGatewayViewportHeight();
+  window.requestAnimationFrame(() => {
+    syncGatewayViewportHeight();
+  });
+  window.setTimeout(syncGatewayViewportHeight, 120);
+  window.setTimeout(syncGatewayViewportHeight, 360);
+}
+
 export function setStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.className = isError ? "error" : "ok";

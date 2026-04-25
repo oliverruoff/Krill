@@ -12,7 +12,12 @@ import {
   gatewayBootDetailNode,
   gatewayBootRetryButton,
 } from "./dom.js";
-import { setStatus, syncChatInputHeight } from "./utils.js";
+import {
+  scheduleGatewayViewportSync,
+  setStatus,
+  syncChatInputHeight,
+  syncGatewayViewportHeight,
+} from "./utils.js";
 import { applyThemeMode } from "./theme.js";
 import { normalizeIncomingMemories } from "./memory.js";
 import {
@@ -60,6 +65,7 @@ function setBootLoading(loading, options = {}) {
   state.bootLoading = Boolean(loading);
   state.bootError = error;
   document.body.classList.toggle("gateway-boot-loading", state.bootLoading);
+  scheduleGatewayViewportSync();
 
   if (!(gatewayBootOverlay instanceof HTMLElement)) {
     return;
@@ -309,7 +315,14 @@ function initBoot() {
       state.shortTermMemorySyncTimerId = null;
     }
   });
+  window.addEventListener("resize", scheduleGatewayViewportSync);
+  window.addEventListener("orientationchange", scheduleGatewayViewportSync);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", scheduleGatewayViewportSync);
+    window.visualViewport.addEventListener("scroll", syncGatewayViewportHeight);
+  }
   window.addEventListener("load", () => {
+    scheduleGatewayViewportSync();
     setBootLoading(true, { detail: "Preparing chats, tools, and integrations..." });
     applyThemeMode(state.theme);
     initializeSpeechRecognition();

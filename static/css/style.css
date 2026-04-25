@@ -664,6 +664,7 @@ button:disabled {
   --gateway-max-width: 1500px;
   height: 100vh; /* fallback for browsers without dvh support */
   height: 100dvh;
+  height: var(--gateway-viewport-height, 100dvh);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 1rem;
@@ -673,6 +674,7 @@ button:disabled {
 
 .gateway-page {
   height: 100dvh;
+  height: var(--gateway-viewport-height, 100dvh);
   overflow: hidden;
 }
 
