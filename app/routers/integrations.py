@@ -63,18 +63,11 @@ class UpdateTelegramAccessRequest(BaseModel):
     guest_allowed_mcp_ids: list[str] = Field(default_factory=list)
 
 
-def _assistant_accessible_mcps(settings: object) -> list[dict[str, str]]:
-    available_mcps: list[dict[str, str]] = []
-    mcp_configs = getattr(settings, "mcp_configs", {})
-    if not isinstance(mcp_configs, dict):
-        return available_mcps
-
-    for mcp_id, plugin in sorted(get_all_mcps().items()):
-        config = mcp_configs.get(mcp_id)
-        if config is None or not bool(getattr(config, "enabled", False)):
-            continue
-        available_mcps.append({"id": mcp_id, "label": plugin.display_name})
-    return available_mcps
+def _all_mcp_options() -> list[dict[str, str]]:
+    return [
+        {"id": mcp_id, "label": plugin.display_name}
+        for mcp_id, plugin in sorted(get_all_mcps().items())
+    ]
 
 
 @router.get("/api/integrations")
@@ -249,7 +242,7 @@ async def resolve_matrix_room(payload: dict[str, str]) -> dict[str, str]:
 @router.get("/api/integrations/telegram/access", response_model=TelegramAccessResponse)
 async def get_telegram_access() -> TelegramAccessResponse:
     settings = await load_settings()
-    available_mcps = _assistant_accessible_mcps(settings)
+    available_mcps = _all_mcp_options()
     available_mcp_ids = {entry["id"] for entry in available_mcps}
     return TelegramAccessResponse(
         approved_group_ids=list(settings.telegram_state.approved_group_ids),
@@ -263,7 +256,7 @@ async def get_telegram_access() -> TelegramAccessResponse:
 @router.put("/api/integrations/telegram/access", response_model=TelegramAccessResponse)
 async def update_telegram_access(payload: UpdateTelegramAccessRequest) -> TelegramAccessResponse:
     settings = await load_settings()
-    available_mcp_ids = {entry["id"] for entry in _assistant_accessible_mcps(settings)}
+    available_mcp_ids = {entry["id"] for entry in _all_mcp_options()}
     settings.telegram_state.approved_group_ids = [
         gid.strip() for gid in payload.approved_group_ids if gid.strip()
     ]
