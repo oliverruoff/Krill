@@ -25,6 +25,8 @@ const MATRIX_ROLES = [
   { value: "admin_usage", label: "admin_usage" },
 ];
 
+let matrixAccessLoading = false;
+
 function createLabeledField(labelText, inputNode) {
   const wrapper = document.createElement("label");
   wrapper.className = "token-usage-field";
@@ -40,6 +42,13 @@ function renderUsers() {
     return;
   }
   matrixAccessUsersList.innerHTML = "";
+  if (matrixAccessLoading) {
+    const loading = document.createElement("p");
+    loading.className = "memory-modal-empty";
+    loading.textContent = "Loading Matrix users...";
+    matrixAccessUsersList.appendChild(loading);
+    return;
+  }
   if (!Array.isArray(state.matrixAccessUsers) || state.matrixAccessUsers.length === 0) {
     const empty = document.createElement("p");
     empty.className = "memory-modal-empty";
@@ -95,6 +104,13 @@ function renderRooms() {
     return;
   }
   matrixAccessRoomsList.innerHTML = "";
+  if (matrixAccessLoading) {
+    const loading = document.createElement("p");
+    loading.className = "memory-modal-empty";
+    loading.textContent = "Loading Matrix rooms...";
+    matrixAccessRoomsList.appendChild(loading);
+    return;
+  }
   if (!Array.isArray(state.matrixApprovedRooms) || state.matrixApprovedRooms.length === 0) {
     const empty = document.createElement("p");
     empty.className = "memory-modal-empty";
@@ -159,6 +175,13 @@ function renderAllowedMcps() {
     return;
   }
   matrixAccessAllowedMcps.innerHTML = "";
+  if (matrixAccessLoading) {
+    const loading = document.createElement("p");
+    loading.className = "memory-modal-empty";
+    loading.textContent = "Loading allowed tools...";
+    matrixAccessAllowedMcps.appendChild(loading);
+    return;
+  }
   const selected = new Set(Array.isArray(state.matrixAssistantAllowedMcpIds) ? state.matrixAssistantAllowedMcpIds : []);
   const mcps = Array.isArray(state.mcps) ? state.mcps : [];
   mcps.forEach((mcp) => {
@@ -191,16 +214,20 @@ function renderMatrixAccessModal() {
 }
 
 export async function loadMatrixAccess() {
-  const response = await fetch("/api/integrations/matrix/access", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(await buildHttpErrorDetail(response, "Failed to load Matrix access settings."));
+  try {
+    const response = await fetch("/api/integrations/matrix/access", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(await buildHttpErrorDetail(response, "Failed to load Matrix access settings."));
+    }
+    const payload = await response.json();
+    state.matrixAccessUsers = Array.isArray(payload?.users) ? payload.users : [];
+    state.matrixApprovedRooms = Array.isArray(payload?.approved_rooms) ? payload.approved_rooms : [];
+    state.matrixAssistantAllowedMcpIds = Array.isArray(payload?.assistant_allowed_mcp_ids) ? payload.assistant_allowed_mcp_ids : [];
+    state.matrixAccessBotUserId = typeof payload?.bot_user_id === "string" ? payload.bot_user_id : "";
+  } finally {
+    matrixAccessLoading = false;
+    renderMatrixAccessModal();
   }
-  const payload = await response.json();
-  state.matrixAccessUsers = Array.isArray(payload?.users) ? payload.users : [];
-  state.matrixApprovedRooms = Array.isArray(payload?.approved_rooms) ? payload.approved_rooms : [];
-  state.matrixAssistantAllowedMcpIds = Array.isArray(payload?.assistant_allowed_mcp_ids) ? payload.assistant_allowed_mcp_ids : [];
-  state.matrixAccessBotUserId = typeof payload?.bot_user_id === "string" ? payload.bot_user_id : "";
-  renderMatrixAccessModal();
 }
 
 export async function openMatrixAccessModal() {
@@ -209,6 +236,7 @@ export async function openMatrixAccessModal() {
   }
   matrixAccessModal.classList.remove("hidden");
   document.body.style.overflow = "hidden";
+  matrixAccessLoading = true;
   renderMatrixAccessModal();
   await loadMatrixAccess();
 }

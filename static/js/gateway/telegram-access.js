@@ -17,11 +17,20 @@ import {
 import { setStatus, buildHttpErrorDetail } from "./utils.js";
 import { showToast } from "./toast.js";
 
+let telegramAccessLoading = false;
+
 function renderGroups() {
   if (!(telegramAccessGroupsList instanceof HTMLElement)) {
     return;
   }
   telegramAccessGroupsList.innerHTML = "";
+  if (telegramAccessLoading) {
+    const loading = document.createElement("p");
+    loading.className = "memory-modal-empty";
+    loading.textContent = "Loading Telegram groups...";
+    telegramAccessGroupsList.appendChild(loading);
+    return;
+  }
   const groups = Array.isArray(state.telegramApprovedGroupIds) ? state.telegramApprovedGroupIds : [];
   if (groups.length === 0) {
     const empty = document.createElement("p");
@@ -55,6 +64,13 @@ function renderGuestAllowedMcps() {
     return;
   }
   telegramAccessAllowedMcps.innerHTML = "";
+  if (telegramAccessLoading) {
+    const loading = document.createElement("p");
+    loading.className = "memory-modal-empty";
+    loading.textContent = "Loading allowed tools...";
+    telegramAccessAllowedMcps.appendChild(loading);
+    return;
+  }
   const selected = new Set(Array.isArray(state.telegramGuestAllowedMcpIds) ? state.telegramGuestAllowedMcpIds : []);
   const mcps = Array.isArray(state.mcps) ? state.mcps : [];
   mcps.forEach((mcp) => {
@@ -82,17 +98,21 @@ function renderTelegramAccessModal() {
 }
 
 export async function loadTelegramAccess() {
-  const response = await fetch("/api/integrations/telegram/access", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(await buildHttpErrorDetail(response, "Failed to load Telegram access settings."));
+  try {
+    const response = await fetch("/api/integrations/telegram/access", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(await buildHttpErrorDetail(response, "Failed to load Telegram access settings."));
+    }
+    const payload = await response.json();
+    state.telegramApprovedGroupIds = Array.isArray(payload?.approved_group_ids) ? payload.approved_group_ids : [];
+    state.telegramGuestAllowedMcpIds = Array.isArray(payload?.guest_allowed_mcp_ids) ? payload.guest_allowed_mcp_ids : [];
+    if (Array.isArray(payload?.available_mcps) && payload.available_mcps.length > 0) {
+      state.mcps = payload.available_mcps;
+    }
+  } finally {
+    telegramAccessLoading = false;
+    renderTelegramAccessModal();
   }
-  const payload = await response.json();
-  state.telegramApprovedGroupIds = Array.isArray(payload?.approved_group_ids) ? payload.approved_group_ids : [];
-  state.telegramGuestAllowedMcpIds = Array.isArray(payload?.guest_allowed_mcp_ids) ? payload.guest_allowed_mcp_ids : [];
-  if (Array.isArray(payload?.available_mcps) && payload.available_mcps.length > 0) {
-    state.mcps = payload.available_mcps;
-  }
-  renderTelegramAccessModal();
 }
 
 export async function openTelegramAccessModal() {
@@ -101,6 +121,7 @@ export async function openTelegramAccessModal() {
   }
   telegramAccessModal.classList.remove("hidden");
   document.body.style.overflow = "hidden";
+  telegramAccessLoading = true;
   renderTelegramAccessModal();
   await loadTelegramAccess();
 }

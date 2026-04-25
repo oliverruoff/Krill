@@ -7,11 +7,86 @@ import { mcpList, integrationList } from "./dom.js";
 import { getFrontendMcpLabel, isConfigExpanded, parseMultiselectParam, parseBooleanConfigParam, getMcpConfig, getIntegrationConfig } from "./mcp-handlers.js";
 import { getGoogleOauthStatusLabel, getGoogleSetupGuideItems } from "./google-oauth.js";
 
+function cssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") {
+    return window.CSS.escape(value);
+  }
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function captureFocusedConfigField(container) {
+  const activeNode = document.activeElement;
+  if (
+    !(container instanceof HTMLElement)
+    || !(activeNode instanceof HTMLInputElement || activeNode instanceof HTMLSelectElement || activeNode instanceof HTMLTextAreaElement)
+    || !container.contains(activeNode)
+  ) {
+    return null;
+  }
+
+  const cardNode = activeNode.closest(".mcp-card[data-config-kind][data-config-id]");
+  if (!(cardNode instanceof HTMLElement)) {
+    return null;
+  }
+
+  const fieldsetNode = activeNode.closest(".mcp-multiselect[data-field-id]");
+  const selectorParts = [
+    `.mcp-card[data-config-kind="${cssEscape(cardNode.dataset.configKind || "")}"][data-config-id="${cssEscape(cardNode.dataset.configId || "")}"]`,
+  ];
+
+  if (activeNode.classList.contains("mcp-contact-filter") && fieldsetNode instanceof HTMLElement) {
+    selectorParts.push(`.mcp-multiselect[data-field-id="${cssEscape(fieldsetNode.dataset.fieldId || "")}"]`);
+    selectorParts.push(".mcp-contact-filter");
+  } else if (typeof activeNode.id === "string" && activeNode.id) {
+    selectorParts.push(`#${cssEscape(activeNode.id)}`);
+  } else {
+    return null;
+  }
+
+  return {
+    selector: selectorParts.join(" "),
+    value: activeNode.value,
+    checked: activeNode instanceof HTMLInputElement ? activeNode.checked : false,
+    selectionStart: typeof activeNode.selectionStart === "number" ? activeNode.selectionStart : null,
+    selectionEnd: typeof activeNode.selectionEnd === "number" ? activeNode.selectionEnd : null,
+    isCheckbox: activeNode instanceof HTMLInputElement && activeNode.type === "checkbox",
+  };
+}
+
+function restoreFocusedConfigField(container, snapshot) {
+  if (!(container instanceof HTMLElement) || !snapshot) {
+    return;
+  }
+
+  const restoredNode = container.querySelector(snapshot.selector);
+  if (!(restoredNode instanceof HTMLInputElement || restoredNode instanceof HTMLSelectElement || restoredNode instanceof HTMLTextAreaElement)) {
+    return;
+  }
+
+  if (snapshot.isCheckbox && restoredNode instanceof HTMLInputElement) {
+    restoredNode.checked = Boolean(snapshot.checked);
+    restoredNode.dispatchEvent(new Event("change", { bubbles: true }));
+  } else {
+    restoredNode.value = snapshot.value;
+    restoredNode.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  restoredNode.focus({ preventScroll: true });
+  if (
+    typeof snapshot.selectionStart === "number"
+    && typeof snapshot.selectionEnd === "number"
+    && typeof restoredNode.setSelectionRange === "function"
+  ) {
+    restoredNode.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+  }
+}
+
 function renderConfigPanel(container, items, getConfig, options) {
   if (!(container instanceof HTMLElement)) {
     return;
   }
 
+  const focusedFieldSnapshot = captureFocusedConfigField(container);
   container.innerHTML = "";
   if (!Array.isArray(items) || items.length === 0) {
     const emptyNode = document.createElement("p");
@@ -852,6 +927,7 @@ function renderConfigPanel(container, items, getConfig, options) {
 
     container.appendChild(card);
   });
+  restoreFocusedConfigField(container, focusedFieldSnapshot);
 }
 
 export function renderMcpPanel() {

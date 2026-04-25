@@ -296,12 +296,22 @@ export const SCRIPT_TEMPLATE = [
   "",
 ].join("\n");
 
+let scriptEditorLoadVersion = 0;
+
+function setScriptEditorTextareaLoading(loading) {
+  if (scriptEditorTextarea instanceof HTMLTextAreaElement) {
+    scriptEditorTextarea.disabled = Boolean(loading);
+  }
+}
+
 export function openNewScriptEditor() {
   if (!(scriptEditorModal instanceof HTMLElement) || !(scriptEditorTextarea instanceof HTMLTextAreaElement)) {
     return;
   }
+  scriptEditorLoadVersion += 1;
   state.scriptEditorTitle = "";
   state.scriptEditorMode = "create";
+  setScriptEditorTextareaLoading(false);
   if (scriptEditorTitleNode instanceof HTMLElement) {
     scriptEditorTitleNode.textContent = "New Script";
   }
@@ -325,6 +335,8 @@ export async function openScriptEditor(title) {
   if (!(scriptEditorModal instanceof HTMLElement) || !(scriptEditorTextarea instanceof HTMLTextAreaElement)) {
     return;
   }
+  const loadVersion = scriptEditorLoadVersion + 1;
+  scriptEditorLoadVersion = loadVersion;
   state.scriptEditorTitle = title;
   state.scriptEditorMode = "edit";
   if (scriptEditorTitleNode instanceof HTMLElement) {
@@ -334,6 +346,7 @@ export async function openScriptEditor(title) {
     scriptEditorMetaNode.textContent = "Loading...";
   }
   scriptEditorTextarea.value = "";
+  setScriptEditorTextareaLoading(true);
   syncScriptEditorHighlight();
   applyScriptEditorMode();
 
@@ -341,19 +354,31 @@ export async function openScriptEditor(title) {
   document.body.style.overflow = "hidden";
 
   try {
+    const initialValue = scriptEditorTextarea.value;
     const response = await fetch("/api/mcps/scripts/" + encodeURIComponent(title), { cache: "no-store" });
     if (!response.ok) {
       throw new Error(await buildHttpErrorDetail(response, "Failed to load script."));
     }
     const data = await response.json();
-    scriptEditorTextarea.value = typeof data.source === "string" ? data.source : "";
-    syncScriptEditorHighlight();
+    if (
+      scriptEditorLoadVersion === loadVersion
+      && state.scriptEditorMode === "edit"
+      && state.scriptEditorTitle === title
+      && scriptEditorTextarea.value === initialValue
+    ) {
+      scriptEditorTextarea.value = typeof data.source === "string" ? data.source : "";
+      syncScriptEditorHighlight();
+    }
     if (scriptEditorMetaNode instanceof HTMLElement) {
       scriptEditorMetaNode.textContent = "Edit the full script source including metadata headers.";
     }
   } catch (error) {
-    if (scriptEditorMetaNode instanceof HTMLElement) {
+    if (scriptEditorLoadVersion === loadVersion && scriptEditorMetaNode instanceof HTMLElement) {
       scriptEditorMetaNode.textContent = "Error: " + error.message;
+    }
+  } finally {
+    if (scriptEditorLoadVersion === loadVersion && state.scriptEditorMode === "edit" && state.scriptEditorTitle === title) {
+      setScriptEditorTextareaLoading(false);
     }
   }
 
@@ -368,6 +393,8 @@ export function closeScriptEditor() {
   }
   scriptEditorModal.classList.add("hidden");
   document.body.style.overflow = "";
+  scriptEditorLoadVersion += 1;
+  setScriptEditorTextareaLoading(false);
   state.scriptEditorTitle = "";
   state.scriptEditorMode = "";
 }
