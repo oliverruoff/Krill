@@ -8,6 +8,7 @@ from typing import Any
 from app.config import (
     MemoryEntry,
     Settings,
+    append_memory_entry,
     load_settings,
     read_braindump_table,
     save_settings,
@@ -450,16 +451,16 @@ async def _save_memory(arguments: dict[str, object]) -> dict[str, object]:
         inferred_type, confidence, inference_reason = await _infer_memory_type_via_llm(memory_text)
         target_type = inferred_type
 
-    settings = await load_settings()
-    existing_map = _existing_memory_lookup(settings)
-    key = memory_text.lower()
-    existing_type = existing_map.get(key)
-    if existing_type:
+    entry = MemoryEntry(content=memory_text, created_at=datetime.now(timezone.utc).isoformat())
+    persist_result = await append_memory_entry(target_type, entry)
+    memory_counts = persist_result["memory_counts"]
+    persisted_type = persist_result["memory_type"]
+    if persist_result["status"] == "duplicate_skipped":
         return {
             "ok": True,
             "status": "duplicate_skipped",
             "memory_text": memory_text,
-            "memory_type": existing_type,
+            "memory_type": persisted_type,
             "reason": "Memory already exists.",
             "decision": {
                 "inferred_type": inferred_type,
@@ -467,33 +468,26 @@ async def _save_memory(arguments: dict[str, object]) -> dict[str, object]:
                 "inference_reason": inference_reason,
             },
             "memory_counts": {
-                "core": len(settings.core_memories),
-                "normal": len(settings.normal_memories),
-                "total": len(settings.core_memories) + len(settings.normal_memories),
+                "core": memory_counts["core"],
+                "normal": memory_counts["normal"],
+                "total": memory_counts["core"] + memory_counts["normal"],
             },
         }
 
-    entry = MemoryEntry(content=memory_text, created_at=datetime.now(timezone.utc).isoformat())
-    if target_type == "core":
-        settings.core_memories.append(entry)
-    else:
-        settings.normal_memories.append(entry)
-
-    persisted = await save_settings(settings)
     return {
         "ok": True,
         "status": "saved",
         "memory_text": memory_text,
-        "memory_type": target_type,
+        "memory_type": persisted_type,
         "decision": {
             "inferred_type": inferred_type,
             "confidence": confidence,
             "inference_reason": inference_reason,
         },
         "memory_counts": {
-            "core": len(persisted.core_memories),
-            "normal": len(persisted.normal_memories),
-            "total": len(persisted.core_memories) + len(persisted.normal_memories),
+            "core": memory_counts["core"],
+            "normal": memory_counts["normal"],
+            "total": memory_counts["core"] + memory_counts["normal"],
         },
     }
 
@@ -755,19 +749,6 @@ def _infer_requested_memory_type_from_text(value: object) -> str:
     if normal_index == -1:
         return "core"
     return "core" if core_index < normal_index else "normal"
-
-
-def _existing_memory_lookup(settings: Settings) -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    for item in getattr(settings, "core_memories", []):
-        content = _clean_text(getattr(item, "content", ""))
-        if content:
-            mapping[content.lower()] = "core"
-    for item in getattr(settings, "normal_memories", []):
-        content = _clean_text(getattr(item, "content", ""))
-        if content and content.lower() not in mapping:
-            mapping[content.lower()] = "normal"
-    return mapping
 
 
 async def _infer_memory_type_via_llm(text: str) -> tuple[str, str, str]:

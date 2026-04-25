@@ -23,6 +23,7 @@ async def main() -> None:
         _should_keep_rewritten_arguments,
     )
     from app.config import McpConfig, ScriptDefinition, Settings  # pylint: disable=import-outside-toplevel
+    from app.runtime_prompt import compose_runtime_system_prompt  # pylint: disable=import-outside-toplevel
     import app.tooling.orchestrator as orchestrator  # pylint: disable=import-outside-toplevel
 
     gmail_schema = {
@@ -149,6 +150,31 @@ async def main() -> None:
         )
     if "git_ops" not in assistant_mcp_ids:
         raise RuntimeError(f"Expected explicitly enabled git_ops MCP to remain available. Got: {sorted(assistant_mcp_ids)}")
+
+    assistant_prompt = compose_runtime_system_prompt(
+        settings=Settings(
+            mcp_configs={
+                "brain_access": McpConfig(enabled=True, params={}),
+                "git_ops": McpConfig(enabled=True, params={}),
+            },
+        ),
+        source_channel="telegram",
+        source_user_role="assistant_usage",
+        allowed_mcp_ids=["brain_access"],
+    )
+    if "`brain_access`" not in assistant_prompt:
+        raise RuntimeError("Expected runtime prompt to include explicitly allowed assistant_usage MCP.")
+    if "`git_ops`" in assistant_prompt:
+        raise RuntimeError("Expected runtime prompt to hide MCPs not allowed for assistant_usage.")
+
+    no_tools_prompt = compose_runtime_system_prompt(
+        settings=Settings(mcp_configs={"brain_access": McpConfig(enabled=True, params={})}),
+        source_channel="telegram",
+        source_user_role="assistant_usage",
+        allowed_mcp_ids=[],
+    )
+    if "Enabled tools and capabilities are available" in no_tools_prompt:
+        raise RuntimeError("Expected runtime prompt to omit tool capability summary when assistant_usage allowlist is empty.")
 
     async def fake_list_scripts() -> list[ScriptDefinition]:
         return [

@@ -10,7 +10,7 @@ import uuid
 from calendar import monthrange
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field
@@ -46,6 +46,13 @@ class ProviderConfig(BaseModel):
 class MemoryEntry(BaseModel):
     content: str = Field(default="", max_length=1000000)
     created_at: str = ""
+
+
+class MemoryAppendResult(TypedDict):
+    status: Literal["saved", "duplicate_skipped"]
+    memory_type: Literal["core", "normal"]
+    existing_type: Literal["core", "normal", ""]
+    memory_counts: dict[str, int]
 
 
 class ChatMessage(BaseModel):
@@ -844,6 +851,28 @@ async def save_settings(settings: Settings) -> Settings:
         return normalized
 
 
+async def append_memory_entry(
+    memory_type: Literal["core", "normal"],
+    entry: MemoryEntry,
+) -> MemoryAppendResult:
+    await ensure_settings_file()
+    target_type: Literal["core", "normal"] = "core" if memory_type == "core" else "normal"
+    normalized_content = _normalize_memory_text(entry.content)
+    if not normalized_content:
+        raise ValueError("Memory content cannot be empty.")
+    normalized_entry = entry.model_copy(
+        update={
+            "content": normalized_content,
+            "created_at": entry.created_at or _utc_now_iso(),
+        }
+    )
+    async with _DB_LOCK:
+        result = await asyncio.to_thread(_append_memory_entry_sync, target_type, normalized_entry)
+        if result["status"] == "saved":
+            await asyncio.to_thread(_check_backup)
+        return result
+
+
 async def get_timed_job_auth_alert_provider_ids() -> list[str]:
     await ensure_settings_file()
     async with _DB_LOCK:
@@ -1030,6 +1059,48 @@ def _save_settings_sync(settings: Settings) -> None:
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def _append_memory_entry_sync(
+    memory_type: Literal["core", "normal"],
+    entry: MemoryEntry,
+) -> MemoryAppendResult:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        rows = conn.execute("SELECT memory_type, content FROM memories").fetchall()
+        memory_counts = {"core": 0, "normal": 0}
+        target_key = _normalize_memory_text(entry.content).lower()
+        existing_type: Literal["core", "normal", ""] = ""
+
+        for row in rows:
+            row_type: Literal["core", "normal"] = "core" if str(row["memory_type"]) == "core" else "normal"
+            memory_counts[row_type] += 1
+            row_key = _normalize_memory_text(str(row["content"])).lower()
+            if row_key == target_key and not existing_type:
+                existing_type = row_type
+
+        if existing_type:
+            return {
+                "status": "duplicate_skipped",
+                "memory_type": existing_type,
+                "existing_type": existing_type,
+                "memory_counts": memory_counts,
+            }
+
+        conn.execute(
+            "INSERT INTO memories (memory_type, content, created_at) VALUES (?, ?, ?)",
+            (memory_type, entry.content, entry.created_at),
+        )
+        conn.commit()
+        memory_counts[memory_type] += 1
+        return {
+            "status": "saved",
+            "memory_type": memory_type,
+            "existing_type": "",
+            "memory_counts": memory_counts,
+        }
     finally:
         conn.close()
 

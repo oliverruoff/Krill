@@ -20,7 +20,15 @@ async def main() -> None:
     os.environ["KRILL_BRAINDUMP_PATH"] = str(db_path)
 
     try:
-        from app.config import ProviderConfig, ensure_settings_file, load_settings, save_settings  # pylint: disable=import-outside-toplevel
+        from app.config import (  # pylint: disable=import-outside-toplevel
+            ChatMessage,
+            ChatSession,
+            ProviderConfig,
+            ensure_settings_file,
+            load_settings,
+            save_chat_state,
+            save_settings,
+        )
         import app.mcps.brain_access as brain_access_module  # pylint: disable=import-outside-toplevel
         from app.mcps.brain_access import BrainAccessMCP  # pylint: disable=import-outside-toplevel
 
@@ -96,6 +104,34 @@ async def main() -> None:
         if semantic_result.get("memory_text") != "Der Nutzer mag semantische Speichererkennung.":
             raise RuntimeError(f"Semantic memory text extraction failed: {semantic_result!r}")
 
+        stale_settings = await load_settings()
+        stale_settings.chats = [
+            ChatSession(
+                id="stale-chat",
+                title="Stale chat snapshot",
+                messages=[
+                    ChatMessage(
+                        role="user",
+                        content="This stale snapshot was loaded before a later explicit memory save.",
+                    )
+                ],
+            )
+        ]
+        stale_settings.active_chat_id = "stale-chat"
+
+        durable_result = await plugin.call_tool(
+            "save_memory",
+            {
+                "memory_text": "The user expects explicit memory saves to survive later chat persistence.",
+                "memory_type": "normal",
+            },
+            {},
+        )
+        if durable_result.get("ok") is not True or durable_result.get("memory_type") != "normal":
+            raise RuntimeError(f"Durable memory save returned unexpected result: {durable_result!r}")
+
+        await save_chat_state(stale_settings.chats, stale_settings.active_chat_id, stale_settings.daily_token_usage)
+
         duplicate_result = await plugin.call_tool(
             "save_memory",
             {
@@ -117,8 +153,10 @@ async def main() -> None:
             raise RuntimeError(f"Explicitly phrased core memory was not persisted: {core_memories!r}")
         if "Der Nutzer mag semantische Speichererkennung." not in core_memories:
             raise RuntimeError(f"Semantic core memory was not persisted: {core_memories!r}")
-        if normal_memories != ["The user is currently testing deterministic memory saves."]:
+        if "The user is currently testing deterministic memory saves." not in normal_memories:
             raise RuntimeError(f"Explicit normal memory was not persisted correctly: {normal_memories!r}")
+        if "The user expects explicit memory saves to survive later chat persistence." not in normal_memories:
+            raise RuntimeError(f"Brain Access memory was lost after stale chat persistence: {normal_memories!r}")
 
         print("Brain Access explicit memory save tests passed.")
     finally:

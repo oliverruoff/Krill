@@ -13,6 +13,8 @@ def compose_runtime_system_prompt(
     settings: Settings,
     memory_block: str = "",
     source_channel: str = "",
+    source_user_role: str = "",
+    allowed_mcp_ids: list[str] | None = None,
 ) -> str:
     current_local_time = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
     invisible_context = (
@@ -29,7 +31,11 @@ def compose_runtime_system_prompt(
             "explicitly ask you to manage other timed jobs."
         )
 
-    capability_summary = _build_enabled_capability_summary(settings)
+    capability_summary = _build_enabled_capability_summary(
+        settings,
+        source_user_role=source_user_role,
+        allowed_mcp_ids=allowed_mcp_ids,
+    )
     if capability_summary:
         invisible_context = (
             f"{invisible_context}\n\n"
@@ -44,13 +50,30 @@ def compose_runtime_system_prompt(
     return invisible_context
 
 
-def _build_enabled_capability_summary(settings: Settings) -> str:
+def _build_enabled_capability_summary(
+    settings: Settings,
+    *,
+    source_user_role: str = "",
+    allowed_mcp_ids: list[str] | None = None,
+) -> str:
     from app.mcps.registry import get_all_mcps
 
     entries: list[str] = []
+    role = str(source_user_role or "").strip().lower()
+    allowed_ids = {
+        str(item).strip()
+        for item in (allowed_mcp_ids or [])
+        if str(item).strip()
+    }
 
     for mcp_id, plugin in get_all_mcps().items():
+        if role == "assistant_usage" and mcp_id not in allowed_ids:
+            continue
+
         raw_config = settings.mcp_configs.get(mcp_id)
+        if role == "assistant_usage" and raw_config is None:
+            continue
+
         if raw_config is None:
             config = McpConfig(enabled=bool(getattr(plugin, "default_enabled", False)), params={})
         else:

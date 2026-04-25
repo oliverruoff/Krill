@@ -37,6 +37,25 @@ function didUseTool(toolUsage, mcpId, toolId) {
     && toolUsage.some((entry) => entry?.mcp_id === mcpId && entry?.tool_id === toolId);
 }
 
+function isBrainAccessSaveMemoryEvent(entry) {
+  return entry
+    && typeof entry === "object"
+    && entry.mcp_id === "brain_access"
+    && entry.tool_id === "save_memory";
+}
+
+function traceIndicatesSaveMemory(traceMessages) {
+  if (!Array.isArray(traceMessages)) {
+    return false;
+  }
+
+  return traceMessages.some((entry) => {
+    const content = typeof entry?.content === "string" ? entry.content.toLowerCase() : "";
+    return content.includes("save memory")
+      && (content.includes("brain access") || content.includes("brain_access"));
+  });
+}
+
 function parseMcpCommand(message) {
   const normalized = typeof message === "string" ? message.trim() : "";
   if (!normalized.startsWith("/")) {
@@ -315,6 +334,9 @@ function processSseBlock(block, context) {
     }
 
     context.toolUsage = normalizeToolUsage(payload.used_mcp_tools);
+    if (Array.isArray(payload.execution_events) && payload.execution_events.some(isBrainAccessSaveMemoryEvent)) {
+      context.memorySaveObserved = true;
+    }
     const metaTrace = Array.isArray(payload.system_trace_messages)
       ? payload.system_trace_messages
           .filter((entry) => entry && typeof entry === "object")
@@ -366,6 +388,10 @@ function processSseBlock(block, context) {
       ? payload.content
       : (typeof payload.message === "string" ? payload.message : "");
     const rawSystemType = typeof payload.system_type === "string" ? payload.system_type : "execution_progress";
+
+    if (isBrainAccessSaveMemoryEvent(payload)) {
+      context.memorySaveObserved = true;
+    }
 
     if (rawContent) {
       // Record in trace (for finalization / system_trace_messages at end).
@@ -514,7 +540,11 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
     return;
   }
 
-  if (didUseTool(context.toolUsage, "brain_access", "save_memory")) {
+  if (
+    didUseTool(context.toolUsage, "brain_access", "save_memory")
+    || context.memorySaveObserved
+    || traceIndicatesSaveMemory(context.systemTrace)
+  ) {
     try {
       const { refreshMemoriesFromServer } = await import("./memory.js");
       await refreshMemoriesFromServer();
@@ -605,6 +635,7 @@ async function executeQueuedJob(chat, job, runtime) {
     usedTokens: 0,
     toolUsage: [],
     systemTrace: [],
+    memorySaveObserved: false,
   };
   if (state.activeChatId === chat.id) {
     _renderActiveChat();

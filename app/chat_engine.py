@@ -82,6 +82,8 @@ async def generate_chat_response(
         settings=settings,
         memory_block=memory_block,
         source_channel=source_channel,
+        source_user_role=source_user_role,
+        allowed_mcp_ids=allowed_mcp_ids,
     )
     token_limit = get_provider_model_limit(active_provider_id, model_id)
 
