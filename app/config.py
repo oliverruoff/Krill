@@ -171,7 +171,7 @@ class ScriptDefinition(BaseModel):
 
 class Settings(BaseModel):
     bot_name: str = Field(default="MyBot", max_length=15)
-    system_prompt: str = Field(default="Talk english. Be playful, friendly and use emojis! :).", max_length=400)
+    system_prompt: str = Field(default="Talk english. Be playful, friendly and use emojis! :).", max_length=4000)
     user_full_name: str = Field(default="", max_length=120)
     user_call_name: str = Field(default="", max_length=60)
     setup_completed: bool = False
