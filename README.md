@@ -130,6 +130,7 @@ Orchestration notes:
 
 - the orchestrator now classifies tasks into generic execution patterns before acting
 - tool routing prefers stronger/native integrations first and keeps lower-confidence routes as fallback options
+- weak-model tool planning is hardened against provider-native tool markup leaking into user-visible replies; recoverable wrappers are converted back into real MCP calls
 - important tool results pass lightweight validation gates before the workflow advances
 - Gateway SSE and Telegram share the same execution event model for progress visibility and cancellation-aware execution
 - Matrix integration adds three access roles: `admin_usage`, `assistant_usage`, and `no_assistant_usage`

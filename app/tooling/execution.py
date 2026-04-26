@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, Literal, TypedDict
 
 
@@ -78,6 +79,7 @@ _EXECUTIONS_BY_CONVERSATION: dict[str, set[str]] = {}
 
 _CATEGORY_TOOL_PREFERENCES: dict[str, list[str]] = {
     "repo_modification": ["opencode", "git_ops", "shell_access", "browser_control"],
+    "web_research": ["brave_search", "browser_control", "google_services"],
     "external_file_retrieval": ["google_services", "shell_access", "browser_control", "brave_search"],
     "browser_interaction": ["browser_control", "google_services", "brave_search"],
     "structured_data_fetch": ["google_services", "home_assistant", "brave_search", "browser_control"],
@@ -225,35 +227,60 @@ async def cancel_registered_executions(
 
 def classify_task_intent(prompt: str, enabled_tools: list[dict[str, Any]]) -> TaskIntent:
     lowered = str(prompt or "").strip().lower()
+    tokens = set(re.findall(r"[a-z0-9_]+", lowered))
     categories: list[str] = []
     artifact_type = "text"
     source_type = "direct_text"
 
-    if any(token in lowered for token in ("commit", "branch", "repo", "repository", "pr", "pull request", "diff", "codebase")):
-        categories.append("repo_modification")
+    def add_category(category: str) -> None:
+        if category not in categories:
+            categories.append(category)
+
+    def has_phrase(*phrases: str) -> bool:
+        return any(phrase in lowered for phrase in phrases)
+
+    def has_token(*candidate_tokens: str) -> bool:
+        return any(candidate in tokens for candidate in candidate_tokens)
+
+    if has_token("commit", "branch", "repo", "repository", "pr", "diff", "codebase") or has_phrase("pull request"):
+        add_category("repo_modification")
         artifact_type = "code_file"
         source_type = "repo_file"
-    if any(token in lowered for token in ("download", "fetch file", "replace file", "drive", "attachment", "image", "pdf", "csv", "json", "yaml")):
-        categories.append("external_file_retrieval")
-        artifact_type = "binary_file" if any(token in lowered for token in ("image", "pdf", "zip", "binary")) else artifact_type
+    if has_phrase("web research", "web recherche", "web recherch", "recherchiere", "recherchier", "recherche") or has_token(
+        "hotel",
+        "hotels",
+        "review",
+        "reviews",
+        "bewertung",
+        "bewertungen",
+        "recommendation",
+        "recommendations",
+        "empfehlung",
+        "empfehlungen",
+    ):
+        add_category("web_research")
+        source_type = "web_search"
+    if has_phrase("download", "fetch file", "replace file") or has_token("drive", "attachment", "image", "pdf", "csv", "json", "yaml"):
+        add_category("external_file_retrieval")
+        artifact_type = "binary_file" if has_token("image", "pdf", "zip", "binary") else artifact_type
         if "http://" in lowered or "https://" in lowered:
             source_type = "direct_url"
-        elif any(token in lowered for token in ("drive", "gmail", "calendar")):
+        elif has_token("drive", "gmail", "calendar"):
             source_type = "api_backed_remote"
-    if any(token in lowered for token in ("browser", "click", "page", "website", "log in", "login", "form", "open the page")):
-        categories.append("browser_interaction")
+    if has_phrase("log in", "open the page") or has_token("browser", "click", "page", "website", "login", "form"):
+        add_category("browser_interaction")
         source_type = "html_page"
-    if any(token in lowered for token in ("calendar", "gmail", "email", "drive", "sheet", "spreadsheet", "entity", "state", "weather")):
-        categories.append("structured_data_fetch")
-    if any(token in lowered for token in ("home assistant", "light", "switch", "thermostat", "automation", "turn on", "turn off")):
-        categories.append("home_automation_change")
-    if any(token in lowered for token in ("email", "send message", "whatsapp", "calendar invite", "reply to", "draft")):
-        categories.append("communication_task")
-    if any(token in lowered for token in ("remember", "memorize", "don't forget", "do not forget")):
-        categories.append("memory_task")
+    if has_token("calendar", "gmail", "email", "drive", "sheet", "spreadsheet", "entity", "state", "weather"):
+        add_category("structured_data_fetch")
+    if has_phrase("home assistant", "turn on", "turn off") or has_token("light", "switch", "thermostat", "automation"):
+        add_category("home_automation_change")
+    if has_phrase("send message", "calendar invite", "reply to") or has_token("email", "whatsapp", "draft"):
+        add_category("communication_task")
+    if has_phrase("don't forget", "do not forget") or has_token("remember", "memorize"):
+        add_category("memory_task")
 
     if not categories:
-        categories.append("structured_data_fetch")
+        add_category("structured_data_fetch")
 
     preferred: list[str] = []
     fallback: list[str] = []

@@ -13,13 +13,15 @@ async def main() -> None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-    from app.tooling.execution import rank_tools_for_intent  # pylint: disable=import-outside-toplevel
+    from app.tooling.execution import classify_task_intent, rank_tools_for_intent  # pylint: disable=import-outside-toplevel
     from app.tooling.runtime_context import reset_runtime_context, set_runtime_context  # pylint: disable=import-outside-toplevel
     from app.tooling.orchestrator import (  # pylint: disable=import-outside-toplevel
         _collect_script_catalog,
         _collect_enabled_tools,
+        _invalid_planner_reason,
         _parse_planner_response,
         _repair_tool_arguments,
+        _resolve_tool_alias,
         _should_keep_rewritten_arguments,
     )
     from app.config import McpConfig, ScriptDefinition, Settings  # pylint: disable=import-outside-toplevel
@@ -110,6 +112,40 @@ async def main() -> None:
     xml_arguments = xml_plan.get("arguments")
     if not isinstance(xml_arguments, dict) or xml_arguments.get("search") != "EG Flur Licht":
         raise RuntimeError(f"Expected XML tool arguments to be recovered. Got: {xml_plan}")
+
+    minimax_xml_tool_call = _parse_planner_response(
+        '<minimax:tool_call><invoke name="brave_search">'
+        '<parameter name="query">Sofitel Beijing Central hotel reviews pros cons gym 2024 2025</parameter>'
+        '<parameter name="count">10</parameter>'
+        '</invoke></minimax:tool_call>'
+    )
+    minimax_xml_plan = minimax_xml_tool_call["plan"]
+    if minimax_xml_plan.get("action") != "call_tool" or minimax_xml_plan.get("tool_id") != "brave_search":
+        raise RuntimeError(f"Expected MiniMax XML tool call recovery. Got: {minimax_xml_plan}")
+    minimax_xml_arguments = minimax_xml_plan.get("arguments")
+    if not isinstance(minimax_xml_arguments, dict) or minimax_xml_arguments.get("count") != 10:
+        raise RuntimeError(f"Expected MiniMax XML parameter arguments to be recovered. Got: {minimax_xml_plan}")
+
+    brave_alias = _resolve_tool_alias(
+        [{"mcp_id": "brave_search", "tool_id": "web_search", "tool_label": "Web Search"}],
+        str(minimax_xml_plan.get("mcp_id", "")),
+        str(minimax_xml_plan.get("tool_id", "")),
+    )
+    if brave_alias != ("brave_search", "web_search"):
+        raise RuntimeError(f"Expected brave_search wrapper alias to resolve to web_search. Got: {brave_alias}")
+
+    leaked_markup_response = _parse_planner_response("<invoke>brave_search</invoke>")
+    leaked_markup_plan = leaked_markup_response["plan"]
+    if leaked_markup_response["recovery_mode"] != "unrecovered_tool_markup":
+        raise RuntimeError(f"Expected unrecovered tool markup to be rejected. Got: {leaked_markup_response}")
+    if not _invalid_planner_reason(leaked_markup_plan):
+        raise RuntimeError(f"Expected unrecovered tool markup plan to be invalid. Got: {leaked_markup_plan}")
+    explicit_markup_answer = {
+        "action": "respond",
+        "final_answer": '<minimax:tool_call><invoke name="brave_search"></invoke></minimax:tool_call>',
+    }
+    if not _invalid_planner_reason(explicit_markup_answer):
+        raise RuntimeError("Expected raw tool markup in final_answer to be invalid.")
 
     home_assistant_schema = {
         "type": "object",
@@ -227,6 +263,24 @@ async def main() -> None:
     ranked_mcp_ids = [str(entry.get("mcp_id", "")) for entry in ranked]
     if ranked_mcp_ids.index("shell_access") < ranked_mcp_ids.index("brave_search"):
         raise RuntimeError(f"Expected shell_access to be demoted for normal fetch tasks. Got: {ranked_mcp_ids}")
+
+    hotel_research_intent = classify_task_intent(
+        "Recherchiere gründlich pro Hotel und gib uns eine Rangfolge nach Bewertungen und Gym.",
+        [{"mcp_id": "brave_search"}, {"mcp_id": "shell_access"}],
+    )
+    if "repo_modification" in hotel_research_intent.get("categories", []):
+        raise RuntimeError(f"Expected German hotel research not to classify as repo work. Got: {hotel_research_intent}")
+    if "web_research" not in hotel_research_intent.get("categories", []):
+        raise RuntimeError(f"Expected German hotel research to classify as web research. Got: {hotel_research_intent}")
+    if hotel_research_intent.get("preferred_mcp_ids", [None])[0] != "brave_search":
+        raise RuntimeError(f"Expected web research to prefer Brave Search. Got: {hotel_research_intent}")
+
+    repo_intent = classify_task_intent(
+        "Modify this repo and show me the diff.",
+        [{"mcp_id": "git_ops"}, {"mcp_id": "brave_search"}],
+    )
+    if "repo_modification" not in repo_intent.get("categories", []):
+        raise RuntimeError(f"Expected explicit repo prompt to classify as repo work. Got: {repo_intent}")
 
     print("PASS: orchestration recovery hardening checks succeeded.")
 

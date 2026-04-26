@@ -574,6 +574,10 @@ async def generate_with_tools(
         resolved_mcp_id = mcp_id.strip() if isinstance(mcp_id, str) else ""
         tool_arguments = cast(dict[str, object], arguments) if isinstance(arguments, dict) else {}
 
+        alias_resolution = _resolve_tool_alias(enabled_tools, resolved_mcp_id, resolved_tool_id)
+        if alias_resolution is not None:
+            resolved_mcp_id, resolved_tool_id = alias_resolution
+
         if not resolved_mcp_id:
             candidate_mcps = sorted(
                 {
@@ -1405,6 +1409,7 @@ def _build_recursive_planner_prompt(
         "You can recursively call tools.\n"
         f"Current step: {step_index} of {max_steps}.\n"
         "Return exactly one JSON object only. No prose, no markdown, no code fences.\n"
+        "Never output provider-native tool markup such as <invoke>, <parameter>, <function_calls>, or [TOOL_CALL]; those are internal model formats, not the orchestration contract.\n"
         "Tool selection is intent-based and language-agnostic: infer user intent semantically even when the user writes in any language or mixed languages.\n"
         "Your goal is to complete the user's original request end-to-end, not to stop at intermediate status updates.\n"
         "If user asks for live/external/private data (web, files, integrations, devices, Home Assistant, calendars, email), use a tool call first.\n"
@@ -1534,6 +1539,8 @@ def _invalid_planner_reason(plan: dict[str, object]) -> str:
         final_answer = plan.get("final_answer")
         if not isinstance(final_answer, str) or not final_answer.strip():
             return "Planner respond action is missing a non-empty final_answer."
+        if _contains_tool_call_markup(final_answer):
+            return "Planner respond action contains raw tool-call markup instead of a user-visible answer."
         return ""
 
     if action == "blocked":
@@ -1603,6 +1610,13 @@ def _parse_planner_response(response_text: str) -> PlannerParseResult:
     end = response_text.rfind("}")
     if start == -1 or end == -1 or end <= start:
         stripped = response_text.strip()
+        if stripped and _contains_tool_call_markup(stripped):
+            return {
+                "plan": {"action": "respond", "final_answer": ""},
+                "object_count": 0,
+                "selected_index": -1,
+                "recovery_mode": "unrecovered_tool_markup",
+            }
         if stripped:
             return {
                 "plan": {
@@ -1700,12 +1714,11 @@ def _extract_tool_call_wrapper(response_text: str) -> dict[str, object] | None:
 
 def _extract_xml_tool_call_wrapper(response_text: str) -> dict[str, object] | None:
     wrapper_match = re.search(r"<function_calls\b[^>]*>(.*?)</function_calls>", response_text, flags=re.DOTALL | re.IGNORECASE)
-    if wrapper_match is None:
-        return None
+    search_body = wrapper_match.group(1) if wrapper_match is not None else response_text
 
     invoke_match = re.search(
         r"<invoke\b[^>]*name=\"([^\"]+)\"[^>]*>(.*?)</invoke>",
-        wrapper_match.group(1),
+        search_body,
         flags=re.DOTALL | re.IGNORECASE,
     )
     if invoke_match is None:
@@ -1717,7 +1730,7 @@ def _extract_xml_tool_call_wrapper(response_text: str) -> dict[str, object] | No
 
     arguments: dict[str, object] = {}
     for arg_match in re.finditer(
-        r"<arg\b[^>]*name=\"([^\"]+)\"[^>]*>(.*?)</arg>",
+        r"<(?:arg|parameter)\b[^>]*name=\"([^\"]+)\"[^>]*>(.*?)</(?:arg|parameter)>",
         invoke_match.group(2),
         flags=re.DOTALL | re.IGNORECASE,
     ):
@@ -1745,6 +1758,67 @@ def _extract_xml_tool_call_wrapper(response_text: str) -> dict[str, object] | No
         "tool_id": tool_id,
         "arguments": arguments,
     }
+
+
+def _resolve_tool_alias(
+    enabled_tools: list[dict[str, object]],
+    mcp_id: str,
+    tool_id: str,
+) -> tuple[str, str] | None:
+    normalized_mcp_id = str(mcp_id or "").strip()
+    normalized_tool_id = str(tool_id or "").strip()
+    if not normalized_tool_id:
+        return None
+
+    if any(
+        str(entry.get("mcp_id", "")) == normalized_mcp_id
+        and str(entry.get("tool_id", "")) == normalized_tool_id
+        for entry in enabled_tools
+    ):
+        return None
+
+    candidates = [
+        (str(entry.get("mcp_id", "")), str(entry.get("tool_id", "")))
+        for entry in enabled_tools
+        if str(entry.get("mcp_id", "")) == normalized_tool_id
+    ]
+    if normalized_mcp_id:
+        candidates = [
+            (candidate_mcp_id, candidate_tool_id)
+            for candidate_mcp_id, candidate_tool_id in candidates
+            if candidate_mcp_id == normalized_mcp_id
+        ]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    if not normalized_mcp_id:
+        label_candidates = [
+            (str(entry.get("mcp_id", "")), str(entry.get("tool_id", "")))
+            for entry in enabled_tools
+            if _normalize_tool_wrapper_token(str(entry.get("tool_label", ""))) == normalized_tool_id
+        ]
+        if len(label_candidates) == 1:
+            return label_candidates[0]
+
+    if normalized_tool_id == "brave_search":
+        if any(
+            str(entry.get("mcp_id", "")) == "brave_search"
+            and str(entry.get("tool_id", "")) == "web_search"
+            for entry in enabled_tools
+        ):
+            return "brave_search", "web_search"
+
+    return None
+
+
+def _contains_tool_call_markup(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(<(?:[a-z0-9_-]+:)?tool_call\b|<function_calls\b|<invoke\b|<parameter\b|\[TOOL_CALL\])",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _split_wrapped_tool_name(tool_name: str) -> tuple[str, str]:
