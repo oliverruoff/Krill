@@ -120,6 +120,59 @@ def test_html_entity_escaping():
     print("[PASS] HTML entity escaping")
 
 
+def test_markdown_table_conversion():
+    """Test standard Markdown table conversion to Telegram-safe preformatted HTML."""
+    text = """| Name | Score |
+| --- | ---: |
+| Ada | 10 |
+| Grace | 9 |"""
+    result = markdown_to_html(text)
+    assert result == "<pre>Name  | Score\n----- | -----\nAda   |    10\nGrace |     9</pre>"
+    print("[PASS] Markdown table conversion")
+
+
+def test_markdown_table_without_outer_pipes():
+    """Test table conversion with optional outer pipes omitted."""
+    text = """Name | Role
+--- | ---
+Ada | Engineer"""
+    result = markdown_to_html(text)
+    assert result == "<pre>Name | Role    \n---- | --------\nAda  | Engineer</pre>"
+    print("[PASS] Markdown table without outer pipes")
+
+
+def test_markdown_table_alignment_markers():
+    """Test left, center, and right separator markers are accepted."""
+    text = """| Left | Center | Right |
+| :--- | :---: | ---: |
+| A | B | C |
+| Long | Mid | 42 |"""
+    result = markdown_to_html(text)
+    assert result == "<pre>Left | Center | Right\n---- | ------ | -----\nA    |   B    |     C\nLong |  Mid   |    42</pre>"
+    print("[PASS] Markdown table alignment markers")
+
+
+def test_markdown_table_escapes_html_sensitive_cells():
+    """Test table cell content is HTML-escaped inside the pre block."""
+    text = """| Expr | Value |
+| --- | --- |
+| 1 < 2 | a & b |
+| tag | <ok> |"""
+    result = markdown_to_html(text)
+    assert "&lt;" in result
+    assert "&amp;" in result
+    assert "<ok>" not in result
+    assert result.startswith("<pre>") and result.endswith("</pre>")
+    print("[PASS] Markdown table HTML-sensitive cells escaped")
+
+
+def test_pipe_text_without_separator_is_not_table():
+    """Test ordinary pipe text is left alone when no separator row follows."""
+    text = "Use alpha | beta as plain text"
+    assert markdown_to_html(text) == text
+    print("[PASS] Plain pipe text remains plain text")
+
+
 def test_mixed_formatting():
     """Test mixed markdown formatting."""
     text = "This is **bold** and *italic* with `code`"
@@ -231,6 +284,11 @@ def main():
     test_code_block_conversion()
     test_link_conversion()
     test_html_entity_escaping()
+    test_markdown_table_conversion()
+    test_markdown_table_without_outer_pipes()
+    test_markdown_table_alignment_markers()
+    test_markdown_table_escapes_html_sensitive_cells()
+    test_pipe_text_without_separator_is_not_table()
     test_mixed_formatting()
     test_underscores_in_text()
     test_urls_with_special_chars()
