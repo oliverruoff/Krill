@@ -34,8 +34,9 @@ from .client import (
     telegram_get_updates,
     telegram_send_audio,
     telegram_send_message,
+    telegram_send_photo,
 )
-from .utils import chunk_telegram_text, markdown_to_html
+from .utils import render_telegram_message_parts
 
 
 logger = logging.getLogger(__name__)
@@ -613,12 +614,37 @@ class TelegramBridgeWorker:
             clean_text = _strip_tts_audio_urls(response_text)
             clean_text = _strip_shared_file_urls(clean_text)
             if clean_text.strip():
-                for chunk in chunk_telegram_text(clean_text):
-                    html_chunk = markdown_to_html(chunk)
+                for part in render_telegram_message_parts(clean_text):
                     try:
-                        await asyncio.to_thread(telegram_send_message, token, telegram_chat_id, html_chunk, "HTML")
+                        if part.get("type") == "image":
+                            image_bytes = part.get("image_bytes")
+                            if isinstance(image_bytes, bytes):
+                                filename = str(part.get("filename", "telegram-table.png"))
+                                try:
+                                    await asyncio.to_thread(
+                                        telegram_send_photo,
+                                        token,
+                                        telegram_chat_id,
+                                        image_bytes,
+                                        filename,
+                                    )
+                                except Exception:
+                                    await asyncio.to_thread(
+                                        telegram_send_document,
+                                        token,
+                                        telegram_chat_id,
+                                        image_bytes,
+                                        filename,
+                                        None,
+                                        None,
+                                        "image/png",
+                                    )
+                        else:
+                            html_text = str(part.get("text", "")).strip()
+                            if html_text:
+                                await asyncio.to_thread(telegram_send_message, token, telegram_chat_id, html_text, "HTML")
                     except Exception as exc:
-                        logger.warning("telegram: failed to send response chunk to chat_id=%s: %s", telegram_chat_id, exc)
+                        logger.warning("telegram: failed to send response part to chat_id=%s: %s", telegram_chat_id, exc)
             for shared_token in shared_file_tokens:
                 try:
                     shared_payload = await _read_shared_file_payload(shared_token)

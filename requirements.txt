@@ -7,3 +7,4 @@ paramiko
 youtube-transcript-api
 pypdf
 edge-tts
+pillow

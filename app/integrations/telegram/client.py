@@ -130,6 +130,55 @@ def telegram_send_audio(
         return json.loads(response.read().decode("utf-8"))
 
 
+def telegram_send_photo(
+    token: str,
+    chat_id: int,
+    photo_bytes: bytes,
+    filename: str = "image.png",
+    caption: str | None = None,
+    parse_mode: str | None = None,
+) -> dict[str, object]:
+    """Send an image to Telegram via POST /sendPhoto (multipart/form-data)."""
+    import io
+
+    boundary = f"----KrillBoundary{id(photo_bytes):016x}"
+    body = io.BytesIO()
+
+    def _write_field(name: str, value: str) -> None:
+        body.write(f"--{boundary}\r\n".encode())
+        body.write(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+        body.write(f"{value}\r\n".encode())
+
+    def _write_file(name: str, fname: str, data: bytes, content_type: str) -> None:
+        body.write(f"--{boundary}\r\n".encode())
+        body.write(f'Content-Disposition: form-data; name="{name}"; filename="{fname}"\r\n'.encode())
+        body.write(f"Content-Type: {content_type}\r\n\r\n".encode())
+        body.write(data)
+        body.write(b"\r\n")
+
+    _write_field("chat_id", str(chat_id))
+    if caption:
+        _write_field("caption", caption)
+    if parse_mode:
+        _write_field("parse_mode", parse_mode)
+    _write_file("photo", filename, photo_bytes, "image/png")
+    body.write(f"--{boundary}--\r\n".encode())
+
+    url = f"https://api.telegram.org/bot{parse.quote(token, safe=':')}/sendPhoto"
+    raw_body = body.getvalue()
+    req = request.Request(
+        url=url,
+        data=raw_body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    with request.urlopen(req, timeout=60) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def telegram_send_document(
     token: str,
     chat_id: int,

@@ -9,7 +9,7 @@ from pathlib import Path
 repo_root = Path(__file__).parent.parent
 sys.path.insert(0, str(repo_root))
 
-from app.integrations.telegram.utils import markdown_to_html
+from app.integrations.telegram.utils import markdown_to_html, render_telegram_message_parts
 
 
 def test_headlines():
@@ -173,6 +173,27 @@ def test_pipe_text_without_separator_is_not_table():
     print("[PASS] Plain pipe text remains plain text")
 
 
+def test_telegram_message_parts_render_tables_as_images():
+    """Test Telegram delivery parts split tables into image attachments."""
+    text = """Intro text
+
+| Name | Score |
+| --- | ---: |
+| Ada | 10 |
+
+Outro text"""
+    parts = render_telegram_message_parts(text)
+    assert len(parts) == 3
+    assert parts[0]["type"] == "text"
+    assert parts[1]["type"] == "image"
+    assert parts[2]["type"] == "text"
+    assert isinstance(parts[1].get("image_bytes"), bytes)
+    assert parts[1]["image_bytes"].startswith(b"\x89PNG")
+    assert "<pre>" not in str(parts[0].get("text", ""))
+    assert "<pre>" not in str(parts[2].get("text", ""))
+    print("[PASS] Telegram message parts render tables as images")
+
+
 def test_mixed_formatting():
     """Test mixed markdown formatting."""
     text = "This is **bold** and *italic* with `code`"
@@ -289,6 +310,7 @@ def main():
     test_markdown_table_alignment_markers()
     test_markdown_table_escapes_html_sensitive_cells()
     test_pipe_text_without_separator_is_not_table()
+    test_telegram_message_parts_render_tables_as_images()
     test_mixed_formatting()
     test_underscores_in_text()
     test_urls_with_special_chars()
