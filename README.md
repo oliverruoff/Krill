@@ -343,7 +343,7 @@ Telegram integration notes:
 - Telegram supports `/usage` (shows session context fill vs model window), `/model` (lists/switches connected provider models), `/summarize` (summarizes current chat context), `/compaction` (manual chat compaction into a fresh chat), `/debug` (creates a hidden persisted debug dump + downloadable JSON), and MCP control commands `/mcp_list`, `/mcp_enable <id>`, `/mcp_disable <id>`
 - Telegram `/debug` sends the JSON as a native document and, when reachable, also includes a clickable LAN download link built from `KRILL_PUBLIC_BASE_URL` or the detected local network IP
 - Telegram accepts image messages (photo/image document) and emits an "Image analysis" assistant message before the final reply
-- Telegram renders Markdown pipe tables as table images so they display visually instead of as code blocks
+- Telegram renders Markdown pipe tables as compact monospaced text tables for readable mobile display
 - Telegram converts `/api/files/shared/<token>` links in assistant output into native Telegram document attachments when possible
 
 ### 4) Orchestrator (reason + act loop)

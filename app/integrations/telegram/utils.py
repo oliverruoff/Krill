@@ -2,24 +2,11 @@
 from __future__ import annotations
 
 import html
-import io
 import re
-from typing import Literal, TypedDict
 
 _TELEGRAM_TABLE_PLACEHOLDER_PREFIX = "KRILLTELEGRAMTABLE"
-_TELEGRAM_TABLE_IMAGE_MAX_CELL_WIDTH = 380
-_TELEGRAM_TABLE_IMAGE_MIN_CELL_WIDTH = 80
-_TELEGRAM_TABLE_IMAGE_PADDING_X = 14
-_TELEGRAM_TABLE_IMAGE_PADDING_Y = 10
-_TELEGRAM_TABLE_IMAGE_FONT_SIZE = 18
-_TELEGRAM_TABLE_IMAGE_BORDER = 1
-
-
-class TelegramMessagePart(TypedDict, total=False):
-    type: Literal["text", "image"]
-    text: str
-    image_bytes: bytes
-    filename: str
+_TELEGRAM_TABLE_MAX_WIDTH = 42
+_TELEGRAM_TABLE_FIRST_COLUMN_MAX_WIDTH = 10
 
 
 def chunk_telegram_text(text: str, max_len: int = 3500) -> list[str]:
@@ -131,30 +118,113 @@ def _format_table_cell(value: str, width: int, alignment: str) -> str:
     return value.ljust(width)
 
 
-def _render_markdown_table(header: list[str], separator: list[str], rows: list[list[str]]) -> str:
+def _plain_table_cell(value: str) -> str:
+    result = value.strip()
+    result = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", result)
+    result = re.sub(r"`([^`]+)`", r"\1", result)
+    result = re.sub(r"\*\*(.+?)\*\*", r"\1", result)
+    result = re.sub(r"__(.+?)__", r"\1", result)
+    result = re.sub(r"(?<!\w)\*(.+?)\*(?!\w)", r"\1", result)
+    result = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"\1", result)
+    return html.unescape(result)
+
+
+def _wrap_table_text(value: str, width: int) -> list[str]:
+    words = value.split()
+    if not words:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if len(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = word
+        while len(current) > width:
+            lines.append(current[:width])
+            current = current[width:]
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
+def _mobile_column_widths(header: list[str], rows: list[list[str]]) -> list[int] | None:
     column_count = len(header)
-    normalized_rows = [_normalize_table_row(row, column_count) for row in rows]
-    all_rows = [header, *normalized_rows]
-    widths = [
-        max(len(row[index]) for row in all_rows)
+    if column_count > 3:
+        return None
+
+    natural_widths = [
+        max(len(row[index]) for row in [header, *rows])
         for index in range(column_count)
     ]
-    alignments = _table_alignments(separator)
+    separator_width = 3 * (column_count - 1)
+    if sum(natural_widths) + separator_width <= _TELEGRAM_TABLE_MAX_WIDTH:
+        return natural_widths
 
-    rendered_rows = [
-        " | ".join(
-            _format_table_cell(cell, widths[index], alignments[index])
-            for index, cell in enumerate(header)
-        ),
-        " | ".join("-" * widths[index] for index in range(column_count)),
+    if column_count == 2:
+        first_width = min(natural_widths[0], _TELEGRAM_TABLE_FIRST_COLUMN_MAX_WIDTH)
+        second_width = _TELEGRAM_TABLE_MAX_WIDTH - first_width - separator_width
+        if second_width >= 16:
+            return [first_width, second_width]
+
+    available = _TELEGRAM_TABLE_MAX_WIDTH - separator_width
+    min_width = 8
+    if available < min_width * column_count:
+        return None
+    width = available // column_count
+    return [min(max(natural_widths[index], min_width), width) for index in range(column_count)]
+
+
+def _render_wrapped_table_row(cells: list[str], widths: list[int], alignments: list[str]) -> list[str]:
+    wrapped_cells = [
+        _wrap_table_text(cells[index], widths[index])
+        for index in range(len(widths))
     ]
+    line_count = max(len(lines) for lines in wrapped_cells)
+    rendered: list[str] = []
+    for line_index in range(line_count):
+        parts: list[str] = []
+        for column_index, lines in enumerate(wrapped_cells):
+            value = lines[line_index] if line_index < len(lines) else ""
+            parts.append(_format_table_cell(value, widths[column_index], alignments[column_index]))
+        rendered.append(" | ".join(parts).rstrip())
+    return rendered
+
+
+def _render_compact_list_table(header: list[str], rows: list[list[str]]) -> str:
+    rendered: list[str] = []
+    for row_index, row in enumerate(rows, start=1):
+        if row_index > 1:
+            rendered.append("")
+        entries = [
+            f"{header[index]}: {row[index]}"
+            for index in range(len(header))
+            if row[index]
+        ]
+        wrapped = _wrap_table_text(" | ".join(entries), _TELEGRAM_TABLE_MAX_WIDTH)
+        rendered.extend(wrapped)
+    return "\n".join(rendered)
+
+
+def _render_markdown_table(header: list[str], separator: list[str], rows: list[list[str]]) -> str:
+    column_count = len(header)
+    normalized_header = [_plain_table_cell(cell) for cell in _normalize_table_row(header, column_count)]
+    normalized_rows = [
+        [_plain_table_cell(cell) for cell in _normalize_table_row(row, column_count)]
+        for row in rows
+    ]
+    widths = _mobile_column_widths(normalized_header, normalized_rows)
+    if widths is None:
+        return _render_compact_list_table(normalized_header, normalized_rows)
+
+    alignments = _table_alignments(separator)
+    rendered_rows = _render_wrapped_table_row(normalized_header, widths, alignments)
+    rendered_rows.append(" | ".join("-" * width for width in widths).rstrip())
     for row in normalized_rows:
-        rendered_rows.append(
-            " | ".join(
-                _format_table_cell(cell, widths[index], alignments[index])
-                for index, cell in enumerate(row)
-            )
-        )
+        rendered_rows.extend(_render_wrapped_table_row(row, widths, alignments))
     return "\n".join(rendered_rows)
 
 
@@ -192,209 +262,6 @@ def _replace_markdown_tables(text: str) -> tuple[str, dict[str, str]]:
         index += 1
 
     return "".join(output), table_html_by_placeholder
-
-
-def _plain_table_cell(value: str) -> str:
-    result = value.strip()
-    result = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", result)
-    result = re.sub(r"`([^`]+)`", r"\1", result)
-    result = re.sub(r"\*\*(.+?)\*\*", r"\1", result)
-    result = re.sub(r"__(.+?)__", r"\1", result)
-    result = re.sub(r"(?<!\w)\*(.+?)\*(?!\w)", r"\1", result)
-    result = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"\1", result)
-    return html.unescape(result)
-
-
-def _load_table_font(size: int, *, bold: bool = False):
-    from PIL import ImageFont  # pylint: disable=import-outside-toplevel
-
-    font_names = (
-        ("C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/segoeui.ttf")
-        if bold
-        else ("C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf")
-    )
-    candidates = [
-        *font_names,
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/local/share/fonts/DejaVuSans-Bold.ttf" if bold else "/usr/local/share/fonts/DejaVuSans.ttf",
-    ]
-    for path in candidates:
-        try:
-            return ImageFont.truetype(path, size=size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
-
-
-def _text_width(draw, text: str, font) -> int:
-    left, _top, right, _bottom = draw.textbbox((0, 0), text, font=font)
-    return max(0, right - left)
-
-
-def _text_height(draw, text: str, font) -> int:
-    _left, top, _right, bottom = draw.textbbox((0, 0), text or "Ag", font=font)
-    return max(1, bottom - top)
-
-
-def _wrap_table_cell(draw, text: str, font, max_width: int) -> list[str]:
-    words = text.split()
-    if not words:
-        return [""]
-    lines: list[str] = []
-    current = ""
-    for word in words:
-        candidate = word if not current else f"{current} {word}"
-        if _text_width(draw, candidate, font) <= max_width:
-            current = candidate
-            continue
-        if current:
-            lines.append(current)
-        current = word
-        while _text_width(draw, current, font) > max_width and len(current) > 1:
-            split_at = len(current)
-            while split_at > 1 and _text_width(draw, current[:split_at], font) > max_width:
-                split_at -= 1
-            lines.append(current[:split_at])
-            current = current[split_at:]
-    if current:
-        lines.append(current)
-    return lines or [""]
-
-
-def render_markdown_table_image(header: list[str], separator: list[str], rows: list[list[str]]) -> bytes:
-    from PIL import Image, ImageDraw  # pylint: disable=import-outside-toplevel
-
-    header_font = _load_table_font(_TELEGRAM_TABLE_IMAGE_FONT_SIZE, bold=True)
-    body_font = _load_table_font(_TELEGRAM_TABLE_IMAGE_FONT_SIZE)
-    measure_image = Image.new("RGB", (1, 1), "white")
-    measure_draw = ImageDraw.Draw(measure_image)
-
-    column_count = len(header)
-    normalized_header = [_plain_table_cell(cell) for cell in _normalize_table_row(header, column_count)]
-    normalized_rows = [
-        [_plain_table_cell(cell) for cell in _normalize_table_row(row, column_count)]
-        for row in rows
-    ]
-    alignments = _table_alignments(separator)
-    column_widths: list[int] = []
-    for index in range(column_count):
-        values = [normalized_header[index], *[row[index] for row in normalized_rows]]
-        width = max(_text_width(measure_draw, value, body_font) for value in values)
-        width = max(_TELEGRAM_TABLE_IMAGE_MIN_CELL_WIDTH, min(width, _TELEGRAM_TABLE_IMAGE_MAX_CELL_WIDTH))
-        column_widths.append(width)
-
-    wrapped_header = [
-        _wrap_table_cell(measure_draw, normalized_header[index], header_font, column_widths[index])
-        for index in range(column_count)
-    ]
-    wrapped_rows = [
-        [
-            _wrap_table_cell(measure_draw, row[index], body_font, column_widths[index])
-            for index in range(column_count)
-        ]
-        for row in normalized_rows
-    ]
-    body_line_height = _text_height(measure_draw, "Ag", body_font) + 5
-    header_line_height = _text_height(measure_draw, "Ag", header_font) + 5
-    row_heights = [
-        max(len(lines) for lines in wrapped_header) * header_line_height + (_TELEGRAM_TABLE_IMAGE_PADDING_Y * 2),
-        *[
-            max(len(lines) for lines in wrapped_row) * body_line_height + (_TELEGRAM_TABLE_IMAGE_PADDING_Y * 2)
-            for wrapped_row in wrapped_rows
-        ],
-    ]
-
-    table_width = (
-        sum(column_widths)
-        + (column_count * _TELEGRAM_TABLE_IMAGE_PADDING_X * 2)
-        + ((column_count + 1) * _TELEGRAM_TABLE_IMAGE_BORDER)
-    )
-    table_height = sum(row_heights) + ((len(row_heights) + 1) * _TELEGRAM_TABLE_IMAGE_BORDER)
-    image = Image.new("RGB", (table_width, table_height), "#ffffff")
-    draw = ImageDraw.Draw(image)
-
-    grid_color = "#d4d7dd"
-    header_background = "#f1f3f6"
-    text_color = "#111827"
-    y = 0
-    all_wrapped_rows = [wrapped_header, *wrapped_rows]
-    for row_index, wrapped_row in enumerate(all_wrapped_rows):
-        row_height = row_heights[row_index]
-        if row_index == 0:
-            draw.rectangle((0, y, table_width, y + row_height), fill=header_background)
-        x = 0
-        for column_index, lines in enumerate(wrapped_row):
-            cell_width = column_widths[column_index] + (_TELEGRAM_TABLE_IMAGE_PADDING_X * 2)
-            draw.rectangle((x, y, x + cell_width, y + row_height), outline=grid_color, width=1)
-            font = header_font if row_index == 0 else body_font
-            line_height = header_line_height if row_index == 0 else body_line_height
-            text_y = y + _TELEGRAM_TABLE_IMAGE_PADDING_Y
-            for line in lines:
-                line_width = _text_width(draw, line, font)
-                if alignments[column_index] == "right":
-                    text_x = x + cell_width - _TELEGRAM_TABLE_IMAGE_PADDING_X - line_width
-                elif alignments[column_index] == "center":
-                    text_x = x + ((cell_width - line_width) // 2)
-                else:
-                    text_x = x + _TELEGRAM_TABLE_IMAGE_PADDING_X
-                draw.text((text_x, text_y), line, fill=text_color, font=font)
-                text_y += line_height
-            x += cell_width
-        y += row_height
-
-    output = io.BytesIO()
-    image.save(output, format="PNG", optimize=True)
-    return output.getvalue()
-
-
-def render_telegram_message_parts(text: str) -> list[TelegramMessagePart]:
-    lines = text.splitlines(keepends=True)
-    parts: list[TelegramMessagePart] = []
-    pending_text: list[str] = []
-    index = 0
-    table_index = 1
-    in_code_block = False
-
-    def flush_text() -> None:
-        raw_text = "".join(pending_text).strip()
-        pending_text.clear()
-        if not raw_text:
-            return
-        for chunk in chunk_telegram_text(raw_text):
-            parts.append({"type": "text", "text": markdown_to_html(chunk)})
-
-    while index < len(lines):
-        line = lines[index]
-        if line.lstrip().startswith("```"):
-            in_code_block = not in_code_block
-            pending_text.append(line)
-            index += 1
-            continue
-
-        parsed_table = None if in_code_block else _parse_markdown_table_at(lines, index)
-        if parsed_table is None:
-            pending_text.append(line)
-            index += 1
-            continue
-
-        body_index, header, separator, rows, raw_table = parsed_table
-        flush_text()
-        try:
-            parts.append(
-                {
-                    "type": "image",
-                    "image_bytes": render_markdown_table_image(header, separator, rows),
-                    "filename": f"telegram-table-{table_index}.png",
-                }
-            )
-            table_index += 1
-        except Exception:
-            for chunk in chunk_telegram_text(raw_table.strip()):
-                parts.append({"type": "text", "text": markdown_to_html(chunk)})
-        index = body_index
-
-    flush_text()
-    return parts
 
 
 def markdown_to_html(text: str) -> str:

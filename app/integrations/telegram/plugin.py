@@ -7,9 +7,9 @@ import asyncio
 from app.config import IntegrationConfig, Settings, TimedJob
 from app.integrations.base import IntegrationConfigField, IntegrationPlugin
 
-from .client import telegram_send_document, telegram_send_message, telegram_send_photo
+from .client import telegram_send_message
 from .config import CONFIG_FIELDS, verify_telegram_config
-from .utils import render_telegram_message_parts
+from .utils import chunk_telegram_text, markdown_to_html
 from .worker import TelegramBridgeWorker
 
 _TIMED_JOB_TITLE_MAX_LEN = 120
@@ -73,28 +73,9 @@ class TelegramIntegration(IntegrationPlugin):
         token, chat_id = target
         title = " ".join(job.title.split()).strip()[:_TIMED_JOB_TITLE_MAX_LEN]
         decorated = f"{title}\n\n{text}" if title else text
-        for part in render_telegram_message_parts(decorated):
-            if part.get("type") == "image":
-                image_bytes = part.get("image_bytes")
-                if isinstance(image_bytes, bytes):
-                    filename = str(part.get("filename", "telegram-table.png"))
-                    try:
-                        await asyncio.to_thread(telegram_send_photo, token, chat_id, image_bytes, filename)
-                    except Exception:
-                        await asyncio.to_thread(
-                            telegram_send_document,
-                            token,
-                            chat_id,
-                            image_bytes,
-                            filename,
-                            None,
-                            None,
-                            "image/png",
-                        )
-            else:
-                text_part = str(part.get("text", "")).strip()
-                if text_part:
-                    await asyncio.to_thread(telegram_send_message, token, chat_id, text_part, "HTML")
+        for chunk in chunk_telegram_text(decorated):
+            html_chunk = markdown_to_html(chunk)
+            await asyncio.to_thread(telegram_send_message, token, chat_id, html_chunk, "HTML")
 
     def get_timed_job_channel_option(
         self,
