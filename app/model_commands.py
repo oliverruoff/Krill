@@ -56,11 +56,29 @@ async def execute_model_command(argument: str = "") -> ModelCommandResult:
     if not normalized_argument:
         return ModelCommandResult(text=_format_model_list(settings, entries), settings=settings)
 
+    if "/" not in normalized_argument:
+        model_index = _parse_model_index(normalized_argument)
+        if model_index is None:
+            return ModelCommandResult(
+                ok=False,
+                text=f"Model index '{normalized_argument}' is not valid. Use /model to list available models.",
+                settings=settings,
+            )
+        if model_index < 1 or model_index > len(entries):
+            return ModelCommandResult(
+                ok=False,
+                text=f"Model index {model_index} is not available. Use /model to list available models.",
+                settings=settings,
+            )
+
+        selected_entry = entries[model_index - 1]
+        return await _persist_selected_model(settings, selected_entry)
+
     provider_id, model_id = _parse_provider_model_selector(normalized_argument)
     if not provider_id or not model_id:
         return ModelCommandResult(
             ok=False,
-            text="Use /model <provider>/<model> to switch.",
+            text="Use /model <number> or /model <provider>/<model> to switch.",
             settings=settings,
         )
 
@@ -84,6 +102,12 @@ async def execute_model_command(argument: str = "") -> ModelCommandResult:
             model_id=model_id,
         )
 
+    return await _persist_selected_model(settings, selected_entry)
+
+
+async def _persist_selected_model(settings: Settings, selected_entry: ModelCommandEntry) -> ModelCommandResult:
+    provider_id = selected_entry.provider_id
+    model_id = selected_entry.model_id
     provider_config = settings.provider_configs.get(provider_id)
     if provider_config is None:
         return ModelCommandResult(
@@ -152,9 +176,9 @@ def _format_model_list(settings: Settings, entries: list[ModelCommandEntry]) -> 
 
     active_label = f"{active_provider}/{active_model}" if active_provider and active_model else "none"
     lines = [f"Active model: {active_label}", "Available models:"]
-    for entry in entries:
-        lines.append(f"{entry.provider_id}/{entry.model_id} - {entry.model_label}")
-    lines.append("Use /model <provider>/<model> to switch.")
+    for index, entry in enumerate(entries, start=1):
+        lines.append(f"{index}. {entry.provider_id}/{entry.model_id} - {entry.model_label}")
+    lines.append("Use /model <number> or /model <provider>/<model> to switch.")
     return "\n".join(lines)
 
 
@@ -163,3 +187,10 @@ def _parse_provider_model_selector(argument: str) -> tuple[str, str]:
     if not separator:
         return "", ""
     return provider_id.strip(), model_id.strip()
+
+
+def _parse_model_index(argument: str) -> int | None:
+    normalized = str(argument or "").strip()
+    if not normalized.isdigit():
+        return None
+    return int(normalized)

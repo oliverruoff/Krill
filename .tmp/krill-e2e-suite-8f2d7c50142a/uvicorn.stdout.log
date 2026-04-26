@@ -1,0 +1,6 @@
+INFO:     127.0.0.1:54545 - "GET /api/auth/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54546 - "POST /api/auth/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54547 - "GET /api/settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54548 - "POST /api/settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54549 - "GET /api/settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54551 - "GET /api/chat/state HTTP/1.1" 200 OK

@@ -1,0 +1,5 @@
+INFO:     Started server process [25040]
+INFO:     Waiting for application startup.
+2026-04-26 14:14:59,517 INFO app.main - Application logging configured at DEBUG via KRILL_LOG_LEVEL
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:54540 (Press CTRL+C to quit)

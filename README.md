@@ -41,7 +41,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - See plain-language live execution progress before meaningful tool calls instead of raw low-level trace spam or internal workflow labels, including fast-updating Gateway tool-selection and execution messages during queued runs
 - Stop running tool chains from Gateway or Telegram with `/stop`, then return to a clean ready state
 - Summarize the current chat context from Gateway or Telegram with `/summarize`
-- List and switch connected provider models from Gateway, Telegram, or Matrix with `/model` and `/model <provider>/<model>`
+- List and switch connected provider models from Gateway, Telegram, or Matrix with `/model`, then `/model <number>` from the generated list, or exact `/model <provider>/<model>`
 - Create hidden `/debug` snapshots from Gateway or Telegram that capture the full live chat state, including system/tool traces, into a persisted hidden chat plus a downloadable JSON file
 - List and toggle MCPs from Gateway or Telegram chat with `/mcp_list`, `/mcp_enable <id>`, and `/mcp_disable <id>`
 - Attach one image in Gateway/Telegram messages for transient vision analysis (no image file persistence)
@@ -341,7 +341,7 @@ Telegram integration notes:
 - Telegram chat history is not written to `braindump.db`, except when `/debug` is used to snapshot the active Telegram chat into a hidden persisted debug chat
 - Telegram chats inject the same runtime identity/behavior/core-memory seed used by Gateway
 - Telegram replies include a context-window warning when usage reaches 75% of model limit (suggesting `/new`)
-- Telegram supports `/usage` (shows session context fill vs model window), `/model` (lists/switches connected provider models), `/summarize` (summarizes current chat context), `/compaction` (manual chat compaction into a fresh chat), `/debug` (creates a hidden persisted debug dump + downloadable JSON), and MCP control commands `/mcp_list`, `/mcp_enable <id>`, `/mcp_disable <id>`
+- Telegram supports `/usage` (shows session context fill vs model window), `/model` (lists connected provider models with dynamic indexes for `/model <number>` switching), `/summarize` (summarizes current chat context), `/compaction` (manual chat compaction into a fresh chat), `/debug` (creates a hidden persisted debug dump + downloadable JSON), and MCP control commands `/mcp_list`, `/mcp_enable <id>`, `/mcp_disable <id>`
 - Telegram `/debug` sends the JSON as a native document and, when reachable, also includes a clickable LAN download link built from `KRILL_PUBLIC_BASE_URL` or the detected local network IP
 - Telegram accepts image messages (photo/image document) and emits an "Image analysis" assistant message before the final reply
 - Telegram renders Markdown pipe tables as compact monospaced text tables for readable mobile display
@@ -627,6 +627,38 @@ Important:
 
 - if your external port is not `80`, include it (for example `http://localhost:8055`)
 - the exact callback URL must also be added to your Google OAuth client in Google Cloud Console
+
+### Local E2E Scenario Suite
+
+Run the local end-to-end scenario suite against a fresh temporary Krill instance:
+
+```bash
+python test/e2e_suite.py --env-file .env_test
+```
+
+Copy `.env_test_sample` to `.env_test` and fill in the live provider and judge credentials. `.env_test` is gitignored and must not be committed.
+
+Required `.env_test` values:
+
+- `E2E_PROVIDER_ID`, `E2E_MODEL`, `E2E_API_KEY`
+- `E2E_JUDGE_PROVIDER_ID`, `E2E_JUDGE_MODEL`, `E2E_JUDGE_API_KEY`
+
+`E2E_API_KEY` and `E2E_JUDGE_API_KEY` also support local secret references:
+
+- `@krill_provider:<provider_id>` reads an already configured provider key from local `data/braindump.db`
+- `@codex_auth` reuses the local Codex ChatGPT OAuth login from `~/.codex/auth.json`
+
+Process environment variables override `.env_test`, which is useful for one-off provider/model runs without editing the file.
+
+Optional values:
+
+- `E2E_PORT` to force a local port; otherwise the runner chooses a free port
+- `E2E_TIMEOUT_SECONDS` for provider-heavy scenarios
+- `E2E_KEEP_ARTIFACTS=1` to keep the temporary DB, Uvicorn logs, and JSON failure artifacts
+
+The runner starts `uvicorn app.main:app` with a temporary `KRILL_BRAINDUMP_PATH`, bootstraps a fresh admin session, configures the provider and core MCPs, then runs scenario-style tests for setup persistence, direct LLM usage, Brain Access memory saves, and timed-job triggering. Each scenario has a fixed user prompt and expected-output prompt; a dedicated judge model returns strict JSON pass/fail results. Failed scenarios keep sanitized artifacts under the run's temp `run-artifacts` directory.
+
+To add scenarios, extend `build_scenarios()` in `test/e2e_suite.py` with a new `Scenario` entry and a small runner function that returns observations. Prefer hard API assertions first, then let the judge evaluate semantic output.
 
 ### Docker E2E API Test
 
