@@ -1,4 +1,7 @@
 *.pyc
+*.log
+.logs/
+.tmp/
 braindump.db
 braindump.db.bak
 *ed25519
@@ -12,6 +15,7 @@ braindump.json
 braindump.json.bak
 .env_test
 data/tts_audio/*
+data/screenshots/*
 tmp_verify_data/krill_model_command_test_*/
 tmp_verify_data/model_command_*.db*
 tmp_verify_data/tmpdoq6c83z/

@@ -917,6 +917,17 @@ async def save_chat_state(
         return normalized
 
 
+async def increment_daily_token_usage(tokens_to_add: int) -> list[DailyTokenUsage]:
+    """Persist a token usage increment without rewriting unrelated settings tables."""
+    if tokens_to_add <= 0:
+        return []
+    await ensure_settings_file()
+    async with _DB_LOCK:
+        result = await asyncio.to_thread(_increment_daily_token_usage_sync, tokens_to_add)
+        await asyncio.to_thread(_check_backup)
+        return result
+
+
 async def update_chat_title(chat_id: str, title: str) -> bool:
     """Update the title of a single chat without rewriting all tables."""
     clean_id = str(chat_id or "").strip()
@@ -1123,6 +1134,32 @@ def _save_chat_state_sync(snapshot: ChatStateSnapshot, preserve_active_chat_id: 
         for item in snapshot.daily_token_usage:
             conn.execute("INSERT INTO daily_token_usage (date, tokens) VALUES (?, ?)", (item.date, item.tokens))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _increment_daily_token_usage_sync(tokens_to_add: int) -> list[DailyTokenUsage]:
+    conn = _get_conn(BRAINDUMP_PATH)
+    try:
+        date_key = datetime.now(timezone.utc).date().isoformat()
+        conn.execute("BEGIN TRANSACTION")
+        row = conn.execute("SELECT tokens FROM daily_token_usage WHERE date = ?", (date_key,)).fetchone()
+        if row is None:
+            conn.execute("INSERT INTO daily_token_usage (date, tokens) VALUES (?, ?)", (date_key, tokens_to_add))
+        else:
+            conn.execute(
+                "UPDATE daily_token_usage SET tokens = ? WHERE date = ?",
+                (max(0, int(row["tokens"])) + tokens_to_add, date_key),
+            )
+        usage = [
+            DailyTokenUsage(date=row["date"], tokens=row["tokens"])
+            for row in conn.execute("SELECT * FROM daily_token_usage ORDER BY date ASC")
+        ]
+        conn.commit()
+        return usage
     except Exception:
         conn.rollback()
         raise

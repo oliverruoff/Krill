@@ -332,7 +332,14 @@ class WhatsAppBridgeWorker:
         )
 
         final_text = str(result.get("text", "")).strip()
-        chat.messages.append(
+        fresh_settings = await load_settings()
+        fresh_chat = next((item for item in fresh_settings.chats if item.id == chat.id), None)
+        if fresh_chat is None:
+            fresh_chat = chat
+            fresh_settings.chats.append(fresh_chat)
+            fresh_settings.active_chat_id = fresh_chat.id
+
+        fresh_chat.messages.append(
             ChatMessage(
                 role="assistant",
                 content=final_text,
@@ -342,15 +349,15 @@ class WhatsAppBridgeWorker:
         )
         used_tokens = result.get("used_tokens")
         if isinstance(used_tokens, int) and used_tokens > 0:
-            chat.total_tokens_used += used_tokens
-            add_daily_usage(settings, used_tokens)
+            fresh_chat.total_tokens_used += used_tokens
+            add_daily_usage(fresh_settings, used_tokens)
         if history_image_tokens > 0:
-            chat.total_tokens_used += history_image_tokens
-            add_daily_usage(settings, history_image_tokens)
+            fresh_chat.total_tokens_used += history_image_tokens
+            add_daily_usage(fresh_settings, history_image_tokens)
         if inbound_image_tokens > 0:
-            chat.total_tokens_used += inbound_image_tokens
-            add_daily_usage(settings, inbound_image_tokens)
-        await save_settings(settings)
+            fresh_chat.total_tokens_used += inbound_image_tokens
+            add_daily_usage(fresh_settings, inbound_image_tokens)
+        await save_settings(fresh_settings)
 
         if final_text:
             try:

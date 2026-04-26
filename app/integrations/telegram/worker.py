@@ -12,7 +12,15 @@ from uuid import uuid4
 
 from app.chat_engine import generate_chat_response
 from app.chat_summary import summarize_chat_context
-from app.config import ChatMessage, ChatSession, IntegrationConfig, Settings, load_settings, save_settings
+from app.config import (
+    ChatMessage,
+    ChatSession,
+    IntegrationConfig,
+    Settings,
+    increment_daily_token_usage,
+    load_settings,
+    save_settings,
+)
 from app.debug_dumps import create_hidden_debug_chat
 from app.integrations.chat_runtime import build_model_history, ensure_runtime_context_seed, is_over_context_threshold
 from app.mcp_commands import execute_mcp_command
@@ -1065,8 +1073,13 @@ class TelegramBridgeWorker:
         if isinstance(image_tokens, int) and image_tokens > 0:
             active_chat.total_tokens_used = max(0, active_chat.total_tokens_used) + image_tokens
             add_daily_usage(settings, image_tokens)
-        if (isinstance(used_tokens, int) and used_tokens > 0) or (isinstance(image_tokens, int) and image_tokens > 0):
-            await save_settings(settings)
+        token_increment = 0
+        if isinstance(used_tokens, int) and used_tokens > 0:
+            token_increment += used_tokens
+        if isinstance(image_tokens, int) and image_tokens > 0:
+            token_increment += image_tokens
+        if token_increment > 0:
+            settings.daily_token_usage = await increment_daily_token_usage(token_increment)
 
         if image_analysis_for_reply:
             return f"Image analysis: {image_analysis_for_reply}\n\n{text_response}".strip()

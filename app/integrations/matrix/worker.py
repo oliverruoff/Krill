@@ -20,6 +20,7 @@ from app.config import (
     MatrixRoomAccess,
     MatrixUserAccess,
     Settings,
+    increment_daily_token_usage,
     load_settings,
     save_settings,
 )
@@ -447,7 +448,7 @@ class MatrixBridgeWorker:
         if isinstance(used_tokens, int) and used_tokens > 0:
             active_chat.total_tokens_used = max(0, active_chat.total_tokens_used) + used_tokens
             add_daily_usage(settings, used_tokens)
-            await save_settings(settings)
+            settings.daily_token_usage = await increment_daily_token_usage(used_tokens)
         return text_response
 
     async def _handle_command(

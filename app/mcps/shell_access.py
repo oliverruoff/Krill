@@ -45,9 +45,9 @@ class ShellAccessMCP(MCPPlugin):
                 id="execute_shell",
                 label="Execute Shell",
                 description=(
-                    "Executes any shell command on the host system. "
-                    "Supports all standard shell tools: ssh, grep, sed, awk, find, curl, python, bash scripts, scp, rsync, git, etc. "
-                    "For multi-step SSH workflows use ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh-%r@%h:%p -o ControlPersist=60s to reuse connections."
+                "Executes any shell command on the host system. "
+                "The supported runtime target is the Linux Docker container, using POSIX shell commands and python3. "
+                "For multi-step SSH workflows use ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh-%r@%h:%p -o ControlPersist=60s to reuse connections."
                 ),
                 input_schema={
                     "type": "object",
@@ -123,7 +123,10 @@ class ShellAccessMCP(MCPPlugin):
         if tool_id == "execute_shell":
             return (
                 "Shell Access reminder:\n"
-                "- Run any shell command: ssh, grep, sed, awk, python, bash scripts, curl, scp, git, etc.\n"
+                "- Runtime target: Linux Docker container with POSIX shell semantics.\n"
+                f"- App base directory: {BASE_DIR}.\n"
+                "- Use Linux commands and python3 for file creation, JSON/text processing, and small scripts.\n"
+                "- Always inspect the tool result: if ok=false or exit_code is non-zero, fix the command before continuing.\n"
                 "- For SSH sessions across multiple commands, use ControlMaster:\n"
                 "  ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh-%r@%h:%p -o ControlPersist=60s user@host 'command'\n"
                 "- Follow explicit user intent only; require clear confirmation for destructive operations.\n"

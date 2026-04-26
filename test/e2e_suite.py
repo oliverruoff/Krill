@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Local end-to-end scenario suite for Krill.
+"""Docker end-to-end scenario suite for Krill.
 
-The suite starts a fresh local Uvicorn instance with an isolated SQLite
-braindump, bootstraps auth, configures provider credentials from .env_test,
-executes live scenarios, and asks a dedicated judge model to grade results.
+The suite builds and starts a fresh Krill Docker container, bootstraps auth,
+configures provider credentials from .env_test, executes live scenarios, and
+asks a dedicated judge model to grade results.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import argparse
 import asyncio
 import json
 import os
-import socket
 import sqlite3
 import subprocess
 import sys
@@ -64,6 +63,9 @@ class E2EConfig:
     judge_model: str
     judge_api_key: str
     port: int
+    image: str
+    container_name: str
+    skip_build: bool
     timeout_seconds: int
     keep_artifacts: bool
 
@@ -99,6 +101,16 @@ class ScenarioResult:
     output_preview: str = ""
     judge_result: dict[str, object] = field(default_factory=dict)
     artifact_path: str = ""
+
+
+def run_cmd(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    process = subprocess.run(args, capture_output=True, text=True, encoding="utf-8")
+    if check and process.returncode != 0:
+        stderr = process.stderr.strip()
+        stdout = process.stdout.strip()
+        details = stderr or stdout or "No command output"
+        raise E2EFailure(f"Command failed ({' '.join(args)}): {details}")
+    return process
 
 
 class ApiClient:
@@ -168,67 +180,67 @@ class SuiteContext:
         self.config = config
         self.temp_dir = temp_dir
         self.artifacts_dir = artifacts_dir
-        self.db_path = temp_dir / "braindump.db"
-        self.stdout_path = temp_dir / "uvicorn.stdout.log"
-        self.stderr_path = temp_dir / "uvicorn.stderr.log"
-        self.base_url = f"http://127.0.0.1:{config.port}"
+        self.stdout_path = temp_dir / "docker.stdout.log"
+        self.stderr_path = temp_dir / "docker.stderr.log"
+        self.base_url = f"http://127.0.0.1:{config.port}" if config.port > 0 else ""
         self.client = ApiClient(self.base_url)
-        self.process: subprocess.Popen[str] | None = None
-        self._stdout_handle: Any = None
-        self._stderr_handle: Any = None
 
     def start_server(self) -> None:
-        env = os.environ.copy()
-        env.update(
-            {
-                "KRILL_BRAINDUMP_PATH": str(self.db_path),
-                "KRILL_AUTH_SESSION_SECRET": f"e2e-{uuid4()}",
-                "KRILL_AUTH_HASH_ITERATIONS": "100000",
-                "PYTHONUNBUFFERED": "1",
-            }
-        )
-        self._stdout_handle = self.stdout_path.open("w", encoding="utf-8")
-        self._stderr_handle = self.stderr_path.open("w", encoding="utf-8")
-        self.process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "app.main:app",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(self.config.port),
-            ],
-            cwd=str(self.config.repo_root),
-            env=env,
-            stdout=self._stdout_handle,
-            stderr=self._stderr_handle,
-            text=True,
-        )
+        if not self.config.skip_build:
+            _phase("SETUP", f"Building Docker image {self.config.image}")
+            run_cmd(["docker", "build", "-t", self.config.image, str(self.config.repo_root)])
+        _phase("SETUP", f"Starting Docker container {self.config.container_name}")
+        run_cmd(["docker", "rm", "-f", self.config.container_name], check=False)
+        run_args = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            self.config.container_name,
+            "-e",
+            f"KRILL_AUTH_SESSION_SECRET=e2e-{uuid4()}",
+            "-e",
+            "KRILL_AUTH_HASH_ITERATIONS=100000",
+        ]
+        if self.config.port > 0:
+            run_args.extend(["-p", f"127.0.0.1:{self.config.port}:8055"])
+        else:
+            run_args.append("-P")
+        run_args.append(self.config.image)
+        run_cmd(run_args)
+
+        if self.config.port <= 0:
+            result = run_cmd(["docker", "port", self.config.container_name, "8055/tcp"])
+            mapped = result.stdout.strip()
+            if not mapped or ":" not in mapped:
+                raise E2EFailure(f"Unable to determine mapped port for {self.config.container_name}")
+            self.config.port = int(mapped.rsplit(":", 1)[-1])
+        self.base_url = f"http://127.0.0.1:{self.config.port}"
+        self.client = ApiClient(self.base_url)
         self.wait_for_ready()
 
     def stop_server(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=12)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=12)
-        if self._stdout_handle is not None:
-            self._stdout_handle.close()
-        if self._stderr_handle is not None:
-            self._stderr_handle.close()
+        self.capture_logs()
+        run_cmd(["docker", "rm", "-f", self.config.container_name], check=False)
+
+    def capture_logs(self) -> None:
+        logs = run_cmd(["docker", "logs", self.config.container_name], check=False)
+        self.stdout_path.write_text(logs.stdout, encoding="utf-8", errors="replace")
+        self.stderr_path.write_text(logs.stderr, encoding="utf-8", errors="replace")
 
     def wait_for_ready(self) -> None:
         deadline = time.time() + self.config.timeout_seconds
         last_error = ""
         while time.time() < deadline:
-            if self.process is not None and self.process.poll() is not None:
+            inspect = run_cmd(
+                ["docker", "inspect", "-f", "{{.State.Running}}", self.config.container_name],
+                check=False,
+            )
+            if inspect.returncode == 0 and inspect.stdout.strip().lower() == "false":
+                logs = run_cmd(["docker", "logs", self.config.container_name], check=False)
                 raise E2EFailure(
-                    "Uvicorn exited before readiness. "
-                    f"stderr tail: {tail_file(self.stderr_path)}"
+                    "Docker container exited before readiness. "
+                    f"stderr tail: {logs.stderr[-4000:]}"
                 )
             try:
                 payload = self.client.json_request("GET", "/api/auth/status", timeout=5)
@@ -239,6 +251,35 @@ class SuiteContext:
                 last_error = str(exc)
             time.sleep(0.5)
         raise E2EFailure(f"Timed out waiting for Uvicorn readiness. Last error: {last_error}")
+
+    def container_exec(self, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return run_cmd(["docker", "exec", self.config.container_name, *args], check=check)
+
+    def container_file_exists(self, path: str) -> bool:
+        result = self.container_exec(["test", "-f", path], check=False)
+        return result.returncode == 0
+
+    def container_file_text(self, path: str) -> str:
+        result = self.container_exec(["python3", "-c", f"from pathlib import Path; print(Path({path!r}).read_text(encoding='utf-8', errors='replace'))"])
+        return result.stdout
+
+    def container_file_size(self, path: str) -> int:
+        result = self.container_exec(["python3", "-c", f"from pathlib import Path; print(Path({path!r}).stat().st_size)"])
+        return int(result.stdout.strip())
+
+    def container_png_files(self, directory: str) -> set[str]:
+        result = self.container_exec(
+            [
+                "python3",
+                "-c",
+                (
+                    "from pathlib import Path\n"
+                    f"p=Path({directory!r})\n"
+                    "print('\\n'.join(str(x) for x in sorted(p.glob('*.png')) if x.is_file())) if p.exists() else None\n"
+                ),
+            ]
+        )
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
     def bootstrap_and_configure(self) -> None:
         _phase("SETUP", "Bootstrapping authentication")
@@ -263,6 +304,8 @@ class SuiteContext:
         settings["setup_completed"] = True
         settings["active_provider_id"] = self.config.provider_id
         settings["active_model_id"] = self.config.model
+        settings["tool_max_recursion"] = 14
+        settings["tool_timeout_seconds"] = 120
         settings["provider_configs"] = {
             self.config.provider_id: {
                 "api_key": self.config.api_key,
@@ -272,6 +315,21 @@ class SuiteContext:
         settings["mcp_configs"] = {
             "brain_access": {"enabled": True, "params": {}},
             "timed_jobs": {"enabled": True, "params": {}},
+            "shell_access": {
+                "enabled": True,
+                "params": {"public_base_url": "http://127.0.0.1:8055"},
+            },
+            "browser_control": {
+                "enabled": True,
+                "params": {
+                    "headless": "true",
+                    "browser_type": "chromium",
+                    "navigation_timeout_ms": "45000",
+                    "action_timeout_ms": "30000",
+                    "max_snapshot_chars": "20000",
+                    "block_downloads": "true",
+                },
+            },
         }
         settings["chats"] = []
         settings["active_chat_id"] = ""
@@ -298,9 +356,11 @@ class SuiteContext:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run local Krill E2E scenario suite.")
+    parser = argparse.ArgumentParser(description="Run Docker-based Krill E2E scenario suite.")
     parser.add_argument("--env-file", default=DEFAULT_ENV_FILE, help="Path to .env_test.")
-    parser.add_argument("--port", type=int, default=0, help="Port override. Defaults to env or a free port.")
+    parser.add_argument("--port", type=int, default=0, help="Host port override. Defaults to env or Docker -P.")
+    parser.add_argument("--image", default="", help="Docker image tag. Defaults to env or krill:e2e-suite.")
+    parser.add_argument("--skip-build", action="store_true", help="Reuse an existing Docker image.")
     parser.add_argument("--keep-artifacts", action="store_true", help="Keep temp DB/log artifacts after success.")
     parser.add_argument("--scenario", action="append", default=[], help="Run only a scenario id. Repeatable.")
     args = parser.parse_args()
@@ -312,7 +372,15 @@ def main() -> int:
 
     try:
         env_values = parse_env_file(env_file)
-        config = build_config(repo_root, env_file, env_values, cli_port=args.port, cli_keep=args.keep_artifacts)
+        config = build_config(
+            repo_root,
+            env_file,
+            env_values,
+            cli_port=args.port,
+            cli_image=args.image,
+            cli_skip_build=args.skip_build,
+            cli_keep=args.keep_artifacts,
+        )
     except E2EFailure as exc:
         _fail(str(exc))
         return 2
@@ -329,10 +397,13 @@ def main() -> int:
     results: list[ScenarioResult] = []
 
     try:
-        _phase("SETUP", f"Starting local Krill at {context.base_url}")
+        _phase("SETUP", "Checking Docker availability")
+        run_cmd(["docker", "version"])
+        _phase("SETUP", "Starting Dockerized Krill")
         _info(f"App provider: {config.provider_id}/{config.model}")
         _info(f"Judge provider: {config.judge_provider_id}/{config.judge_model}")
         context.start_server()
+        _info(f"Krill container reachable at {context.base_url}")
         context.bootstrap_and_configure()
 
         selected = set(args.scenario)
@@ -355,7 +426,7 @@ def main() -> int:
         _fail(str(exc))
         return 1
     finally:
-        _phase("SETUP", "Stopping local Krill")
+        _phase("SETUP", "Stopping Dockerized Krill")
         context.stop_server()
         if config.keep_artifacts or any(result.status != "PASS" for result in results):
             _info(f"Artifacts kept at {temp_dir}")
@@ -390,6 +461,8 @@ def build_config(
     values: dict[str, str],
     *,
     cli_port: int,
+    cli_image: str,
+    cli_skip_build: bool,
     cli_keep: bool,
 ) -> E2EConfig:
     provider_id = value_from(values, "E2E_PROVIDER_ID", default="gemini").strip().lower()
@@ -418,8 +491,8 @@ def build_config(
         )
 
     port = cli_port or parse_int(value_from(values, "E2E_PORT"), default=0)
-    if port <= 0:
-        port = find_free_port()
+    image = cli_image.strip() or value_from(values, "E2E_IMAGE", default="krill:e2e-suite").strip()
+    skip_build = cli_skip_build or parse_bool(value_from(values, "E2E_SKIP_BUILD"), default=False)
     timeout_seconds = parse_int(value_from(values, "E2E_TIMEOUT_SECONDS"), default=DEFAULT_TIMEOUT_SECONDS)
     keep_artifacts = cli_keep or parse_bool(value_from(values, "E2E_KEEP_ARTIFACTS"), default=False)
     return E2EConfig(
@@ -432,6 +505,9 @@ def build_config(
         judge_model=judge_model,
         judge_api_key=judge_api_key,
         port=port,
+        image=image,
+        container_name=f"krill-e2e-suite-{uuid4().hex[:10]}",
+        skip_build=skip_build,
         timeout_seconds=max(30, timeout_seconds),
         keep_artifacts=keep_artifacts,
     )
@@ -547,12 +623,6 @@ def parse_bool(value: str, *, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
 def parse_sse_payload(stream_text: str) -> ChatStreamResult:
     assistant_text = ""
     saw_done = False
@@ -615,6 +685,7 @@ def build_scenarios() -> list[Scenario]:
     llm_marker = f"KRILL_E2E_LLM_{uuid4().hex[:10]}"
     memory_marker = f"KRILL_E2E_MEMORY_{uuid4().hex[:10]}"
     timed_marker = f"KRILL_E2E_TIMED_{uuid4().hex[:10]}"
+    weather_marker = f"KRILL_E2E_WEATHER_{uuid4().hex[:10]}"
     return [
         Scenario(
             id="fresh_setup",
@@ -661,6 +732,36 @@ def build_scenarios() -> list[Scenario]:
             ),
             run=run_timed_job_scenario,
         ),
+        Scenario(
+            id="weather_page_browser_screenshot",
+            title="Weather HTML Page + Browser Screenshot",
+            prompt=(
+                "Create a polished standalone HTML weather page for the current weather in Berlin, Germany. "
+                f"Save it as data/workspace/{weather_marker}.html and include the exact marker {weather_marker} "
+                "visibly in a small footer or data label. The page should look like a real weather site with "
+                "temperature, conditions, wind/humidity style details, and responsive CSS. Use shell access to "
+                "create the HTML file in the Linux container. Use POSIX shell commands and python3; the most "
+                "reliable method is a python3 command that writes the full HTML text with pathlib using UTF-8. "
+                "After the HTML file exists, do not run any command that writes to that HTML path again; the test "
+                "fails if the marker is missing or overwritten. You may fetch current weather with a public endpoint "
+                "if available, otherwise label the data as current sample weather. "
+                "Then use shell_access/share_file to create an HTTP link for the HTML, open that HTTP link with "
+                "browser_control, take a full-page browser screenshot, use shell_access/share_file for the PNG "
+                "screenshot, and reply with the screenshot download URL and a brief confirmation. Required order: "
+                "create HTML, share HTML, browser open, screenshot, share screenshot, final response."
+            ),
+            expected_output_prompt=(
+                f"The assistant must create an HTML weather page containing {weather_marker}, open it with "
+                "Browser Control, capture a screenshot, and return a shared screenshot URL."
+            ),
+            run=run_weather_page_browser_screenshot_scenario,
+            expected_tool_calls=[
+                ("shell_access", "execute_shell"),
+                ("shell_access", "share_file"),
+                ("browser_control", "browser_navigate"),
+                ("browser_control", "browser_screenshot"),
+            ],
+        ),
     ]
 
 
@@ -699,6 +800,7 @@ def run_scenario(context: SuiteContext, scenario: Scenario) -> ScenarioResult:
     except Exception as exc:  # noqa: BLE001
         duration = time.monotonic() - started_at
         artifact_payload["error"] = str(exc)
+        context.capture_logs()
         artifact_payload["app_stdout_tail"] = tail_file(context.stdout_path)
         artifact_payload["app_stderr_tail"] = tail_file(context.stderr_path)
         artifact_path = write_artifact(context, scenario.id, artifact_payload)
@@ -870,6 +972,52 @@ def run_timed_job_scenario(context: SuiteContext, scenario: Scenario) -> dict[st
         "matching_chat_title": matching_chat.get("title", ""),
         "matching_chat_hidden_from_history": matching_chat.get("hidden_from_history", False),
     }
+
+
+def run_weather_page_browser_screenshot_scenario(context: SuiteContext, scenario: Scenario) -> dict[str, object]:
+    marker = extract_marker(scenario.prompt, "KRILL_E2E_WEATHER_")
+    html_path = f"/app/data/workspace/{marker}.html"
+    screenshots_dir = "/app/data/screenshots"
+    before_screenshots = context.container_png_files(screenshots_dir)
+
+    stream = context.client.stream_chat(
+        context.chat_payload(scenario.prompt),
+        timeout=context.config.timeout_seconds,
+    )
+    assert_basic_stream(stream)
+    observations = stream_observations(stream)
+    assistant_output = stream.assistant_text
+
+    if not context.container_file_exists(html_path):
+        raise ScenarioFailure(f"Expected weather HTML file was not created: {html_path}")
+    html_text = context.container_file_text(html_path)
+    if marker not in html_text:
+        raise ScenarioFailure(f"Weather HTML file does not contain marker {marker}.")
+    if "<html" not in html_text.lower() or "weather" not in html_text.lower():
+        raise ScenarioFailure("Weather HTML file does not look like a weather HTML page.")
+
+    after_screenshots = context.container_png_files(screenshots_dir)
+    new_screenshots = [
+        str(path)
+        for path in sorted(after_screenshots.difference(before_screenshots))
+        if context.container_file_exists(path) and context.container_file_size(path) > 0
+    ]
+    if not new_screenshots:
+        raise ScenarioFailure("Browser Control did not create a new non-empty screenshot PNG.")
+    if "/api/files/shared/" not in assistant_output:
+        raise ScenarioFailure("Assistant output does not include a shared file download URL.")
+
+    observations.update(
+        {
+            "assistant_output": assistant_output,
+            "weather_marker": marker,
+            "html_path": str(html_path),
+            "html_size_bytes": context.container_file_size(html_path),
+            "new_screenshot_paths": new_screenshots,
+            "shared_file_url_present": True,
+        }
+    )
+    return observations
 
 
 def assert_basic_stream(stream: ChatStreamResult) -> None:

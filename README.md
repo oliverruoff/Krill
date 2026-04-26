@@ -628,9 +628,9 @@ Important:
 - if your external port is not `80`, include it (for example `http://localhost:8055`)
 - the exact callback URL must also be added to your Google OAuth client in Google Cloud Console
 
-### Local E2E Scenario Suite
+### Docker E2E Scenario Suite
 
-Run the local end-to-end scenario suite against a fresh temporary Krill instance:
+Run the end-to-end scenario suite against a freshly built Krill Docker container:
 
 ```bash
 python test/e2e_suite.py --env-file .env_test
@@ -652,11 +652,13 @@ Process environment variables override `.env_test`, which is useful for one-off 
 
 Optional values:
 
-- `E2E_PORT` to force a local port; otherwise the runner chooses a free port
+- `E2E_PORT` to force a host port; otherwise the runner uses Docker's published port mapping
 - `E2E_TIMEOUT_SECONDS` for provider-heavy scenarios
-- `E2E_KEEP_ARTIFACTS=1` to keep the temporary DB, Uvicorn logs, and JSON failure artifacts
+- `E2E_KEEP_ARTIFACTS=1` to keep Docker logs and JSON failure artifacts
+- `E2E_IMAGE` to choose the Docker image tag; default is `krill:e2e-suite`
+- `E2E_SKIP_BUILD=1` to reuse an existing image
 
-The runner starts `uvicorn app.main:app` with a temporary `KRILL_BRAINDUMP_PATH`, bootstraps a fresh admin session, configures the provider and core MCPs, then runs scenario-style tests for setup persistence, direct LLM usage, Brain Access memory saves, and timed-job triggering. Each scenario has a fixed user prompt and expected-output prompt; a dedicated judge model returns strict JSON pass/fail results. Failed scenarios keep sanitized artifacts under the run's temp `run-artifacts` directory.
+The runner builds the app image, starts a fresh container with Docker's published port mapping, bootstraps a fresh admin session, configures the provider and core MCPs, then runs scenario-style tests for setup persistence, direct LLM usage, Brain Access memory saves, timed-job triggering, and a heavier weather-page workflow that creates an HTML file inside the container, opens it with Browser Control inside the container, captures a screenshot, and shares the PNG. Each scenario has a fixed user prompt and expected-output prompt; a dedicated judge model returns strict JSON pass/fail results. Failed scenarios keep sanitized artifacts and Docker logs under the run's temp `run-artifacts` directory.
 
 To add scenarios, extend `build_scenarios()` in `test/e2e_suite.py` with a new `Scenario` entry and a small runner function that returns observations. Prefer hard API assertions first, then let the judge evaluate semantic output.
 

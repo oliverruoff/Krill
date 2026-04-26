@@ -474,12 +474,13 @@ async def _dispatch_gateway(
         )
     )
 
+    fresh_settings = await load_settings()
     if isinstance(used_tokens, int) and used_tokens > 0:
         chat.total_tokens_used = used_tokens
-        add_daily_usage(settings, used_tokens)
+        add_daily_usage(fresh_settings, used_tokens)
 
-    settings.chats.insert(0, chat)
-    await save_settings(settings)
+    fresh_settings.chats.insert(0, chat)
+    await save_settings(fresh_settings)
 
 
 def _is_transient_provider_error(exc: Exception) -> bool:
