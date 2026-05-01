@@ -69,6 +69,7 @@ export const state = {
   shortTermMemoryCount: 0,
   shortTermMemoryLastToastCount: 0,
   shortTermMemoryExtracting: false,
+  shortTermMemoryTypeOverrides: {},
   timedJobs: [],
   timedJobChannels: [],
   timedJobEditingId: "",

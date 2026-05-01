@@ -143,6 +143,7 @@ import {
   closeShortTermMemoryModal,
   loadShortTermMemories as loadShortTermMemory,
   handleShortTermAction,
+  handleShortTermTypeChange,
 } from "./short-term-memory.js";
 import {
   openTimedJobsModal,
@@ -460,6 +461,15 @@ if (shortTermMemoryRefreshButton instanceof HTMLButtonElement) {
 }
 
 if (shortTermMemoryListNode instanceof HTMLElement) {
+  shortTermMemoryListNode.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLSelectElement) || target.dataset.shortTermType !== "1") {
+      return;
+    }
+
+    handleShortTermTypeChange(target.dataset.shortTermId, target.value);
+  });
+
   shortTermMemoryListNode.addEventListener("click", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLButtonElement)) {

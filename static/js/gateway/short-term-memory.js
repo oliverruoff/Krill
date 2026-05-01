@@ -46,6 +46,30 @@ async function resolveShortTermMemory(items) {
   return response.json();
 }
 
+function normalizeShortTermMemoryType(value) {
+  return value === "core" ? "core" : "normal";
+}
+
+function mergeShortTermMemorySelections(items) {
+  const overrides = state.shortTermMemoryTypeOverrides && typeof state.shortTermMemoryTypeOverrides === "object"
+    ? state.shortTermMemoryTypeOverrides
+    : {};
+  return items.map((item) => {
+    const itemId = String(item?.id ?? "");
+    const overrideType = normalizeShortTermMemoryType(overrides[itemId]);
+    if (!itemId || !(itemId in overrides)) {
+      return {
+        ...item,
+        memory_type: normalizeShortTermMemoryType(item?.memory_type),
+      };
+    }
+    return {
+      ...item,
+      memory_type: overrideType,
+    };
+  });
+}
+
 export function updateShortTermMemoryBadge() {
   const hasDesktopNode = shortTermMemoryStatusNode instanceof HTMLElement;
   const hasMobileNode = mobileLeftShortTermMemoryStatusNode instanceof HTMLElement;
@@ -186,7 +210,7 @@ export async function loadShortTermMemories(renderModal = false) {
 
   try {
     const payload = await fetchShortTermMemory();
-    const items = Array.isArray(payload.items) ? payload.items : [];
+    const items = mergeShortTermMemorySelections(Array.isArray(payload.items) ? payload.items : []);
     state.shortTermMemoryExtracting = Boolean(payload?.extraction?.in_progress);
     const previousCount = state.shortTermMemoryCount;
     state.shortTermMemories = items;
@@ -221,6 +245,26 @@ export async function loadShortTermMemories(renderModal = false) {
   }
 }
 
+export function handleShortTermTypeChange(suggestionId, memoryType) {
+  const itemId = Number.parseInt(String(suggestionId), 10);
+  if (!Number.isFinite(itemId)) {
+    return;
+  }
+
+  const selectedType = normalizeShortTermMemoryType(memoryType);
+  const itemKey = String(itemId);
+  state.shortTermMemoryTypeOverrides[itemKey] = selectedType;
+  state.shortTermMemories = state.shortTermMemories.map((entry) => {
+    if (Number(entry?.id) !== itemId) {
+      return entry;
+    }
+    return {
+      ...entry,
+      memory_type: selectedType,
+    };
+  });
+}
+
 export async function handleShortTermAction(action, suggestionId) {
   const itemId = Number.parseInt(String(suggestionId), 10);
   if (!Number.isFinite(itemId)) {
@@ -237,6 +281,7 @@ export async function handleShortTermAction(action, suggestionId) {
 
   try {
     await resolveShortTermMemory([{ id: itemId, action, memory_type: selectedType }]);
+    delete state.shortTermMemoryTypeOverrides[String(itemId)];
     state.shortTermMemories = state.shortTermMemories.filter((entry) => Number(entry.id) !== itemId);
     state.shortTermMemoryCount = Math.max(0, state.shortTermMemories.length);
     if (shortTermMemoryMetaNode instanceof HTMLElement) {
