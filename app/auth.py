@@ -49,11 +49,11 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def _session_ttl_seconds() -> int:
-    raw = str(os.getenv("KRILL_AUTH_SESSION_TTL_SECONDS", "86400")).strip()
+    raw = str(os.getenv("KRILL_AUTH_SESSION_TTL_SECONDS", "2592000")).strip()
     try:
         value = int(raw)
     except ValueError:
-        return 86400
+        return 2592000
     return max(900, min(2592000, value))
 
 
@@ -255,7 +255,8 @@ async def resolve_session(cookie_value: str) -> AuthSession | None:
     if not hmac.compare_digest(str(session.get("session_hash", "")), _session_hash(token)):
         return None
 
-    await touch_auth_session(session_id)
+    renewed_expires_at = (_now_utc() + timedelta(seconds=_session_ttl_seconds())).isoformat()
+    await touch_auth_session(session_id, expires_at=renewed_expires_at)
     return AuthSession(
         user_id=str(session.get("user_id", "")),
         username=str(session.get("username", "")),

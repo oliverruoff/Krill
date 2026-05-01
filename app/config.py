@@ -2823,18 +2823,21 @@ def _get_auth_session_by_id_sync(session_id: str) -> dict[str, str] | None:
         conn.close()
 
 
-async def touch_auth_session(session_id: str) -> None:
+async def touch_auth_session(session_id: str, *, expires_at: str) -> None:
     await ensure_settings_file()
     async with _DB_LOCK:
-        await asyncio.to_thread(_touch_auth_session_sync, session_id)
+        await asyncio.to_thread(_touch_auth_session_sync, session_id, expires_at)
 
 
-def _touch_auth_session_sync(session_id: str) -> None:
+def _touch_auth_session_sync(session_id: str, expires_at: str) -> None:
     conn = _get_conn(BRAINDUMP_PATH)
     now_iso = _utc_now_iso()
     try:
         conn.execute("BEGIN TRANSACTION")
-        conn.execute("UPDATE auth_sessions SET last_seen_at = ? WHERE session_id = ?", (now_iso, session_id))
+        conn.execute(
+            "UPDATE auth_sessions SET last_seen_at = ?, expires_at = ? WHERE session_id = ?",
+            (now_iso, str(expires_at).strip(), session_id),
+        )
         conn.commit()
     except Exception:
         conn.rollback()

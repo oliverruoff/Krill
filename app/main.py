@@ -9,7 +9,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .auth import is_bootstrap_required, resolve_session_from_request
+from .auth import (
+    SESSION_COOKIE_NAME,
+    is_bootstrap_required,
+    resolve_session_from_request,
+    session_cookie_max_age,
+    session_cookie_secure,
+)
 from .config import ensure_settings_file
 from .integrations import get_runtime_integrations
 from .memory_extraction import start_memory_extraction_worker, stop_memory_extraction_worker
@@ -121,7 +127,17 @@ async def require_authentication(request: Request, call_next):
 
     request.state.auth_user_id = session["user_id"]
     request.state.auth_username = session["username"]
-    return await call_next(request)
+    response = await call_next(request)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=str(request.cookies.get(SESSION_COOKIE_NAME, "")),
+        max_age=session_cookie_max_age(),
+        httponly=True,
+        secure=session_cookie_secure(request),
+        samesite="lax",
+        path="/",
+    )
+    return response
 
 
 # ---------------------------------------------------------------------------
