@@ -58,6 +58,9 @@ TELEGRAM_CONTEXT_WINDOW_WARNING = (
     "Heads up: this chat is above 75% of the model context window. "
     "Consider /new to start a fresh chat."
 )
+# Number of most-recent user+assistant messages preserved verbatim after compaction
+# so the model can continue an in-progress task without losing recent context.
+_COMPACTION_TAIL_SIZE = 6
 
 
 class TelegramCommandResponse(TypedDict, total=False):
@@ -815,7 +818,7 @@ class TelegramBridgeWorker:
                 return _markdown_command_response("No active chat available to compact.")
 
             try:
-                compacted_memory, used_tokens = await _compact_telegram_chat(settings, active)
+                compacted_memory, used_tokens, tail_messages = await _compact_telegram_chat(settings, active)
             except Exception as exc:
                 return _markdown_command_response(f"Compaction failed: {exc}")
 
@@ -826,6 +829,7 @@ class TelegramBridgeWorker:
             new_chat = _create_chat_entry(f"{active.title} compacted")
             new_chat.memory_block = compacted_text
             ensure_runtime_context_seed(new_chat, settings)
+            # Add the compaction marker so the model knows old context was summarized.
             new_chat.messages.append(
                 ChatMessage(
                     role="system",
@@ -834,12 +838,27 @@ class TelegramBridgeWorker:
                     system_type="memory_compaction",
                 )
             )
+            # Append the most-recent messages verbatim so the model can continue
+            # any in-progress task exactly where it left off.
+            for tail_msg in tail_messages:
+                new_chat.messages.append(
+                    ChatMessage(
+                        role=tail_msg.role,
+                        content=tail_msg.content,
+                        timestamp=tail_msg.timestamp or _timestamp(),
+                        system_type=tail_msg.system_type,
+                        tool_usage=tail_msg.tool_usage,
+                        request_id=tail_msg.request_id,
+                        status=tail_msg.status,
+                    )
+                )
             runtime["chats"].append(new_chat)
             runtime["active_chat_id"] = new_chat.id
 
+            tail_note = f" ({len(tail_messages)} recent messages kept)" if tail_messages else ""
             used_suffix = f"\nCompaction tokens used: {used_tokens}" if isinstance(used_tokens, int) and used_tokens > 0 else ""
             return _markdown_command_response(
-                f"Compaction complete.\n"
+                f"Compaction complete{tail_note}.\n"
                 f"New active chat: {new_chat.title} ({_short_chat_id(new_chat.id)})"
                 f"{used_suffix}"
             )
@@ -1017,14 +1036,14 @@ class TelegramBridgeWorker:
             used_tools = engine_result["used_mcp_tools"]
             trace_messages = engine_result["system_trace_messages"]
             assistant_status = "done"
-            if is_over_context_threshold(used_tokens, token_limit, threshold=0.75):
-                text_response = f"{text_response}\n\n{TELEGRAM_CONTEXT_WINDOW_WARNING}" if text_response else TELEGRAM_CONTEXT_WINDOW_WARNING
+            _auto_compact_pending = is_over_context_threshold(used_tokens, token_limit, threshold=0.75)
         except Exception as exc:
             text_response = f"Hard error: {exc}"
             used_tokens = None
             used_tools = []
             trace_messages = _build_failure_trace_messages(exc)
             assistant_status = "error"
+            _auto_compact_pending = False
 
         final_timestamp = _timestamp()
         for entry in trace_messages:
@@ -1080,6 +1099,48 @@ class TelegramBridgeWorker:
             token_increment += image_tokens
         if token_increment > 0:
             settings.daily_token_usage = await increment_daily_token_usage(token_increment)
+
+        # Auto-compact in-place when the context threshold is exceeded.
+        # This keeps the last _COMPACTION_TAIL_SIZE user/assistant messages verbatim
+        # so the model can continue any in-progress task, and archives older messages
+        # so they are no longer sent to the LLM (but are still readable in the chat).
+        if _auto_compact_pending:
+            try:
+                compacted_memory, _, tail_messages = await _compact_telegram_chat(settings, active_chat)
+                compacted_text = compacted_memory.strip()
+                if compacted_text:
+                    active_chat.memory_block = compacted_text
+                    # Mark all current user/assistant messages as archived except the tail.
+                    tail_ids = {id(m) for m in tail_messages}
+                    for msg in active_chat.messages:
+                        if msg.role in {"user", "assistant"} and id(msg) not in tail_ids:
+                            msg.archived = True
+                    # Insert the compaction marker before the tail messages.
+                    # Find the position of the first tail message in active_chat.messages.
+                    if tail_messages:
+                        first_tail_id = id(tail_messages[0])
+                        insert_pos = next(
+                            (i for i, m in enumerate(active_chat.messages) if id(m) == first_tail_id),
+                            len(active_chat.messages),
+                        )
+                    else:
+                        insert_pos = len(active_chat.messages)
+                    active_chat.messages.insert(
+                        insert_pos,
+                        ChatMessage(
+                            role="system",
+                            content=f"Compacted memory\n\n{compacted_text}",
+                            timestamp=_timestamp(),
+                            system_type="memory_compaction",
+                        ),
+                    )
+                    text_response = (
+                        f"{text_response}\n\n_(Chat context was automatically compacted.)_"
+                        if text_response
+                        else "_(Chat context was automatically compacted.)_"
+                    )
+            except Exception as compact_exc:
+                logger.warning("telegram: auto-compaction failed: %s", compact_exc)
 
         if image_analysis_for_reply:
             return f"Image analysis: {image_analysis_for_reply}\n\n{text_response}".strip()
@@ -1552,6 +1613,7 @@ def _build_compaction_prompt(existing_memory: str, target_token_limit: int) -> s
 
 
 def _build_compaction_history(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    """Return all user/assistant messages for use as LLM context during compaction."""
     history: list[dict[str, str]] = []
     for message in messages:
         if message.role not in {"user", "assistant"}:
@@ -1563,7 +1625,40 @@ def _build_compaction_history(messages: list[ChatMessage]) -> list[dict[str, str
     return history
 
 
-async def _compact_telegram_chat(settings: Settings, chat: ChatSession) -> tuple[str, int | None]:
+def _split_compaction_history(
+    messages: list[ChatMessage], tail_size: int
+) -> tuple[list[dict[str, str]], list[ChatMessage]]:
+    """Split messages into (head_for_llm, tail_chat_messages) for tail-preserving compaction.
+
+    The head contains all user/assistant messages except the last ``tail_size``,
+    formatted for the LLM.  The tail contains the last ``tail_size``
+    user/assistant ChatMessage objects so they can be kept verbatim in the chat.
+    """
+    user_assistant: list[ChatMessage] = [
+        m for m in messages
+        if m.role in {"user", "assistant"} and m.content.strip()
+    ]
+    tail_size = max(0, tail_size)
+    if tail_size >= len(user_assistant):
+        # Nothing to compact — the entire history would be the tail.
+        return [], user_assistant
+
+    head_messages = user_assistant[: len(user_assistant) - tail_size]
+    tail_messages = user_assistant[len(user_assistant) - tail_size :]
+
+    head_for_llm = [{"role": m.role, "content": m.content.strip()} for m in head_messages]
+    return head_for_llm, tail_messages
+
+
+async def _compact_telegram_chat(
+    settings: Settings, chat: ChatSession, tail_size: int = _COMPACTION_TAIL_SIZE
+) -> tuple[str, int | None, list[ChatMessage]]:
+    """Compact a Telegram chat's history into a memory block.
+
+    Returns ``(compacted_text, used_tokens, tail_messages)`` where
+    ``tail_messages`` are the last ``tail_size`` user/assistant messages that
+    should be kept verbatim so the model can continue in-progress tasks.
+    """
     if not settings.setup_completed:
         raise RuntimeError("Setup is not complete.")
 
@@ -1584,9 +1679,9 @@ async def _compact_telegram_chat(settings: Settings, chat: ChatSession) -> tuple
     if not api_key:
         raise RuntimeError("Provider API key is missing.")
 
-    history = _build_compaction_history(chat.messages)
+    head_history, tail_messages = _split_compaction_history(chat.messages, tail_size)
     previous_memory = chat.memory_block.strip()
-    if not history and not previous_memory:
+    if not head_history and not previous_memory:
         raise RuntimeError("Nothing to compact in the active chat.")
 
     token_limit = get_provider_model_limit(active_provider_id, model_id) or 0
@@ -1596,6 +1691,6 @@ async def _compact_telegram_chat(settings: Settings, chat: ChatSession) -> tuple
         system_prompt=_compaction_system_prompt(),
         model=model_id,
         api_key=api_key,
-        history=history,
+        history=head_history,
     )
-    return compacted_text, used_tokens
+    return compacted_text, used_tokens, tail_messages

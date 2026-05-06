@@ -276,6 +276,7 @@ async function runGatewaySummarizeCommand(chat, message) {
 function toApiChatHistory(messages) {
   return messages
     .filter((turn) => turn && (turn.role === "user" || turn.role === "assistant" || turn.role === "system"))
+    .filter((turn) => !turn.archived)
     .filter((turn) => typeof turn.content === "string" && turn.content.trim())
     .filter((turn) => {
       if (turn.role !== "system") {
@@ -790,6 +791,21 @@ async function processChatQueue(chatId) {
       runtime.activeRequestId = job.requestId;
       await executeQueuedJob(chat, job, runtime);
       runtime.activeRequestId = "";
+
+      // Re-snapshot history for any remaining queued jobs.
+      // If compaction ran during the job that just finished, the frozen snapshots
+      // in pending jobs would be stale (pre-compaction history).  Rebuilding them
+      // here ensures every subsequent job sees the current, possibly-compacted state.
+      if (runtime.queue.length > 0) {
+        const freshHistory = toApiChatHistory(chat.messages);
+        const freshMemoryBlock = chat.memory_block || "";
+        for (const pendingJob of runtime.queue) {
+          if (pendingJob && pendingJob.snapshot) {
+            pendingJob.snapshot.history = freshHistory;
+            pendingJob.snapshot.memoryBlock = freshMemoryBlock;
+          }
+        }
+      }
 
       try {
         const { persistChatsToSettings } = await import("./chat-sync.js");

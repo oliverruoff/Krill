@@ -965,6 +965,8 @@ def _build_gateway_history(messages: list[ChatMessage]) -> list[dict[str, str]]:
     for turn in messages:
         if turn.role not in {"user", "assistant", "system"}:
             continue
+        if turn.archived:
+            continue
         content = turn.content.strip()
         if not content:
             continue

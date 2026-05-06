@@ -63,6 +63,7 @@ class ChatMessage(BaseModel):
     tool_usage: list[dict[str, str]] = Field(default_factory=list)
     request_id: str = ""
     status: str = ""
+    archived: bool = False  # When True: shown in UI but excluded from LLM context
 
 
 class ChatSession(BaseModel):
@@ -321,6 +322,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           system_type TEXT NOT NULL DEFAULT '',
           request_id TEXT NOT NULL DEFAULT '',
           status TEXT NOT NULL DEFAULT '',
+          archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
           FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
           UNIQUE (chat_id, seq)
         );
@@ -497,6 +499,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _ensure_settings_core_column(conn, "theme", "TEXT NOT NULL DEFAULT 'light'")
     _ensure_settings_core_column(conn, "last_daily_summary_date", "TEXT NOT NULL DEFAULT ''")
     _ensure_chats_column(conn, "hidden_from_history", "INTEGER NOT NULL DEFAULT 0 CHECK (hidden_from_history IN (0,1))")
+    _ensure_chat_messages_column(conn, "archived", "INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1))")
     _ensure_telegram_state_column(conn, "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_telegram_state_column(conn, "approved_group_ids_json", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_telegram_state_column(conn, "guest_allowed_mcp_ids_json", "TEXT NOT NULL DEFAULT '[]'")
@@ -550,6 +553,14 @@ def _ensure_chats_column(conn: sqlite3.Connection, column_name: str, definition:
     if column_name in existing:
         return
     conn.execute(f"ALTER TABLE chats ADD COLUMN {column_name} {definition}")
+
+
+def _ensure_chat_messages_column(conn: sqlite3.Connection, column_name: str, definition: str) -> None:
+    rows = conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+    existing = {str(row["name"]) for row in rows}
+    if column_name in existing:
+        return
+    conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {column_name} {definition}")
 
 
 def _backfill_hidden_history_flags(conn: sqlite3.Connection) -> None:
@@ -1006,8 +1017,8 @@ def _save_settings_sync(settings: Settings) -> None:
             for msg in chat.messages:
                 if msg.role == "system":
                     continue
-                cursor = conn.execute("INSERT INTO chat_messages (chat_id, seq, role, content, timestamp, system_type, request_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (chat.id, seq, msg.role, msg.content, msg.timestamp, msg.system_type, msg.request_id, msg.status))
+                cursor = conn.execute("INSERT INTO chat_messages (chat_id, seq, role, content, timestamp, system_type, request_id, status, archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (chat.id, seq, msg.role, msg.content, msg.timestamp, msg.system_type, msg.request_id, msg.status, int(msg.archived)))
                 msg_id = cursor.lastrowid
                 for j, tool in enumerate(msg.tool_usage):
                     conn.execute("INSERT INTO message_tool_usage (message_id, seq, mcp_id, mcp_label, tool_id, tool_label) VALUES (?, ?, ?, ?, ?, ?)",
@@ -1230,6 +1241,7 @@ def _load_chats_from_conn(conn: sqlite3.Connection) -> list[ChatSession]:
                 tool_usage=tools,
                 request_id=msg_row["request_id"],
                 status=msg_row["status"],
+                archived=bool(msg_row["archived"]) if "archived" in msg_row.keys() else False,
             ))
 
         chats.append(ChatSession(
@@ -1267,8 +1279,8 @@ def _rewrite_chat_tables(conn: sqlite3.Connection, chats: list[ChatSession]) -> 
             if msg.role == "system":
                 continue
             cursor = conn.execute(
-                "INSERT INTO chat_messages (chat_id, seq, role, content, timestamp, system_type, request_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (chat.id, seq, msg.role, msg.content, msg.timestamp, msg.system_type, msg.request_id, msg.status),
+                "INSERT INTO chat_messages (chat_id, seq, role, content, timestamp, system_type, request_id, status, archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (chat.id, seq, msg.role, msg.content, msg.timestamp, msg.system_type, msg.request_id, msg.status, int(msg.archived)),
             )
             msg_id = cursor.lastrowid
             for j, tool in enumerate(msg.tool_usage):

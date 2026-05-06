@@ -77,7 +77,8 @@ def build_model_history(chat: ChatSession) -> list[dict[str, str]]:
     return [
         {"role": message.role, "content": message.content}
         for message in chat.messages
-        if message.role in {"user", "assistant", "system"}
+        if not message.archived
+        and message.role in {"user", "assistant", "system"}
         and message.content.strip()
         and (
             message.role != "system"

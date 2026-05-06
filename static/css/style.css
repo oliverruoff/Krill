@@ -2826,6 +2826,15 @@ button:disabled {
   border-color: var(--chat-assistant-border);
 }
 
+.archived-message {
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+}
+
+.archived-message:hover {
+  opacity: 0.7;
+}
+
 .tool-usage-note {
   margin: 0.24rem 0 0;
   font-size: 0.73rem;

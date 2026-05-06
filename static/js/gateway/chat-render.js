@@ -36,11 +36,14 @@ function hasVisibleExecutionUpdate(chat, requestId = "") {
   ));
 }
 
-function addMessage(role, text = "", timestamp = "", status = "", systemType = "") {
+function addMessage(role, text = "", timestamp = "", status = "", systemType = "", archived = false) {
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message ${role}`;
   if (status) {
     wrapper.classList.add(`status-${status}`);
+  }
+  if (archived) {
+    wrapper.classList.add("archived-message");
   }
 
   const title = document.createElement("p");
@@ -199,6 +202,7 @@ async function renderActiveChat() {
       String(turn.timestamp ?? ""),
       String(turn.status ?? ""),
       String(turn.system_type ?? ""),
+      Boolean(turn.archived),
     );
     if (turn.role === "assistant") {
       const wrapper = bubble.parentElement;

@@ -80,6 +80,7 @@ function ensureRuntimeContextSeed(chat) {
 function toApiChatHistory(messages) {
   return messages
     .filter((turn) => turn && (turn.role === "user" || turn.role === "assistant" || turn.role === "system"))
+    .filter((turn) => !turn.archived)
     .filter((turn) => typeof turn.content === "string" && turn.content.trim())
     .filter((turn) => {
       if (turn.role !== "system") {
