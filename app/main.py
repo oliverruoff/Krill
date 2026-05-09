@@ -141,8 +141,14 @@ async def require_authentication(request: Request, call_next):
     return response
 
 
-# ---------------------------------------------------------------------------
-# Lifecycle events
+@app.middleware("http")
+async def static_js_no_cache(request: Request, call_next):
+    """Prevent browsers from caching JS/CSS static files across deploys."""
+    response = await call_next(request)
+    path = request.url.path or "/"
+    if path.startswith("/static/js/") or path.startswith("/static/css/"):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
 # ---------------------------------------------------------------------------
 
 @app.on_event("startup")
