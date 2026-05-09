@@ -26,10 +26,12 @@ RUN apt-get update \
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
+COPY pi-sidecar /app/pi-sidecar
 COPY app /app/app
 COPY static /app/static
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 
+RUN npm --prefix /app/pi-sidecar install --omit=dev
 RUN npm --prefix /app/app/integrations/whatsapp/sidecar install --omit=dev
 
 RUN mkdir -p /app/data

@@ -1,0 +1,14 @@
+{
+  "name": "krill-pi-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "check": "node --check index.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "latest",
+    "@earendil-works/pi-ai": "latest"
+  }
+}

@@ -11,6 +11,7 @@ data/scripts/
 data/whatsapp*
 app/integrations/whatsapp/sidecar/.wwebjs_cache/
 app/integrations/whatsapp/sidecar/node_modules/
+pi-sidecar/node_modules/
 braindump.json
 braindump.json.bak
 .env_test

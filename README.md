@@ -37,7 +37,7 @@ The Krill gateway is the main window, used for chatting, tool selection and main
 - Timed-job auth failures are de-noised: Krill sends one reconnect warning, suppresses repeated auth-expired spam, and advances the schedule instead of tight-loop retries
 - Gateway and Setup show a visible warning banner while timed-job auth-expiry suppression is active
 - Reconnecting the affected OAuth provider clears the timed-job auth warning immediately, without waiting for the next successful scheduled run
-- Let Krill orchestrate multi-step tool flows automatically with intent classification, reusable execution pipelines, validation gates, and fallback routing
+- Let Pi handle multi-step agent decisions, coding/shell/file/git work, context compaction, and token/context stats while Krill keeps the Gateway, integrations, MCP configuration, and chat persistence
 - See plain-language live execution progress before meaningful tool calls instead of raw low-level trace spam or internal workflow labels, including fast-updating Gateway tool-selection and execution messages during queued runs
 - Stop running tool chains from Gateway or Telegram with `/stop`, then return to a clean ready state
 - Summarize the current chat context from Gateway or Telegram with `/summarize`
@@ -127,13 +127,12 @@ MiniMax provider notes:
 
 Tool integrations live in `app/mcps/` and are registered once in `app/mcps/registry.py`.
 
-Orchestration notes:
+Pi runtime notes:
 
-- the orchestrator now classifies tasks into generic execution patterns before acting
-- tool routing prefers stronger/native integrations first and keeps lower-confidence routes as fallback options
-- weak-model tool planning is hardened against provider-native tool markup leaking into user-visible replies; recoverable wrappers are converted back into real MCP calls
-- important tool results pass lightweight validation gates before the workflow advances
-- Gateway SSE and Telegram share the same execution event model for progress visibility and cancellation-aware execution
+- `app/tooling/pi_orchestrator.py` bridges Krill chat execution to the bundled `pi-sidecar`
+- Pi owns agent reasoning, built-in coding/shell/file/git tools, session context, auto-compaction, and token/context usage stats
+- Krill exposes only app-specific enabled MCPs to Pi as custom tools; overlapping MCPs such as `shell_access`, `git_ops`, and `opencode` are hidden so Pi can use its native tools instead
+- Gateway SSE and Telegram share the same execution event model for progress visibility and cancellation-aware Pi execution
 - Matrix integration adds three access roles: `admin_usage`, `assistant_usage`, and `no_assistant_usage`
 - Matrix `assistant_usage` can be hard-limited to a checked MCP allowlist in the Gateway integration panel
 - Matrix direct messages from non-admin users get a static denial once; approved group rooms only respond on mention/reply
@@ -142,7 +141,7 @@ Current tools:
 
 - `browser_control` (disabled by default, browser automation for navigation, form interactions, waiting, and extraction)
 - `brave_search`
-- `git_ops`
+- `git_ops` (managed by Pi built-ins during chat execution; still listed/configurable in Krill)
 - `home_assistant` (token-based Home Assistant access; defaults base URL to `http://homeassistant.local:8123`)
 - `google_services` (disabled by default, OAuth login, read-only/read-write modes for Gmail, Calendar, and Drive)
 - `shell_access` (enabled by default, generic shell command execution — ssh, grep, sed, python, scripts, scp, curl, etc. — plus `share_file` for temporary signed download links)
@@ -150,7 +149,7 @@ Current tools:
   - set Shell Access `Public Base URL` to your reachable host:port (for example `http://192.168.1.126:8055`) so absolute links use the correct endpoint
   - Telegram `/debug` links auto-use `KRILL_PUBLIC_BASE_URL` when set; otherwise Krill falls back to a detected LAN IP with optional `KRILL_PUBLIC_PORT` override (default `8055`)
 - `brain_access` (enabled by default)
-- `opencode` (disabled by default, delegates coding work to `npx opencode run`)
+- `opencode` (disabled by default, delegates coding work to `npx opencode run`; Pi built-ins are preferred during chat execution)
 - `scripts` (disabled by default, creates DB-backed Python scripts with metadata comments in `data/scripts`)
 - `timed_jobs` (manage timed jobs via tools: list/get/create/update/delete/trigger)
 - `youtube_summarizer` (enabled by default, fetches YouTube transcripts and summarizes videos)
@@ -204,7 +203,7 @@ Krill `scripts` is the Python-file pendant to Agent Skills:
 
 This gives Krill a progressive-disclosure-like flow:
 
-1. the orchestrator gets lightweight script discovery context (`title`, `description`, `path`)
+1. Pi sees enabled Krill script tools as custom MCP-backed tools
 2. when relevant, it can call `scripts.execute_script`
 3. script execution is explicit and observable through MCP tool traces
 
@@ -348,20 +347,19 @@ Telegram integration notes:
 - Telegram renders Markdown pipe tables as compact monospaced text tables for readable mobile display
 - Telegram converts `/api/files/shared/<token>` links in assistant output into native Telegram document attachments when possible
 
-### 4) Orchestrator (reason + act loop)
+### 4) Pi Runtime (reason + act loop)
 
-The orchestrator (`app/tooling/orchestrator.py`) runs a sequential recursive loop:
+Krill chat execution delegates the reason-and-act loop to Pi through `app/tooling/pi_orchestrator.py` and the bundled `pi-sidecar` package.
 
-1. decide whether to call a tool or respond
-2. call one tool (with timeout)
-3. feed result back into next planning step
-4. repeat up to max recursion
-5. produce final answer
+1. Krill composes runtime identity/memory/tool policy context
+2. Pi receives the user request in the persistent Pi session for that Krill chat/channel
+3. Pi chooses between its native coding/shell/file/git tools and Krill-specific custom MCP tools
+4. Pi handles compaction, context tracking, token/session stats, tool sequencing, and the final answer
 
 This allows multi-step workflows like:
 
 - clone repo with Git tool
-- inspect files with Local Files tool
+- inspect files with Pi file tools
 - summarize project for user
 
 Advanced controls (setup -> Advanced Settings):
@@ -393,7 +391,7 @@ Exact message workflow (Gateway):
 3. `app/main.py` calls shared engine `generate_chat_response(...)`
 4. Shared engine composes runtime system prompt via `compose_runtime_system_prompt(...)` in `app/runtime_prompt.py`
 5. Runtime prompt includes current local server time (+ optional compacted `memory_block`); identity/behavior/core-memory instructions are seeded into chat history at chat start and after compaction
-6. Shared engine calls orchestrator `generate_with_tools(...)` (which can select `brain_access` for memory-grounded recall, braindump inspection, and assistant behavior updates)
+6. Shared engine calls Pi-backed `generate_with_tools(...)` (which can expose `brain_access` and other app-specific Krill MCPs as Pi custom tools)
 7. SSE streams back `tool_step`, `meta`, `token`, then `done` (or `error`)
 8. Gateway finalizes assistant message, tool usage, and token counters, then persists Gateway chat state
 
@@ -403,7 +401,7 @@ Exact message workflow (Telegram):
 2. Owner and mention/reply rules are enforced
 3. Telegram message is added to Telegram's in-memory chat session (ephemeral), and runtime seed context is ensured
 4. Worker calls shared engine `generate_chat_response(...)`
-5. Shared engine uses the same runtime system prompt composition and `generate_with_tools(...)` path as Gateway
+5. Shared engine uses the same runtime system prompt composition and Pi-backed `generate_with_tools(...)` path as Gateway
 6. Worker appends assistant result to Telegram in-memory chat and replies via Telegram Bot API (adds a `/new` hint if context usage is >= 75%)
 7. Telegram chat history is not written to Gateway chats or `braindump.db`
 
@@ -539,6 +537,7 @@ Windows PowerShell:
 ```bash
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+npm --prefix pi-sidecar install
 uvicorn app.main:app --reload --port 8055
 ```
 
@@ -547,6 +546,7 @@ macOS/Linux:
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt
+npm --prefix pi-sidecar install
 uvicorn app.main:app --reload --port 8055
 ```
 
@@ -566,7 +566,7 @@ Run:
 docker run -d --name krill-app --restart unless-stopped -p 8055:8055 -v krill_data:/app/data ghcr.io/oliverruoff/krill:latest
 ```
 
-The container image includes Node.js/npm and Git tooling (`git`, `ssh`, `ssh-keygen`, `gh`) so OpenCode/Git MCP workflows run end-to-end.
+The container image includes Node.js/npm, the bundled Pi sidecar, and Git tooling (`git`, `ssh`, `ssh-keygen`, `gh`) so Pi/OpenCode/Git workflows run end-to-end.
 It also starts `Xvfb` by default (`KRILL_ENABLE_XVFB=1`) so Browser Control headed mode can run inside Docker without a host X server.
 
 Optional (disable virtual display/Xvfb):

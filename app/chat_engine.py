@@ -115,6 +115,7 @@ async def generate_chat_response(
             system_prompt=runtime_system_prompt,
             model=model_id,
             api_key=api_key_value,
+            provider_id=active_provider_id,
             history=history,
             max_tool_recursion=settings.tool_max_recursion,
             tool_timeout_seconds=settings.tool_timeout_seconds,
