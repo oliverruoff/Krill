@@ -696,7 +696,8 @@ async function executeQueuedJob(chat, job, runtime) {
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
 
-    while (true) {
+    let streamDone = false;
+    while (!streamDone) {
       const { done, value } = await reader.read();
       if (done) {
         break;
@@ -717,6 +718,7 @@ async function executeQueuedJob(chat, job, runtime) {
         }
 
         if (result.done) {
+          streamDone = true;
           break;
         }
       }
