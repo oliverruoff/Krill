@@ -351,6 +351,7 @@ class PiSidecarManager:
         session_completion_task = asyncio.create_task(self._watch_session_completion(request=request, run=run))
         restart_sidecar_after_result = False
         try:
+            logger.info("Pi run started request_id=%s model=%s", request_id, provider.get("model", ""))
             await self.send({"type": "run", "request_id": request_id, "request": request})
             run_timeout_seconds = max(30, min(300, int(tool_timeout_seconds) * 2))
             try:
@@ -427,6 +428,7 @@ class PiSidecarManager:
                     "_restart_sidecar": True,
                 }
                 if not run.future.done():
+                    logger.info("Pi session-file completion found for request_id=%s text_len=%d", run.request_id, len(completion.get("text", "")))
                     run.future.set_result(payload)
                 return
             await asyncio.sleep(0.25)
@@ -482,6 +484,11 @@ class PiSidecarManager:
                 except json.JSONDecodeError:
                     logger.warning("Ignoring non-JSON Pi sidecar output: %s", line[:500])
                     continue
+                logger.debug(
+                    "Pi sidecar payload: type=%s request_id=%s",
+                    payload.get("type"),
+                    str(payload.get("request_id", ""))[:12],
+                )
                 await self._handle_payload(cast(dict[str, object], payload))
         finally:
             await self._handle_process_exit()
@@ -511,10 +518,12 @@ class PiSidecarManager:
             active.handle_tool_call(payload)
             return
         if payload_type == "result":
+            logger.info("Pi sidecar result received for request_id=%s text_len=%d", request_id, len(str(payload.get("text", ""))))
             if not active.future.done():
                 active.future.set_result(payload)
             return
         if payload_type == "error":
+            logger.warning("Pi sidecar error for request_id=%s: %s", request_id, str(payload.get("error", ""))[:200])
             if not active.future.done():
                 active.future.set_exception(RuntimeError(str(payload.get("error", "") or "Pi sidecar failed.")))
             return
