@@ -130,6 +130,7 @@ Tool integrations live in `app/mcps/` and are registered once in `app/mcps/regis
 Pi runtime notes:
 
 - `app/tooling/pi_orchestrator.py` bridges Krill chat execution to the bundled `pi-sidecar`
+- Krill starts and prewarms the Pi sidecar during application startup so the first user message does not spawn the runtime cold
 - Pi owns agent reasoning, built-in coding/shell/file/git tools, session context, auto-compaction, and token/context usage stats
 - Krill exposes only app-specific enabled MCPs to Pi as custom tools; overlapping MCPs such as `shell_access`, `git_ops`, and `opencode` are hidden so Pi can use its native tools instead
 - Gateway SSE and Telegram share the same execution event model for progress visibility and cancellation-aware Pi execution

@@ -22,6 +22,10 @@ def compose_runtime_system_prompt(
         "Use time context only when relevant; do not mention it unless needed."
     )
 
+    identity_context = _build_identity_context(settings)
+    if identity_context:
+        invisible_context = f"{invisible_context}\n\n{identity_context}"
+
     if source_channel == "timed_job":
         invisible_context = (
             f"{invisible_context}\n\n"
@@ -48,6 +52,37 @@ def compose_runtime_system_prompt(
         invisible_context = f"{invisible_context}\n\nCompacted conversation memory:\n{memory_block.strip()}"
 
     return invisible_context
+
+
+def _build_identity_context(settings: Settings) -> str:
+    lines: list[str] = []
+    bot_name = str(settings.bot_name or "").strip()
+    user_full_name = str(settings.user_full_name or "").strip()
+    user_call_name = str(settings.user_call_name or "").strip()
+    behavior = str(settings.system_prompt or "").strip()
+
+    if bot_name:
+        lines.append(f"Assistant name: {bot_name}.")
+    if user_full_name:
+        lines.append(f"Human user's full name: {user_full_name}.")
+    if user_call_name:
+        lines.append(f"Address the human user as: {user_call_name}.")
+    if behavior:
+        lines.append("Standing behavior instructions from the user:")
+        lines.append(behavior)
+
+    memory_lines = [
+        str(memory.content or "").strip()
+        for memory in settings.core_memories
+        if str(memory.content or "").strip()
+    ]
+    if memory_lines:
+        lines.append("Core memories about the user:")
+        lines.extend(f"- {content}" for content in memory_lines)
+
+    if not lines:
+        return ""
+    return "\n".join(lines)
 
 
 def _build_enabled_capability_summary(

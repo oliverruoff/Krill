@@ -14,25 +14,39 @@ FAKE_SIDECAR = r'''
 import json
 import sys
 
-pending_tool = False
+pending = {}
 for line in sys.stdin:
     payload = json.loads(line)
-    if payload.get("type") == "tool_result":
-        print(json.dumps({"type": "event", "event": {"type": "tool_execution_end", "toolName": "krill_brain_access_probe", "toolCallId": payload.get("id"), "isError": not payload.get("ok", False)}}), flush=True)
-        print(json.dumps({"type": "event", "event": {"type": "agent_end", "messages": [{"role": "assistant", "content": "done"}]}}), flush=True)
-        print(json.dumps({"type": "result", "text": "Pi final answer", "stats": {"tokens": {"total": 321}, "contextUsage": {"tokens": 321, "contextWindow": 1000, "percent": 32.1}}}), flush=True)
+    request_id = payload.get("request_id", "")
+    if payload.get("type") == "health":
+        print(json.dumps({"type": "ready", "request_id": request_id}), flush=True)
+        continue
+    if payload.get("type") == "shutdown":
         break
+    if payload.get("type") == "tool_result":
+        call_id = payload.get("id")
+        request_id = pending.pop(call_id, request_id)
+        print(json.dumps({"type": "event", "request_id": request_id, "event": {"type": "tool_execution_end", "toolName": "krill_brain_access_probe", "toolCallId": call_id, "isError": not payload.get("ok", False)}}), flush=True)
+        print(json.dumps({"type": "event", "request_id": request_id, "event": {"type": "agent_end", "messages": [{"role": "assistant", "content": "done"}]}}), flush=True)
+        print(json.dumps({"type": "result", "request_id": request_id, "text": f"Pi final answer {request_id}", "stats": {"tokens": {"total": 321}, "contextUsage": {"tokens": 321, "contextWindow": 1000, "percent": 32.1}}}), flush=True)
+        continue
     if payload.get("type") != "run":
         continue
     request = payload.get("request", {})
-    print(json.dumps({"type": "event", "event": {"type": "agent_start"}}), flush=True)
+    request_id = payload.get("request_id", request.get("request_id", ""))
+    print(json.dumps({"type": "event", "request_id": request_id, "event": {"type": "agent_start"}}), flush=True)
+    if request.get("message") == "history-check":
+        roles = ",".join([entry.get("role", "") for entry in request.get("history", [])])
+        print(json.dumps({"type": "result", "request_id": request_id, "text": f"history roles: {roles}", "stats": {"tokens": {"total": 321}}}), flush=True)
+        continue
     tools = request.get("krill_tools") or []
     if tools:
         tool = tools[0]
-        print(json.dumps({"type": "tool_call", "id": "call-1", "mcp_id": tool["mcp_id"], "mcp_label": tool["mcp_label"], "tool_id": tool["tool_id"], "tool_label": tool["tool_label"], "arguments": {"value": "hello"}}), flush=True)
+        call_id = f"call-{request_id}"
+        pending[call_id] = request_id
+        print(json.dumps({"type": "tool_call", "request_id": request_id, "id": call_id, "mcp_id": tool["mcp_id"], "mcp_label": tool["mcp_label"], "tool_id": tool["tool_id"], "tool_label": tool["tool_label"], "arguments": {"value": request.get("message", "")}}), flush=True)
     else:
-        print(json.dumps({"type": "result", "text": "Pi final answer", "stats": {"tokens": {"total": 321}}}), flush=True)
-        break
+        print(json.dumps({"type": "result", "request_id": request_id, "text": f"Pi final answer {request_id}", "stats": {"tokens": {"total": 321}}}), flush=True)
 '''
 
 
@@ -94,6 +108,7 @@ async def main() -> None:
 
     original_command = os.environ.get("KRILL_PI_SIDECAR_COMMAND")
     original_registry = pi_orchestrator.get_all_mcps
+    original_manager = pi_orchestrator._PI_MANAGER
     fake_plugin = FakePlugin()
     native_plugin = NativeOverlapPlugin()
     pi_orchestrator.get_all_mcps = lambda: {
@@ -101,6 +116,7 @@ async def main() -> None:
         "shell_access": native_plugin,
     }
     os.environ["KRILL_PI_SIDECAR_COMMAND"] = f'"{sys.executable}" "{fake_sidecar_path}"'
+    pi_orchestrator._PI_MANAGER = pi_orchestrator.PiSidecarManager()
 
     context_token = set_runtime_context(
         source_channel="gateway",
@@ -128,6 +144,7 @@ async def main() -> None:
         async def on_event(event: dict[str, object]) -> None:
             events.append(event)
 
+        await pi_orchestrator.start_pi_runtime()
         result = await pi_orchestrator.generate_with_pi(
             settings=settings,
             prompt="hello",
@@ -138,7 +155,43 @@ async def main() -> None:
             provider_id="openai",
             on_execution_event=on_event,
         )
+
+        second_result, third_result = await asyncio.gather(
+            pi_orchestrator.generate_with_pi(
+                settings=settings,
+                prompt="second",
+                system_prompt="system",
+                model="",
+                api_key="",
+                history=[],
+                provider_id="openai",
+            ),
+            pi_orchestrator.generate_with_pi(
+                settings=settings,
+                prompt="third",
+                system_prompt="system",
+                model="",
+                api_key="",
+                history=[],
+                provider_id="openai",
+            ),
+        )
+        history_result = await pi_orchestrator.generate_with_pi(
+            settings=settings,
+            prompt="history-check",
+            system_prompt="system",
+            model="",
+            api_key="",
+            history=[
+                {"role": "system", "content": "Call the user Oli."},
+                {"role": "user", "content": "Earlier question"},
+                {"role": "assistant", "content": "Earlier answer"},
+            ],
+            provider_id="openai",
+        )
     finally:
+        await pi_orchestrator.stop_pi_runtime()
+        pi_orchestrator._PI_MANAGER = original_manager
         reset_runtime_context(context_token)
         pi_orchestrator.get_all_mcps = original_registry
         if original_command is None:
@@ -146,11 +199,19 @@ async def main() -> None:
         else:
             os.environ["KRILL_PI_SIDECAR_COMMAND"] = original_command
 
-    if result["text"] != "Pi final answer":
+    if not result["text"].startswith("Pi final answer "):
         raise RuntimeError(f"Unexpected Pi bridge text: {result}")
+    if second_result["text"] == third_result["text"]:
+        raise RuntimeError(f"Expected concurrent requests to route by request_id. Got: {second_result}, {third_result}")
+    if "system,user,assistant" not in history_result["text"]:
+        raise RuntimeError(f"Expected Krill chat history to be sent to Pi. Got: {history_result}")
     if result["used_tokens"] != 321:
         raise RuntimeError(f"Expected Pi token stats to map to used_tokens. Got: {result}")
-    if fake_plugin.calls != [("probe", {"value": "hello"}, {"mode": "test"})]:
+    if any(event.get("message") == "Pi finished the agent run." for event in result["execution_events"]):
+        raise RuntimeError(f"Pi agent_end leaked as user-visible progress. Got: {result['execution_events']}")
+    expected_values = ["hello", "second", "third"]
+    actual_values = [str(call[1].get("value", "")) for call in fake_plugin.calls]
+    if actual_values != expected_values:
         raise RuntimeError(f"Expected MCP callback with saved params. Got: {fake_plugin.calls}")
     if not any(event.get("event_type") == "tool_call_started" for event in events):
         raise RuntimeError(f"Expected tool progress events. Got: {events}")

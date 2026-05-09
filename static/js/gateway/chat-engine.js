@@ -16,6 +16,19 @@ import { showToast, sendAssistantResponseNotification, requestNotificationPermis
 import { getChatRuntime } from "./chat-runtime.js";
 import { clearPendingImageAttachment, clonePendingImageAttachment, renderPendingImageAttachment } from "./image-upload.js";
 
+const PI_SUPPORTED_PROVIDER_IDS = new Set(["gemini", "minimax", "openai", "openrouter"]);
+
+function assertPiSupportedProvider(providerId) {
+  const normalized = typeof providerId === "string" ? providerId.trim() : "";
+  if (!normalized || PI_SUPPORTED_PROVIDER_IDS.has(normalized)) {
+    return;
+  }
+  throw new Error(
+    `Provider "${normalized}" is not supported by the Pi runtime yet. `
+    + "Switch the active provider to Gemini, MiniMax, OpenAI, or OpenRouter in Settings.",
+  );
+}
+
 function normalizeToolUsage(toolUsage) {
   if (!Array.isArray(toolUsage)) {
     return [];
@@ -492,6 +505,9 @@ async function finalizeSuccessfulResponse(chat, assistantMessage, context) {
   if (!chat || !assistantMessage) {
     return;
   }
+  if (!String(assistantMessage.content || "").trim()) {
+    throw new Error("Pi returned an empty assistant response.");
+  }
 
   // Remove the single live-progress bubble — final trace entries replace it.
   chat.messages = chat.messages.filter(
@@ -645,6 +661,7 @@ async function executeQueuedJob(chat, job, runtime) {
   _renderChatHistory();
 
   try {
+    assertPiSupportedProvider(job.snapshot.providerId);
     runtime.abortController = new AbortController();
     const response = await fetch("/api/chat/stream", {
       method: "POST",
@@ -1015,6 +1032,25 @@ async function sendMessage(event) {
   syncChatInputHeight();
   const { updateComposerState } = await import("./chat-render.js");
   updateComposerState();
+
+  try {
+    const { persistChatsToSettings, markLocalChatStatePending } = await import("./chat-sync.js");
+    markLocalChatStatePending();
+    await persistChatsToSettings();
+  } catch (error) {
+    chat.messages = chat.messages.filter(
+      (turn) => !turn || turn.request_id !== localRequestId,
+    );
+    setStatus(normalizeErrorMessage(error, "Failed to save message before sending."), true);
+    if (state.activeChatId === chat.id) {
+      const { renderActiveChat } = await import("./chat-render.js");
+      renderActiveChat();
+    }
+    const { renderChatHistory } = await import("./chat-history.js");
+    renderChatHistory();
+    delete state.pendingEnqueueByChat[chat.id];
+    return;
+  }
 
   // Stream directly instead of enqueue+poll so execution updates appear in real-time.
   const job = {

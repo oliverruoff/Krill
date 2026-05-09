@@ -8,6 +8,8 @@ import logging
 import os
 import shlex
 import sys
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable, TypedDict, cast
 
@@ -75,6 +77,7 @@ _PROVIDER_MAP = {
 }
 _SIDE_CAR_DIR = BASE_DIR / "pi-sidecar"
 _SIDE_CAR_ENTRYPOINT = _SIDE_CAR_DIR / "index.js"
+_PI_MANAGER: "PiSidecarManager | None" = None
 
 
 async def generate_with_pi(
@@ -92,57 +95,112 @@ async def generate_with_pi(
     cancellation_token: CancellationToken | None = None,
     **_: Any,
 ) -> OrchestrationResult:
-    del history, max_tool_recursion
+    del max_tool_recursion
     cancel_token = cancellation_token or CancellationToken()
     provider = _resolve_pi_provider(settings=settings, provider_id=provider_id, model=model, api_key=api_key)
     tool_entries = collect_pi_krill_tools(settings)
     request = _build_sidecar_request(
         prompt=prompt,
         system_prompt=system_prompt,
+        history=history,
         provider=provider,
         tool_entries=tool_entries,
     )
+    return await get_pi_sidecar_manager().run(
+        request=request,
+        provider=provider,
+        system_prompt=system_prompt,
+        tool_entries=tool_entries,
+        tool_timeout_seconds=tool_timeout_seconds,
+        on_execution_event=on_execution_event,
+        cancellation_token=cancel_token,
+    )
 
-    execution_events: list[ExecutionEvent] = []
-    system_trace_messages: list[SystemTraceEntry] = []
-    used_tools: list[ToolUsageEntry] = []
 
-    async def emit_event(event: ExecutionEvent) -> None:
-        if cancel_token.is_cancelled and event.get("event_type") != "task_cancelled":
+async def start_pi_runtime() -> None:
+    await get_pi_sidecar_manager().start(prewarm=True)
+
+
+async def stop_pi_runtime() -> None:
+    manager = _PI_MANAGER
+    if manager is not None:
+        await manager.stop()
+
+
+def get_pi_sidecar_manager() -> "PiSidecarManager":
+    global _PI_MANAGER
+    if _PI_MANAGER is None:
+        _PI_MANAGER = PiSidecarManager()
+    return _PI_MANAGER
+
+
+class PiActiveRun:
+    def __init__(
+        self,
+        *,
+        request_id: str,
+        manager: "PiSidecarManager",
+        system_prompt: str,
+        tool_entries: list[PiToolEntry],
+        tool_timeout_seconds: int,
+        on_execution_event: ExecutionEventCallback | None,
+        cancellation_token: CancellationToken,
+    ) -> None:
+        self.request_id = request_id
+        self.manager = manager
+        self.tool_entries = tool_entries
+        self.tool_timeout_seconds = tool_timeout_seconds
+        self.on_execution_event = on_execution_event
+        self.cancellation_token = cancellation_token
+        self.future: asyncio.Future[dict[str, object]] = asyncio.get_running_loop().create_future()
+        self.execution_events: list[ExecutionEvent] = []
+        self.system_trace_messages: list[SystemTraceEntry] = [
+            {"system_type": "runtime_system_prompt", "content": system_prompt}
+        ]
+        self.used_tools: list[ToolUsageEntry] = []
+        self.tool_tasks: set[asyncio.Task[None]] = set()
+
+    async def emit_event(self, event: ExecutionEvent) -> None:
+        if self.cancellation_token.is_cancelled and event.get("event_type") != "task_cancelled":
             return
-        execution_events.append(event)
-        if on_execution_event is not None:
+        self.execution_events.append(event)
+        if on_execution_event := self.on_execution_event:
             await on_execution_event(event)
 
-    await emit_event(execution_event("task_started", message="Starting Pi agent runtime.", stage="planning"))
-    system_trace_messages.append({"system_type": "runtime_system_prompt", "content": system_prompt})
+    async def handle_pi_event(self, raw_event: object) -> None:
+        event = _map_pi_event(raw_event)
+        if event is None:
+            return
+        await self.emit_event(event)
+        self.system_trace_messages.append(
+            {
+                "system_type": f"execution_{event['event_type']}",
+                "content": str(event.get("message", "")),
+            }
+        )
 
-    process = await _start_sidecar_process(provider)
-    write_lock = asyncio.Lock()
-    tool_tasks: set[asyncio.Task[None]] = set()
-    result_payload: dict[str, object] | None = None
-    error_message = ""
+    def handle_tool_call(self, payload: dict[str, object]) -> None:
+        task = asyncio.create_task(self._run_tool_call(payload))
+        self.tool_tasks.add(task)
+        task.add_done_callback(self.tool_tasks.discard)
 
-    async def send(payload: dict[str, object]) -> None:
-        if process.stdin is None:
-            raise RuntimeError("Pi sidecar stdin is unavailable.")
-        encoded = (json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8")
-        async with write_lock:
-            process.stdin.write(encoded)
-            await process.stdin.drain()
+    async def wait_for_tools(self) -> None:
+        if self.tool_tasks:
+            await asyncio.gather(*self.tool_tasks, return_exceptions=True)
 
-    async def run_tool_call(payload: dict[str, object]) -> None:
+    async def _run_tool_call(self, payload: dict[str, object]) -> None:
         call_id = str(payload.get("id", "")).strip()
         mcp_id = str(payload.get("mcp_id", "")).strip()
         tool_id = str(payload.get("tool_id", "")).strip()
         arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
-        entry = _find_tool_entry(tool_entries, mcp_id=mcp_id, tool_id=tool_id)
+        entry = _find_tool_entry(self.tool_entries, mcp_id=mcp_id, tool_id=tool_id)
         if not call_id:
             return
         if entry is None:
-            await send(
+            await self.manager.send(
                 {
                     "type": "tool_result",
+                    "request_id": self.request_id,
                     "id": call_id,
                     "ok": False,
                     "error": f"Krill MCP tool is not available: {mcp_id}.{tool_id}",
@@ -156,10 +214,10 @@ async def generate_with_pi(
             "tool_id": entry["tool_id"],
             "tool_label": entry["tool_label"],
         }
-        if usage not in used_tools:
-            used_tools.append(usage)
+        if usage not in self.used_tools:
+            self.used_tools.append(usage)
 
-        await emit_event(
+        await self.emit_event(
             execution_event(
                 "tool_call_started",
                 message=f"Running {entry['tool_label']} with {entry['mcp_label']}.",
@@ -172,13 +230,15 @@ async def generate_with_pi(
             )
         )
         try:
-            cancel_token.raise_if_cancelled()
+            self.cancellation_token.raise_if_cancelled()
             result = await asyncio.wait_for(
                 entry["plugin"].call_tool(tool_id, cast(dict[str, object], arguments), entry["config"].params),
-                timeout=max(5, min(300, int(tool_timeout_seconds))),
+                timeout=max(5, min(300, int(self.tool_timeout_seconds))),
             )
-            await send({"type": "tool_result", "id": call_id, "ok": True, "result": result})
-            await emit_event(
+            await self.manager.send(
+                {"type": "tool_result", "request_id": self.request_id, "id": call_id, "ok": True, "result": result}
+            )
+            await self.emit_event(
                 execution_event(
                     "tool_call_completed",
                     message=f"Finished {entry['tool_label']}.",
@@ -192,8 +252,10 @@ async def generate_with_pi(
             )
         except Exception as exc:  # noqa: BLE001 - tool errors are returned to Pi as structured failures
             logger.exception("Pi MCP callback failed for %s.%s", mcp_id, tool_id)
-            await send({"type": "tool_result", "id": call_id, "ok": False, "error": str(exc)})
-            await emit_event(
+            await self.manager.send(
+                {"type": "tool_result", "request_id": self.request_id, "id": call_id, "ok": False, "error": str(exc)}
+            )
+            await self.emit_event(
                 execution_event(
                     "tool_call_failed",
                     message=f"{entry['tool_label']} failed: {exc}",
@@ -206,96 +268,279 @@ async def generate_with_pi(
                 )
             )
 
-    async def watch_cancellation() -> None:
-        await cancel_token.wait()
-        if process.returncode is None:
-            process.terminate()
 
-    cancel_task = asyncio.create_task(watch_cancellation())
+class PiSidecarManager:
+    def __init__(self) -> None:
+        self._process: asyncio.subprocess.Process | None = None
+        self._reader_task: asyncio.Task[None] | None = None
+        self._write_lock = asyncio.Lock()
+        self._start_lock = asyncio.Lock()
+        self._active_runs: dict[str, PiActiveRun] = {}
+        self._pending_health: dict[str, asyncio.Future[None]] = {}
+        self._last_start_error = ""
 
-    try:
-        await send({"type": "run", "request": request})
-        if process.stdout is None:
-            raise RuntimeError("Pi sidecar stdout is unavailable.")
-        while True:
-            cancel_token.raise_if_cancelled()
-            raw_line = await process.stdout.readline()
-            if not raw_line:
-                break
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
+    async def start(self, *, prewarm: bool = False) -> None:
+        async with self._start_lock:
+            if self._process is not None and self._process.returncode is None:
+                if prewarm:
+                    await self._health_check()
+                return
+            self._process = await _start_sidecar_process()
+            self._reader_task = asyncio.create_task(self._reader_loop())
+            self._last_start_error = ""
+            if prewarm:
+                try:
+                    await self._health_check()
+                except Exception as exc:  # noqa: BLE001 - startup should continue but remember the issue
+                    self._last_start_error = str(exc)
+                    logger.exception("Pi sidecar prewarm failed")
+
+    async def stop(self) -> None:
+        process = self._process
+        if process is not None and process.returncode is None:
             try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                logger.warning("Ignoring non-JSON Pi sidecar output: %s", line[:500])
-                continue
+                await self.send({"type": "shutdown"})
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except Exception:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except Exception:
+                    process.kill()
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+        self._process = None
+        self._reader_task = None
 
-            payload_type = str(payload.get("type", "")).strip()
-            if payload_type == "event":
-                event = _map_pi_event(payload.get("event"))
-                if event is not None:
-                    await emit_event(event)
-                    system_trace_messages.append(
-                        {
-                            "system_type": f"execution_{event['event_type']}",
-                            "content": str(event.get("message", "")),
-                        }
-                    )
-                continue
-            if payload_type == "tool_call":
-                task = asyncio.create_task(run_tool_call(cast(dict[str, object], payload)))
-                tool_tasks.add(task)
-                task.add_done_callback(tool_tasks.discard)
-                continue
-            if payload_type == "result":
-                result_payload = cast(dict[str, object], payload)
-                break
-            if payload_type == "error":
-                error_message = str(payload.get("error", "")).strip() or "Pi sidecar failed."
-                break
+    async def run(
+        self,
+        *,
+        request: dict[str, object],
+        provider: PiProviderConfig,
+        system_prompt: str,
+        tool_entries: list[PiToolEntry],
+        tool_timeout_seconds: int,
+        on_execution_event: ExecutionEventCallback | None,
+        cancellation_token: CancellationToken,
+    ) -> OrchestrationResult:
+        await self.start(prewarm=False)
+        if self._last_start_error:
+            raise RuntimeError(f"Pi runtime failed to prewarm: {self._last_start_error}")
+        request_id = str(get_runtime_context().get("source_request_id", "") or "").strip() or uuid.uuid4().hex
+        if request_id in self._active_runs:
+            request_id = f"{request_id}-{uuid.uuid4().hex}"
+        request["request_id"] = request_id
+        run = PiActiveRun(
+            request_id=request_id,
+            manager=self,
+            system_prompt=system_prompt,
+            tool_entries=tool_entries,
+            tool_timeout_seconds=tool_timeout_seconds,
+            on_execution_event=on_execution_event,
+            cancellation_token=cancellation_token,
+        )
+        self._active_runs[request_id] = run
 
-        if tool_tasks:
-            await asyncio.gather(*tool_tasks, return_exceptions=True)
-        await process.wait()
-    except asyncio.CancelledError:
-        cancel_token.cancel("Execution interrupted.")
-        if process.returncode is None:
-            process.terminate()
-        await emit_event(execution_event("task_cancelled", message="Stopped Pi agent runtime.", stage="finalizing"))
-        raise
-    finally:
-        cancel_task.cancel()
-        if process.returncode is None and (error_message or result_payload is None):
-            process.terminate()
+        async def watch_cancellation() -> None:
+            await cancellation_token.wait()
+            if not run.future.done():
+                await self.send({"type": "cancel", "request_id": request_id})
+                run.future.set_exception(asyncio.CancelledError(cancellation_token.reason or "Execution cancelled."))
+
+        cancel_task = asyncio.create_task(watch_cancellation())
+        session_completion_task = asyncio.create_task(self._watch_session_completion(request=request, run=run))
+        restart_sidecar_after_result = False
         try:
-            await process.wait()
+            await self.send({"type": "run", "request_id": request_id, "request": request})
+            run_timeout_seconds = max(30, min(300, int(tool_timeout_seconds) * 2))
+            try:
+                result_payload = await asyncio.wait_for(run.future, timeout=run_timeout_seconds)
+            except asyncio.TimeoutError as exc:
+                await self._terminate_sidecar()
+                raise RuntimeError(
+                    f"Pi runtime did not finish within {run_timeout_seconds} seconds. "
+                    "The run was stopped so the chat does not stay stuck."
+                ) from exc
+            restart_sidecar_after_result = bool(result_payload.pop("_restart_sidecar", False))
+        except asyncio.CancelledError:
+            cancellation_token.cancel("Execution interrupted.")
+            await run.emit_event(execution_event("task_cancelled", message="Stopped Pi agent runtime.", stage="finalizing"))
+            raise
+        finally:
+            cancel_task.cancel()
+            session_completion_task.cancel()
+            self._active_runs.pop(request_id, None)
+            await run.wait_for_tools()
+        if restart_sidecar_after_result:
+            await self._terminate_sidecar()
+
+        stats = result_payload.get("stats") if isinstance(result_payload.get("stats"), dict) else {}
+        tokens = cast(dict[str, object], stats).get("tokens") if isinstance(stats, dict) else {}
+        used_tokens = None
+        if isinstance(tokens, dict) and isinstance(tokens.get("total"), int):
+            used_tokens = int(tokens["total"])
+
+        text = str(result_payload.get("text", "")).strip()
+        if not text:
+            session_file = Path(str(result_payload.get("session_file", "") or ""))
+            session_error = _extract_session_error(session_file) if session_file else ""
+            if session_error:
+                raise RuntimeError(f"Pi provider error: {session_error}")
+
+        return {
+            "text": text,
+            "used_tokens": used_tokens,
+            "used_mcp_tools": run.used_tools,
+            "system_trace_messages": run.system_trace_messages,
+            "execution_events": run.execution_events,
+        }
+
+    async def _watch_session_completion(self, *, request: dict[str, object], run: PiActiveRun) -> None:
+        data_dir = Path(str(request.get("pi_data_dir") or DATA_DIR / "pi_sessions"))
+        session_dir = data_dir / "sessions"
+        map_path = data_dir / "session-map.json"
+        session_key = str(request.get("session_key", "") or "")
+        message = str(request.get("message", "") or "")
+        started_at = time.time()
+        start_lines: dict[Path, int] = {}
+        existing_session = _session_file_from_map(map_path, session_key)
+        if existing_session is not None:
+            start_lines[existing_session] = _count_jsonl_lines(existing_session)
+        while not run.future.done() and not run.cancellation_token.is_cancelled:
+            for session_file in _candidate_session_files(
+                session_dir=session_dir,
+                map_path=map_path,
+                session_key=session_key,
+                message=message,
+                started_at=started_at,
+            ):
+                start_line = start_lines.setdefault(session_file, 0)
+                completion = _extract_assistant_completion(session_file, after_line=start_line)
+                if completion is None:
+                    continue
+                payload: dict[str, object] = {
+                    "type": "result",
+                    "request_id": run.request_id,
+                    "text": completion["text"],
+                    "session_file": str(session_file),
+                    "stats": {"tokens": completion["tokens"]},
+                    "_restart_sidecar": True,
+                }
+                if not run.future.done():
+                    run.future.set_result(payload)
+                return
+            await asyncio.sleep(0.25)
+
+    async def _terminate_sidecar(self) -> None:
+        process = self._process
+        if process is None or process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=3)
         except Exception:
-            pass
+            process.kill()
+            await process.wait()
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+        self._process = None
+        self._reader_task = None
 
-    if error_message:
-        raise RuntimeError(error_message)
-    if result_payload is None:
+    async def send(self, payload: dict[str, object]) -> None:
+        process = self._process
+        if process is None or process.stdin is None or process.returncode is not None:
+            raise RuntimeError("Pi sidecar is not running.")
+        encoded = (json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8")
+        async with self._write_lock:
+            process.stdin.write(encoded)
+            await process.stdin.drain()
+
+    async def _health_check(self) -> None:
+        health_id = f"health-{uuid.uuid4().hex}"
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._pending_health[health_id] = future
+        await self.send({"type": "health", "request_id": health_id})
+        try:
+            await asyncio.wait_for(future, timeout=30)
+        finally:
+            self._pending_health.pop(health_id, None)
+
+    async def _reader_loop(self) -> None:
+        process = self._process
+        if process is None or process.stdout is None:
+            return
+        try:
+            while True:
+                raw_line = await process.stdout.readline()
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning("Ignoring non-JSON Pi sidecar output: %s", line[:500])
+                    continue
+                await self._handle_payload(cast(dict[str, object], payload))
+        finally:
+            await self._handle_process_exit()
+
+    async def _handle_payload(self, payload: dict[str, object]) -> None:
+        request_id = str(payload.get("request_id", "")).strip()
+        payload_type = str(payload.get("type", "")).strip()
+        if payload_type == "ready":
+            future = self._pending_health.get(request_id)
+            if future is not None and not future.done():
+                future.set_result(None)
+            return
+        if payload_type == "error" and request_id in self._pending_health:
+            future = self._pending_health.get(request_id)
+            if future is not None and not future.done():
+                future.set_exception(RuntimeError(str(payload.get("error", "") or "Pi sidecar health check failed.")))
+            return
+
+        active = self._active_runs.get(request_id)
+        if active is None:
+            logger.debug("Ignoring Pi payload for unknown request_id=%s type=%s", request_id, payload_type)
+            return
+        if payload_type == "event":
+            await active.handle_pi_event(payload.get("event"))
+            return
+        if payload_type == "tool_call":
+            active.handle_tool_call(payload)
+            return
+        if payload_type == "result":
+            if not active.future.done():
+                active.future.set_result(payload)
+            return
+        if payload_type == "error":
+            if not active.future.done():
+                active.future.set_exception(RuntimeError(str(payload.get("error", "") or "Pi sidecar failed.")))
+            return
+        if payload_type == "cancelled":
+            if not active.future.done():
+                active.future.set_exception(asyncio.CancelledError("Pi run cancelled."))
+
+    async def _handle_process_exit(self) -> None:
         stderr_text = ""
-        if process.stderr is not None:
-            raw_stderr = await process.stderr.read()
-            stderr_text = raw_stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(stderr_text or "Pi sidecar exited without a result.")
-
-    await emit_event(execution_event("task_completed", message="Completed the task.", stage="finalizing"))
-    stats = result_payload.get("stats") if isinstance(result_payload.get("stats"), dict) else {}
-    tokens = cast(dict[str, object], stats).get("tokens") if isinstance(stats, dict) else {}
-    used_tokens = None
-    if isinstance(tokens, dict) and isinstance(tokens.get("total"), int):
-        used_tokens = int(tokens["total"])
-
-    return {
-        "text": str(result_payload.get("text", "")).strip(),
-        "used_tokens": used_tokens,
-        "used_mcp_tools": used_tools,
-        "system_trace_messages": system_trace_messages,
-        "execution_events": execution_events,
-    }
+        process = self._process
+        if process is not None and process.stderr is not None:
+            try:
+                raw_stderr = await process.stderr.read()
+                stderr_text = raw_stderr.decode("utf-8", errors="replace").strip()
+            except Exception:
+                stderr_text = ""
+        detail = stderr_text or "Pi sidecar exited unexpectedly."
+        self._last_start_error = detail
+        for future in self._pending_health.values():
+            if not future.done():
+                future.set_exception(RuntimeError(detail))
+        for active in self._active_runs.values():
+            if not active.future.done():
+                active.future.set_exception(RuntimeError(detail))
+        self._pending_health.clear()
+        self._active_runs.clear()
 
 
 def collect_pi_krill_tools(settings: Settings) -> list[PiToolEntry]:
@@ -366,6 +611,7 @@ def _build_sidecar_request(
     *,
     prompt: str,
     system_prompt: str,
+    history: list[dict[str, str]],
     provider: PiProviderConfig,
     tool_entries: list[PiToolEntry],
 ) -> dict[str, object]:
@@ -380,9 +626,171 @@ def _build_sidecar_request(
         "session_key": session_key,
         "message": prompt,
         "system_prompt": system_prompt,
+        "history": _normalize_history_for_pi(history),
         "provider": provider,
         "krill_tools": [_serialize_tool_entry(entry) for entry in tool_entries],
     }
+
+
+def _session_file_from_map(map_path: Path, session_key: str) -> Path | None:
+    if not session_key or not map_path.exists():
+        return None
+    try:
+        raw_map = json.loads(map_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw_map, dict):
+        return None
+    raw_path = raw_map.get(session_key)
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    session_file = Path(raw_path)
+    return session_file if session_file.exists() else None
+
+
+def _count_jsonl_lines(session_file: Path) -> int:
+    try:
+        return len([line for line in session_file.read_text(encoding="utf-8").splitlines() if line.strip()])
+    except Exception:
+        return 0
+
+
+def _content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    chunks: list[str] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if isinstance(text, str):
+            chunks.append(text)
+    return "".join(chunks).strip()
+
+
+def _session_contains_user_message(session_file: Path, message: str) -> bool:
+    if not message:
+        return False
+    try:
+        lines = [line for line in session_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except Exception:
+        return False
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        raw_message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "message" else entry
+        if not isinstance(raw_message, dict) or raw_message.get("role") != "user":
+            continue
+        if _content_text(raw_message.get("content")) == message:
+            return True
+    return False
+
+
+def _candidate_session_files(
+    *,
+    session_dir: Path,
+    map_path: Path,
+    session_key: str,
+    message: str,
+    started_at: float,
+) -> list[Path]:
+    candidates: list[Path] = []
+    mapped = _session_file_from_map(map_path, session_key)
+    if mapped is not None:
+        candidates.append(mapped)
+    try:
+        recent_files = sorted(
+            session_dir.glob("*.jsonl"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+    except Exception:
+        recent_files = []
+    for session_file in recent_files:
+        try:
+            if session_file.stat().st_mtime < started_at - 1:
+                continue
+        except Exception:
+            continue
+        if _session_contains_user_message(session_file, message):
+            candidates.append(session_file)
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate.resolve()) if candidate.exists() else str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _extract_assistant_completion(session_file: Path, *, after_line: int) -> dict[str, object] | None:
+    try:
+        lines = [line for line in session_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except Exception:
+        return None
+    for index in range(len(lines) - 1, max(after_line, 0) - 1, -1):
+        try:
+            entry = json.loads(lines[index])
+        except json.JSONDecodeError:
+            continue
+        raw_message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "message" else entry
+        if not isinstance(raw_message, dict) or raw_message.get("role") != "assistant":
+            continue
+        text = _content_text(raw_message.get("content"))
+        if not text:
+            continue
+        usage = raw_message.get("usage") if isinstance(raw_message.get("usage"), dict) else {}
+        tokens = {
+            "input": int(usage.get("input", usage.get("inputTokens", 0)) or 0),
+            "output": int(usage.get("output", usage.get("outputTokens", 0)) or 0),
+            "cacheRead": int(usage.get("cacheRead", usage.get("cacheReadTokens", 0)) or 0),
+            "cacheWrite": int(usage.get("cacheWrite", usage.get("cacheWriteTokens", 0)) or 0),
+            "total": int(usage.get("totalTokens", usage.get("total", 0)) or 0),
+        }
+        if tokens["total"] <= 0:
+            tokens["total"] = tokens["input"] + tokens["output"] + tokens["cacheRead"] + tokens["cacheWrite"]
+        return {"text": text, "tokens": tokens}
+    return None
+
+
+def _extract_session_error(session_file: Path) -> str:
+    if not session_file.exists():
+        return ""
+    try:
+        lines = [line for line in session_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except Exception:
+        return ""
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        raw_message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "message" else entry
+        if not isinstance(raw_message, dict) or raw_message.get("role") != "assistant":
+            continue
+        error_message = raw_message.get("errorMessage")
+        if isinstance(error_message, str) and error_message.strip():
+            return error_message.strip()
+    return ""
+
+
+def _normalize_history_for_pi(history: list[dict[str, str]]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for turn in history:
+        if not isinstance(turn, dict):
+            continue
+        role = str(turn.get("role", "")).strip().lower()
+        content = str(turn.get("content", "")).strip()
+        if role not in {"system", "user", "assistant"} or not content:
+            continue
+        normalized.append({"role": role, "content": content})
+    return normalized
 
 
 def _serialize_tool_entry(entry: PiToolEntry) -> dict[str, object]:
@@ -396,14 +804,15 @@ def _serialize_tool_entry(entry: PiToolEntry) -> dict[str, object]:
     }
 
 
-async def _start_sidecar_process(provider: PiProviderConfig) -> asyncio.subprocess.Process:
+async def _start_sidecar_process(provider: PiProviderConfig | None = None) -> asyncio.subprocess.Process:
     command = os.getenv("KRILL_PI_SIDECAR_COMMAND", "").strip()
     if command:
         args = shlex.split(command)
     else:
         args = [_node_executable(), str(_SIDE_CAR_ENTRYPOINT)]
     env = os.environ.copy()
-    env[_provider_env_name(provider["provider"])] = provider["api_key"]
+    if provider is not None:
+        env[_provider_env_name(provider["provider"])] = provider["api_key"]
     return await asyncio.create_subprocess_exec(
         *args,
         cwd=str(BASE_DIR),
@@ -476,7 +885,7 @@ def _map_pi_event(raw_event: object) -> ExecutionEvent | None:
     if event_type == "agent_start":
         return execution_event("task_started", message="Pi is working.", stage="planning")
     if event_type == "agent_end":
-        return execution_event("task_completed", message="Pi finished the agent run.", stage="finalizing")
+        return None
     if event_type == "tool_execution_start":
         tool_name = str(raw_event.get("toolName", "") or "tool").strip()
         return execution_event(
